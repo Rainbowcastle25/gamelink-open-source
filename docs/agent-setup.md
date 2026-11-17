@@ -1,0 +1,230 @@
+# Set up a GameLink server agent (runbook for AI agents)
+
+You are setting up GameLink on a game server for its **owner**, the person you
+are working for. When you finish, the agent runs as a service and the owner's
+games are registered. Nobody can reach a game until the owner approves a
+device for it. Follow the steps in order. Each step ends with a **done when**
+check; run that check before you move on.
+
+GameLink exists to be **safer than port forwarding**. A game is reachable only
+by devices the owner approved, for that game only, through an encrypted
+Tailcat tunnel. Every rule below protects that property.
+
+## Rules
+
+1. **Secrets stay private.** Secrets are Panel API keys, the host admin
+   token, invitations (`glink1.…`), and everything under the agent's
+   configuration directory. Move them only through the owner's private input
+   (a secret prompt, or the owner typing on the server), or as files with mode
+   0600. Show the owner file *paths*, never secret values, including in
+   command output, logs and summaries.
+2. **The owner approves access.** Approve a device only after the owner
+   explicitly confirms that device and that game. Approval is access.
+3. **Use a read-only Panel key.** The Application API key needs Read on
+   Servers, Allocations and Eggs, and None for everything else. If the owner
+   offers an admin or writable key, ask for a read-only one instead.
+4. **Stay inside the agent's footprint**, which is all you install:
+   `/usr/local/bin/gamelink-agent`, the `gamelink` system user,
+   `/var/lib/gamelink-agent/`, and the `gamelink-agent` systemd unit.
+   GameLink needs no changes to firewalls, router ports, Docker, Wings, the
+   Panel or game containers. Ask the owner before touching anything outside
+   the footprint, such as a VPN policy or a hypervisor.
+5. **Administration stays on loopback.** The host admin API listens only on
+   `127.0.0.1:8467`. The owner reaches it through their own SSH tunnel.
+
+## Commands you will use
+
+Run agent commands as the `gamelink` user:
+
+```sh
+gl() { sudo -u gamelink env GAMELINK_AGENT_DIR=/var/lib/gamelink-agent/config /usr/local/bin/gamelink-agent "$@"; }
+```
+
+Add `--json` to `status`, `games list`, `devices list`, `host refresh`,
+`host detect` and `host check` for machine-readable output. Run
+`gamelink-agent <command> -h` for flags.
+
+## Step 1: Learn the setup
+
+Ask the owner for:
+
+- which machine runs the games (one agent per machine; a Pterodactyl Panel
+  with several Wings nodes needs one agent per node), and how you reach it
+  (SSH user and host);
+- whether it is a **plain** Linux game server or a **Pterodactyl** Wings node;
+- for Pterodactyl, the Panel URL.
+
+On the server, record `uname -m`, the OS, and whether `sudo -n true`
+succeeds.
+
+**Done when** you can run commands with sudo on the target and you know the
+branch (plain or Pterodactyl).
+
+Reaching the server:
+
+- **No route to the machine**, for example a node on an isolated VLAN: ask
+  the owner to choose. They can add Tailscale to the machine with a narrow
+  policy grant (this machine → the node, `tcp:22` only), or allow you to run
+  commands through the hypervisor (Proxmox: `qm guest exec <vmid>` on the
+  host; copy files in gzip chunks with `--pass-stdin 1`).
+- **Default-deny tailnet**: a new node is unreachable until the policy has a
+  grant for it. `tailscale ping` succeeding while TCP times out means the
+  grant is missing.
+- **Panel on local DNS only**: the owner must create API keys from a device
+  on that network.
+
+## Step 2: Get the agent binary
+
+Map the architecture: `x86_64` → `amd64`, `aarch64` → `arm64`. Use the first
+source that works:
+
+1. A GitHub release of this repository with `SHA256SUMS`.
+2. The `gamelink-agent-linux` artifact of the latest green CI run on
+   `master`:
+   `gh run download <run-id> -n gamelink-agent-linux -D <empty dir>`.
+   Artifacts expire after one day.
+3. Build it: `bash scripts/build-agent.sh amd64`. See
+   [building.md](building.md#server-agent-linux) for the toolchain.
+
+Copy `gamelink-agent-linux-<arch>` to the server (for example with `scp`).
+
+**Done when** `sha256sum` of the file on the server matches its line in
+`SHA256SUMS`, or the hash of your own build.
+
+## Step 3: Install
+
+```sh
+sudo install -m 0755 gamelink-agent-linux-<arch> /usr/local/bin/gamelink-agent
+sudo useradd --system --create-home --home-dir /var/lib/gamelink-agent --shell /usr/sbin/nologin gamelink
+sudo chmod 0700 /var/lib/gamelink-agent
+gl init
+```
+
+**Done when** `gl status --json` reports `"running": false` and no games.
+
+## Step 4a: Plain Linux game server
+
+For each game the owner wants to share:
+
+```sh
+gl games add --type minecraft-java --name "Our Minecraft"
+```
+
+Types are `minecraft-java`, `minecraft-bedrock`, `factorio` and `custom`;
+`custom` also needs `--proto tcp|udp --port N`. If the game is not listening
+on this machine's loopback (Docker, another host), add `--dest ip:port`.
+Each game forwards one port.
+
+Install the service from
+[`config/examples/gamelink-agent.service`](../config/examples/gamelink-agent.service)
+without changing its hardening (`AF_NETLINK` must stay in
+`RestrictAddressFamilies`), then
+`sudo systemctl daemon-reload && sudo systemctl enable --now gamelink-agent`.
+
+**Done when** `gl status --json` reports `"running": true` and lists every
+game the owner asked for. Go to step 5.
+
+## Step 4b: Pterodactyl Wings node
+
+1. **Panel key.** Ask the owner to create an Application API key in
+   *Panel → Admin → Application API*, with Read on Servers, Allocations and
+   Eggs and None for everything else. Write it to
+   `/var/lib/gamelink-agent/panel-application.token`, owned by `gamelink`
+   with mode 0600, without echoing it. Either the owner pastes it on the
+   server:
+   `sudo -u gamelink sh -c 'umask 077; cat > /var/lib/gamelink-agent/panel-application.token'`,
+   or you pipe it from your private secret input over SSH stdin into that
+   same command.
+2. **Detect.** Run
+   `gl host detect --panel-url <url> --token-file /var/lib/gamelink-agent/panel-application.token --json`.
+   - Exit code 3 means the node is ambiguous. Show the owner the nodes and
+     rerun with `--node-id N`.
+   - Show the owner the proposed mapping: each egg, its servers, the proposed
+     type and port, and `confidence` (`name`, `startup`, `guess` or `none`).
+     Ask about every egg that is not `name`. `--out` leaves out `guess` and
+     `none`, so add those yourself if the owner confirms them. An egg
+     excluded as "not a joinable game server" stays out. Games that need several ports (ARK, for example)
+     cannot be fully forwarded; only the primary port is.
+   - Egg names showing as null mean the key lacks Eggs read. Detection then
+     guessed from startup commands. Ask the owner to add Eggs read, or
+     confirm each egg.
+3. **Write the settings.** Rerun the detect command with
+   `--out /var/lib/gamelink-agent/host.json` (plus `--node-id` if you used
+   it). This writes `host.json` (0600) and creates `host-admin.token` next
+   to it unless one exists. It never overwrites `host.json`. To
+   change a mapping the owner decided, edit `eggProfiles` in `host.json` and
+   keep it 0600 and owned by `gamelink`.
+4. **Optional power status.** A Client API key for a user who can see this
+   node's servers enables running/offline status. Store it like the
+   application key as `panel-client.token`, and add
+   `"clientTokenFile": "panel-client.token"` to `host.json`. Without it,
+   status shows `unknown`; tunnels work regardless.
+5. **Service.** Install the unit from step 4a, with `ExecStart` set to
+   `/usr/local/bin/gamelink-agent serve --host-config /var/lib/gamelink-agent/host.json`.
+   Enable and start it.
+6. **Register.** Run
+   `gl host refresh --config /var/lib/gamelink-agent/host.json --json`.
+   Refresh is manual by design: rerun it whenever the owner adds a server.
+7. **Check.** Run
+   `gl host check --config /var/lib/gamelink-agent/host.json --json`.
+
+**Done when** `host check` reports `"ok": true`, every remaining `warn` is
+either resolved or explained to the owner, and every server the owner wanted
+appears in `gl status --json`.
+
+## Step 5: Share access
+
+Every game starts with no approved devices, so nothing is reachable yet.
+Offer the owner both routes:
+
+- **From the command line, through you.** A friend opens GameLink →
+  *Settings* → *Copy Public Key* and sends the `nodekey:…` to the owner. With
+  the owner's confirmation, run
+  `gl devices approve --game <id> --key nodekey:… --label "<who>"`. Then
+  `gl invite --game <id>` prints the invitation, which is a secret. Write it
+  to a 0600 file and give the owner the path, or let the owner run the
+  command themselves. The friend imports it in GameLink.
+- **From the GameLink desktop Host screen** (Pterodactyl only). The owner
+  opens a tunnel, `ssh -N -L 8467:127.0.0.1:8467 <user>@<node>`, sets the
+  endpoint to `http://127.0.0.1:8467`, and enters the admin token. Give the
+  owner a command that copies the token straight to their clipboard, for
+  example on Windows:
+  `ssh <user>@<node> "sudo cat /var/lib/gamelink-agent/host-admin.token" | Set-Clipboard`.
+  *Add to GameLink* then approves the owner's own device. See
+  [pterodactyl.md](pterodactyl.md).
+
+**Done when** the owner knows how to approve devices and send invitations,
+and has approved any devices they asked for.
+
+## Step 6: Report
+
+Give the owner:
+
+- the machine, agent version and binary SHA-256;
+- each registered game (name, id, protocol/port, destination);
+- eggs or games left out, and why;
+- remaining `host check` warnings;
+- where the secrets live (paths only);
+- how to share access (step 5), and that a new Pterodactyl server needs
+  `host refresh`.
+
+## Updating and removing
+
+- **Update:** verify the new binary (step 2), install it over
+  `/usr/local/bin/gamelink-agent`, then `sudo systemctl restart gamelink-agent`.
+  Approvals, invitations and game identities survive.
+- **Remove:** `sudo systemctl disable --now gamelink-agent`, then remove the
+  unit and the binary. Deleting `/var/lib/gamelink-agent` destroys every game
+  identity and invitation, so ask the owner first.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| Panel answers 403 | The key lacks a Read permission listed in step 4b. |
+| Egg names are null | The key lacks Eggs read; see step 4b. |
+| "requires owner-only permissions (0600)" | `chmod 600` the file and `chown gamelink:gamelink` it. |
+| "wildcard allocation requires a configured node address" | Set `nodeAddress` in `host.json` to the node's IP. |
+| `host check` admin_api warns "not listening" | `ExecStart` lacks `--host-config`. |
+| The service starts but the game never comes up | `AF_NETLINK` was removed from `RestrictAddressFamilies`. |
+| A friend's GameLink shows "no response" | The agent is stopped, or the friend's key is not approved for that game. |

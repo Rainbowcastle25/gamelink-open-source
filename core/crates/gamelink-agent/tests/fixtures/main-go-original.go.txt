@@ -1,0 +1,127 @@
+// Command gamelink-agent exposes specifically approved game ports through
+// Tailcat. It is administered only through this local command line; it has no
+// network management interface.
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime/debug"
+	"strings"
+
+	"github.com/gamelink-project/gamelink/internal/rustcore"
+)
+
+var version = "0.1.0-alpha"
+
+const usage = `gamelink-agent - expose approved game ports through Tailcat (no router port forwarding)
+
+Usage:
+  gamelink-agent [--dir DIR] <command> [options]
+
+Setup:
+  init                          create the agent configuration directory
+  games add                     expose a game port (generates the game's own Tailcat identity)
+  games list                    list configured games
+  games remove <id>             stop exposing a game and delete its identity
+
+Access control (per game; a game with no approved devices is unreachable):
+  devices approve               approve a friend's public key for one game
+  devices revoke                revoke a device (a running agent restarts that game and ends the session)
+  devices list                  list approved devices
+
+Sharing and running:
+  invite                        print the invitation a friend imports into GameLink (a secret)
+  serve                         run the agent in the foreground (Ctrl-C / SIGTERM to stop)
+  status                        show games, approvals and whether the agent is running
+  version                       print the version
+
+The configuration directory defaults to $GAMELINK_AGENT_DIR, else
+<user config dir>/gamelink-agent. Run 'gamelink-agent <command> -h' for options.
+`
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+}
+
+// run is main without the process exit, so the CLI is testable.
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	dir := os.Getenv("GAMELINK_AGENT_DIR")
+	// Optional leading --dir DIR.
+	for len(args) >= 1 && (args[0] == "--dir" || args[0] == "-dir" || strings.HasPrefix(args[0], "--dir=")) {
+		if v, ok := strings.CutPrefix(args[0], "--dir="); ok {
+			dir, args = v, args[1:]
+		} else if len(args) >= 2 {
+			dir, args = args[1], args[2:]
+		} else {
+			fmt.Fprintln(stderr, "error: --dir needs a value")
+			return 2
+		}
+	}
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+		fmt.Fprint(stdout, usage)
+		return 0
+	}
+	if dir == "" {
+		base, err := os.UserConfigDir()
+		if err != nil {
+			fmt.Fprintln(stderr, "error: cannot determine a configuration directory; set GAMELINK_AGENT_DIR or pass --dir")
+			return 2
+		}
+		dir = filepath.Join(base, "gamelink-agent")
+	}
+	c := &cli{dir: dir, in: stdin, out: stdout, err: stderr}
+	cmd, rest := args[0], args[1:]
+	var err error
+	switch cmd {
+	case "version", "--version":
+		// Exercise the linked Rust core even for a diagnostic-only invocation.
+		out, coreErr := rustcore.Call("version", nil)
+		var coreVersion struct {
+			ABI int `json:"abi"`
+		}
+		if coreErr != nil || json.Unmarshal(out, &coreVersion) != nil || coreVersion.ABI != 1 {
+			fmt.Fprintln(stderr, "error: incompatible or unavailable Rust core")
+			return 1
+		}
+		fmt.Fprintf(stdout, "gamelink-agent %s%s\n", version, buildInfo())
+		return 0
+	case "init":
+		err = c.cmdInit(rest)
+	case "games":
+		err = c.cmdGames(rest)
+	case "devices":
+		err = c.cmdDevices(rest)
+	case "invite":
+		err = c.cmdInvite(rest)
+	case "serve":
+		err = c.cmdServe(rest)
+	case "status":
+		err = c.cmdStatus(rest)
+	default:
+		fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usage)
+		return 2
+	}
+	if err != nil {
+		if err == errUsage {
+			return 2
+		}
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func buildInfo() string {
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range bi.Settings {
+			if s.Key == "vcs.revision" && len(s.Value) >= 8 {
+				return " (" + s.Value[:8] + ")"
+			}
+		}
+	}
+	return ""
+}

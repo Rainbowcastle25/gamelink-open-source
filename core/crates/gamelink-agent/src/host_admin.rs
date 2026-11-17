@@ -1,0 +1,415 @@
+//! Opt-in administration inside the existing node agent. Panel requests are
+//! exclusively user-triggered; the socket sleeps in accept between requests.
+use crate::{bridge, config, json, now, pterodactyl, pure, rows, s, Result};
+use serde_json::Value;
+use std::{
+    fs,
+    io::{BufRead, BufReader, Read, Write},
+    net::{SocketAddr, TcpListener, TcpStream},
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread::JoinHandle,
+    time::Duration,
+};
+
+pub(crate) fn private_file(path: &Path, max: usize) -> Result<Vec<u8>> {
+    let file = fs::File::open(path)
+        .map_err(|_| "could not open private host configuration or credential file")?;
+    let meta = file
+        .metadata()
+        .map_err(|_| "could not inspect private host file")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o077 != 0 {
+            return Err(
+                "host configuration and credential files require owner-only permissions (0600)"
+                    .into(),
+            );
+        }
+    }
+    if !meta.is_file() || meta.len() > max as u64 {
+        return Err("invalid or oversized private host file".into());
+    }
+    let mut data = Vec::new();
+    file.take(max as u64 + 1)
+        .read_to_end(&mut data)
+        .map_err(|_| "could not read private host file")?;
+    if data.len() > max {
+        return Err("oversized private host file".into());
+    }
+    Ok(data)
+}
+pub(crate) fn load(path: &Path) -> Result<(Value, String)> {
+    let mut cfg: Value = serde_json::from_slice(&private_file(path, 65536)?)
+        .map_err(|_| "invalid host configuration JSON")?;
+    let read_token = |name: &str| -> Result<String> {
+        if name.is_empty() {
+            return Err("missing host credential file".into());
+        }
+        let file = Path::new(name);
+        let resolved = if file.is_absolute() {
+            file.to_owned()
+        } else {
+            path.parent().unwrap_or(Path::new(".")).join(file)
+        };
+        let token = String::from_utf8(private_file(&resolved, 8192)?)
+            .map_err(|_| "invalid host credential file")?;
+        let token = token.trim();
+        if token.is_empty() || token.chars().any(char::is_whitespace) {
+            return Err("invalid host credential file".into());
+        }
+        Ok(token.to_owned())
+    };
+    let admin = read_token(s(&cfg, "adminTokenFile"))?;
+    if admin.len() < 32 {
+        return Err("host admin token must have at least 32 characters".into());
+    }
+    cfg["applicationToken"] = json!(read_token(s(&cfg, "applicationTokenFile"))?);
+    cfg["clientToken"] = if s(&cfg, "clientTokenFile").is_empty() {
+        json!("")
+    } else {
+        json!(read_token(s(&cfg, "clientTokenFile"))?)
+    };
+    if admin == s(&cfg, "applicationToken") || admin == s(&cfg, "clientToken") {
+        return Err("host admin token must differ from Panel credentials".into());
+    }
+    Ok((cfg, admin))
+}
+
+pub fn refresh(dir: &Path, path: &Path) -> Result<Value> {
+    let (settings, _) = load(path)?;
+    let cfg = config::dispatch("config.agent_load", json!({"path":dir.join("agent.json")}))?;
+    let mut region = Value::Null;
+    for game in rows(&cfg["games"]) {
+        if let Ok(keys) = config::dispatch(
+            "config.keys_load",
+            json!({"id":game["id"],"path":dir.join("keys").join(format!("{}.json",s(game,"id")))}),
+        ) {
+            if keys["missing"] != true {
+                region = keys["keys"]["region"].clone();
+                break;
+            }
+        }
+    }
+    if region.is_null() {
+        region = bridge::call(
+            json!({"method":"resolve","regionID":settings["relayRegion"].as_i64().unwrap_or(0)}),
+        )
+        .map_err(|_| "could not resolve relay region for registration")?;
+    }
+    pterodactyl::refresh(
+        dir,
+        &settings,
+        &bridge::call,
+        &|| bridge::call(json!({"method":"generate"})),
+        &region,
+    )
+}
+
+pub struct Admin {
+    stop: Arc<AtomicBool>,
+    address: SocketAddr,
+    worker: Option<JoinHandle<()>>,
+}
+impl Drop for Admin {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let _ = TcpStream::connect_timeout(&self.address, Duration::from_secs(1));
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+pub fn start(dir: &Path, path: &Path, address: &str) -> Result<Admin> {
+    let address: SocketAddr = address
+        .parse()
+        .map_err(|_| "host administration requires a literal loopback address")?;
+    if !address.ip().is_loopback() {
+        return Err("host administration must bind to loopback; use an authenticated local forwarding session for remote access".into());
+    }
+    let (_, token) = load(path)?;
+    let listener =
+        TcpListener::bind(address).map_err(|_| "could not bind host administration port")?;
+    let address = listener
+        .local_addr()
+        .map_err(|_| "could not inspect host listener")?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopping = stop.clone();
+    let dir = dir.to_owned();
+    let path = path.to_owned();
+    let worker = std::thread::spawn(move || {
+        let mut state = Host {
+            dir,
+            path,
+            token,
+            checked_at: String::new(),
+            statuses: json!([]),
+        };
+        for connection in listener.incoming() {
+            if stopping.load(Ordering::Acquire) {
+                break;
+            }
+            if let Ok(mut stream) = connection {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+                let response = read_request(&mut stream).and_then(|request| state.handle(request));
+                let (code, value) =
+                    response.unwrap_or_else(|(code, message)| (code, json!({"error":message})));
+                let _ = respond(&mut stream, code, &value);
+            }
+        }
+    });
+    Ok(Admin {
+        stop,
+        address,
+        worker: Some(worker),
+    })
+}
+struct Host {
+    dir: PathBuf,
+    path: PathBuf,
+    token: String,
+    checked_at: String,
+    statuses: Value,
+}
+type ApiResult<T> = std::result::Result<T, (u16, String)>;
+struct Request {
+    method: String,
+    path: String,
+    authorization: String,
+    origin: bool,
+    body: Vec<u8>,
+}
+fn read_request(stream: &mut TcpStream) -> ApiResult<Request> {
+    let invalid = || (400, "Invalid host request".to_owned());
+    let mut reader = BufReader::new(stream);
+    let mut line = Vec::new();
+    (&mut reader)
+        .take(8193)
+        .read_until(b'\n', &mut line)
+        .map_err(|_| invalid())?;
+    let first = String::from_utf8(line.clone()).map_err(|_| invalid())?;
+    let parts: Vec<_> = first.split_whitespace().collect();
+    if parts.len() != 3 || parts[2] != "HTTP/1.1" {
+        return Err(invalid());
+    }
+    let mut request = Request {
+        method: parts[0].into(),
+        path: parts[1].into(),
+        authorization: String::new(),
+        origin: false,
+        body: vec![],
+    };
+    let mut total = line.len();
+    let mut length = None;
+    loop {
+        line.clear();
+        (&mut reader)
+            .take(8193)
+            .read_until(b'\n', &mut line)
+            .map_err(|_| invalid())?;
+        total += line.len();
+        if total > 8192 || line.is_empty() {
+            return Err(invalid());
+        }
+        if line == b"\r\n" {
+            break;
+        }
+        let header = std::str::from_utf8(&line).map_err(|_| invalid())?;
+        let (name, value) = header.split_once(':').ok_or_else(invalid)?;
+        let value = value.trim();
+        match name.to_ascii_lowercase().as_str() {
+            "authorization" => {
+                if !request.authorization.is_empty() {
+                    return Err(invalid());
+                }
+                request.authorization = value.into();
+            }
+            "origin" => request.origin = true,
+            "content-length" => {
+                if length.is_some() {
+                    return Err(invalid());
+                }
+                length = Some(value.parse::<usize>().map_err(|_| invalid())?);
+            }
+            "transfer-encoding" => return Err(invalid()),
+            _ => {}
+        }
+    }
+    let length = length.unwrap_or(0);
+    if length > 4096 {
+        return Err((413, "Host request too large".into()));
+    }
+    request.body.resize(length, 0);
+    reader
+        .read_exact(&mut request.body)
+        .map_err(|_| invalid())?;
+    Ok(request)
+}
+fn equal_secret(left: &str, right: &str) -> bool {
+    let mut difference = left.len() ^ right.len();
+    for (index, byte) in right.bytes().enumerate() {
+        difference |= usize::from(byte ^ left.as_bytes().get(index).copied().unwrap_or(0));
+    }
+    difference == 0
+}
+impl Host {
+    fn handle(&mut self, request: Request) -> ApiResult<(u16, Value)> {
+        if request.origin
+            || !equal_secret(&request.authorization, &format!("Bearer {}", self.token))
+        {
+            return Err((401, "Host authentication failed".into()));
+        }
+        match (request.method.as_str(), request.path.as_str()) {
+            ("GET", "/v1/host/status") => {}
+            ("POST", "/v1/host/refresh") => {
+                let result=refresh(&self.dir,&self.path).map_err(|_|(502,"Refresh failed; check host settings and Panel connectivity. Previous registrations were retained.".into()))?;
+                self.statuses = result["statuses"].clone();
+                self.checked_at = now();
+            }
+            ("POST", "/v1/host/import") => {
+                let body: Value = serde_json::from_slice(&request.body)
+                    .map_err(|_| (400, "Invalid import request".into()))?;
+                return self.import(body).map(|value| (200, value)).map_err(|_| {
+                    (
+                        400,
+                        "Could not approve/import the selected enabled game".into(),
+                    )
+                });
+            }
+            (_, "/v1/host/status" | "/v1/host/refresh" | "/v1/host/import") => {
+                return Err((405, "Unsupported host request method".into()))
+            }
+            _ => return Err((404, "Unknown host operation".into())),
+        }
+        self.snapshot()
+            .map(|value| (200, value))
+            .map_err(|_| (500, "Could not read host registrations".into()))
+    }
+    fn snapshot(&self) -> Result<Value> {
+        let cfg = config::dispatch(
+            "config.agent_load",
+            json!({"path":self.dir.join("agent.json")}),
+        )?;
+        let games:Vec<_>=rows(&cfg["games"]).iter().filter(|g|!s(g,"origin").is_empty()).map(|game|{
+            let status=rows(&self.statuses).iter().find(|v|v["gameId"]==game["id"]);
+            let (state,detail)=if game["disabled"]==true{("disabled","Suspended, removed, or no longer mapped at the last refresh")}else if let Some(status)=status{(s(status,"state"),s(status,"detail"))}else{("unknown","Click Refresh to check the Panel")};
+            json!({"id":game["id"],"name":game["name"],"type":game["type"],"disabled":game["disabled"]==true,"approvedDevices":rows(&game["devices"]).len(),"state":state,"detail":detail})
+        }).collect();
+        Ok(json!({"games":games,"refreshedAt":self.checked_at}))
+    }
+    fn import(&self, body: Value) -> Result<Value> {
+        let cfg = config::dispatch(
+            "config.agent_load",
+            json!({"path":self.dir.join("agent.json")}),
+        )?;
+        let game = rows(&cfg["games"])
+            .iter()
+            .find(|game| {
+                game["id"] == body["gameId"]
+                    && !s(game, "origin").is_empty()
+                    && game["disabled"] != true
+            })
+            .ok_or("unknown or disabled managed game")?;
+        let id = s(game, "id");
+        let keys = config::dispatch(
+            "config.keys_load",
+            json!({"id":id,"path":self.dir.join("keys").join(format!("{id}.json"))}),
+        )?;
+        let address = bridge::call(json!({"method":"address","keys":keys["keys"]}))?;
+        let invitation = pure::dispatch(
+            "invite.encode",
+            json!({"v":1,"name":game["name"],"game":game["type"],"proto":game["protocol"],"port":game["tunnelPort"],"addr":address,"consoleBridge":if game["consoleBridge"].is_null(){0}else{1}}),
+        )?;
+        config::dispatch(
+            "config.agent_mutate",
+            json!({"path":self.dir.join("agent.json"),"action":"approve","id":id,"publicKey":body["publicKey"],"label":"Host admin device","now":now()}),
+        )?;
+        Ok(json!({"invitation":invitation}))
+    }
+}
+fn respond(stream: &mut TcpStream, code: u16, value: &Value) -> std::io::Result<()> {
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    write!(stream,"HTTP/1.1 {code} Result\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",bytes.len())?;
+    stream.write_all(&bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gamelink_core::storage;
+    #[test]
+    fn cached_status_and_auth_never_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.json");
+        config::dispatch("config.agent_mutate", json!({"path":path,"action":"init"})).unwrap();
+        let mut host = Host {
+            dir: dir.path().to_owned(),
+            path: dir.path().join("missing-host.json"),
+            token: "test-token".repeat(8),
+            checked_at: String::new(),
+            statuses: json!([]),
+        };
+        let request = |method: &str, path: &str, token: &str| Request {
+            method: method.into(),
+            path: path.into(),
+            authorization: format!("Bearer {token}"),
+            origin: false,
+            body: vec![],
+        };
+        assert_eq!(
+            host.handle(request("POST", "/v1/host/refresh", "wrong"))
+                .unwrap_err()
+                .0,
+            401
+        );
+        assert_eq!(
+            host.handle(request("GET", "/v1/host/refresh", &host.token.clone()))
+                .unwrap_err()
+                .0,
+            405
+        );
+        let (_, value) = host
+            .handle(request("GET", "/v1/host/status", &host.token.clone()))
+            .unwrap();
+        assert_eq!(value, json!({"games":[],"refreshedAt":""}));
+        let token = host.token.clone();
+        let error = host
+            .handle(request("POST", "/v1/host/refresh", &token))
+            .unwrap_err();
+        assert_eq!(error.0, 502);
+        assert!(!error.1.contains(&token));
+        assert_eq!(host.checked_at, "");
+    }
+    #[test]
+    fn configuration_files_are_private_and_admin_binds_loopback() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("host.json");
+        storage::write_atomic(&dir.path().join("app.token"), b"test-panel-token").unwrap();
+        storage::write_atomic(&dir.path().join("admin.token"), "x".repeat(40).as_bytes()).unwrap();
+        storage::write_atomic(
+            &cfg,
+            br#"{"applicationTokenFile":"app.token","adminTokenFile":"admin.token"}"#,
+        )
+        .unwrap();
+        assert!(load(&cfg).is_ok());
+        for address in [
+            "0.0.0.0:8467",
+            "192.168.1.1:8467",
+            "localhost:8467",
+            "[::]:8467",
+        ] {
+            assert!(start(dir.path(), &cfg, address).is_err());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&cfg, fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(load(&cfg).is_err());
+        }
+    }
+}

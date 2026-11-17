@@ -1,0 +1,2 @@
+- `LICENSE-APACHE`: https://raw.githubusercontent.com/retep998/winapi-rs/0.3/LICENSE-APACHE
+- `LICENSE-MIT`: https://raw.githubusercontent.com/retep998/winapi-rs/0.3/LICENSE-MIT

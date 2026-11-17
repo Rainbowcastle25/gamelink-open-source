@@ -1,0 +1,10 @@
+package main
+import("bytes";"encoding/json";"os";"strings";"testing";"time")
+func TestFreezeAdmin(t *testing.T){
+ dir:=t.TempDir();pub:="nodekey:"+strings.Repeat("0123456789abcdef",4)
+ cases:=[][]string{{"init"},{"init"},{"games","list"},{"status"},{"games","add","--id","survival-world","--name","Survival World","--type","minecraft-java","--relay-host","derp.example.com"},{"games","list"},{"status"},{"devices","list"},{"devices","approve","--game","survival-world","--key",pub,"--label","alice"},{"devices","list"},{"status"},{"devices","approve","--game","survival-world","--key",pub,"--label","renamed"},{"devices","list","--game","survival-world"},{"devices","revoke","--game","survival-world","--key",pub},{"devices","revoke","--game","survival-world","--key",pub},{"devices","list"},{"games","remove","survival-world"},{"games","list"}}
+ var fixtures []map[string]any
+ normalize:=func(s string)string{return strings.ReplaceAll(strings.ReplaceAll(s,dir,"<DIR>"),time.Now().UTC().Format("2006-01-02"),"<DATE>")}
+ for _,args:=range cases {var out,err bytes.Buffer;code:=run(append([]string{"--dir",dir},args...),strings.NewReader(""),&out,&err);fixtures=append(fixtures,map[string]any{"args":args,"code":code,"stdout":normalize(out.String()),"stderr":normalize(err.String())})}
+ data,_:=json.MarshalIndent(fixtures,"","  ");if err:=os.WriteFile("../../core/crates/gamelink-agent/tests/fixtures/admin-go-c320fc7.json",data,0600);err!=nil{t.Fatal(err)}
+}

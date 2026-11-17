@@ -1,0 +1,7 @@
+The packet encoding and ServerData files in this directory are derived from
+ github.com/df-mc/go-nethernet v1.0.26 (Dragonfly Tech), under the MIT license
+reproduced in LICENSE. The listener and cryptography implementation are local.
+
+The codec now runs in core/crates/gamelink-core/src/discovery.rs; that Rust
+adaptation retains the license and attribution in discovery-LICENSE and
+discovery-NOTICE beside its source. Go packet types are compatibility adapters.

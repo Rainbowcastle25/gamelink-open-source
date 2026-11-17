@@ -1,0 +1,3 @@
+AndroidX (including Activity Compose, Lifecycle Runtime Compose and Jetpack Compose) is developed by the Android Open Source Project and licensed under Apache-2.0. The full license is in Apache-2.0 in this directory.
+
+Kotlin and Kotlinx Coroutines are developed by JetBrains s.r.o. and contributors and licensed under Apache-2.0. The full license is in Apache-2.0 in this directory.

@@ -1,0 +1,495 @@
+[
+  {
+    "kind": "view",
+    "output": {
+      "state": "disconnected",
+      "message": "",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "unknown",
+      "relay": "",
+      "latencyMs": null,
+      "gameReachable": "unknown",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0,
+      "simulated": false
+    },
+    "status": {
+      "state": "",
+      "message": "",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "",
+      "relay": "",
+      "latencyMs": 0,
+      "latencyKnown": false,
+      "gameReachable": "",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0
+    }
+  },
+  {
+    "kind": "path",
+    "output": "path not measured",
+    "status": {
+      "state": "",
+      "message": "",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "",
+      "relay": "",
+      "latencyMs": 0,
+      "latencyKnown": false,
+      "gameReachable": "",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0
+    }
+  },
+  {
+    "kind": "view",
+    "output": {
+      "state": "disconnected",
+      "message": "",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "unknown",
+      "relay": "",
+      "latencyMs": null,
+      "gameReachable": "unknown",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0,
+      "simulated": false
+    },
+    "status": {
+      "state": "stopped",
+      "message": "",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "",
+      "relay": "",
+      "latencyMs": 0,
+      "latencyKnown": false,
+      "gameReachable": "",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0
+    }
+  },
+  {
+    "kind": "path",
+    "output": "path not measured",
+    "status": {
+      "state": "stopped",
+      "message": "",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "",
+      "relay": "",
+      "latencyMs": 0,
+      "latencyKnown": false,
+      "gameReachable": "",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0
+    }
+  },
+  {
+    "kind": "view",
+    "output": {
+      "state": "connected",
+      "message": "",
+      "localAddr": "127.0.0.1:25565",
+      "localPort": 25565,
+      "portFallback": false,
+      "path": "direct",
+      "relay": "",
+      "latencyMs": 12.5,
+      "gameReachable": "yes",
+      "since": "2026-11-14T12:00:00Z",
+      "activeConns": 2,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 7,
+      "simulated": false
+    },
+    "status": {
+      "state": "connected",
+      "message": "",
+      "localAddr": "127.0.0.1:25565",
+      "localPort": 25565,
+      "portFallback": false,
+      "path": "direct",
+      "relay": "",
+      "latencyMs": 12.5,
+      "latencyKnown": true,
+      "gameReachable": "yes",
+      "since": "2026-11-14T12:00:00Z",
+      "activeConns": 2,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 7
+    }
+  },
+  {
+    "kind": "path",
+    "output": "direct, 12 ms",
+    "status": {
+      "state": "connected",
+      "message": "",
+      "localAddr": "127.0.0.1:25565",
+      "localPort": 25565,
+      "portFallback": false,
+      "path": "direct",
+      "relay": "",
+      "latencyMs": 12.5,
+      "latencyKnown": true,
+      "gameReachable": "yes",
+      "since": "2026-11-14T12:00:00Z",
+      "activeConns": 2,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 7
+    }
+  },
+  {
+    "kind": "view",
+    "output": {
+      "state": "unreachable",
+      "message": "No response",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "relay",
+      "relay": "",
+      "latencyMs": 2.6,
+      "gameReachable": "unknown",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0,
+      "simulated": false
+    },
+    "status": {
+      "state": "unreachable",
+      "message": "No response",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "relay",
+      "relay": "",
+      "latencyMs": 2.6,
+      "latencyKnown": true,
+      "gameReachable": "",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0
+    }
+  },
+  {
+    "kind": "path",
+    "output": "relayed, 3 ms",
+    "status": {
+      "state": "unreachable",
+      "message": "No response",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "relay",
+      "relay": "",
+      "latencyMs": 2.6,
+      "latencyKnown": true,
+      "gameReachable": "",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0
+    }
+  },
+  {
+    "kind": "friendly",
+    "output": "unknown error",
+    "text": ""
+  },
+  {
+    "kind": "friendly",
+    "output": "No response",
+    "text": "no response"
+  },
+  {
+    "kind": "friendly",
+    "output": "Connection refused",
+    "text": "connection refused"
+  },
+  {
+    "kind": "friendly",
+    "output": "��chec",
+    "text": "échec"
+  },
+  {
+    "kind": "ended",
+    "output": false,
+    "state": "connected"
+  },
+  {
+    "kind": "ended",
+    "output": false,
+    "state": "connecting"
+  },
+  {
+    "kind": "ended",
+    "output": false,
+    "state": "reconnecting"
+  },
+  {
+    "kind": "ended",
+    "output": true,
+    "state": "unreachable"
+  },
+  {
+    "kind": "ended",
+    "output": true,
+    "state": "stopped"
+  },
+  {
+    "kind": "ended",
+    "output": true,
+    "state": "error"
+  },
+  {
+    "kind": "status",
+    "logs": [
+      {
+        "kind": "warning",
+        "message": "Connection to “World” was interrupted; reconnecting"
+      }
+    ],
+    "output": {
+      "state": "reconnecting",
+      "message": "",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "unknown",
+      "relay": "",
+      "latencyMs": null,
+      "gameReachable": "unknown",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0,
+      "simulated": false
+    },
+    "previous": "connected",
+    "status": {
+      "state": "reconnecting",
+      "message": "",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "",
+      "relay": "",
+      "latencyMs": 0,
+      "latencyKnown": false,
+      "gameReachable": "",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0
+    }
+  },
+  {
+    "kind": "status",
+    "logs": [
+      {
+        "kind": "warning",
+        "message": "“World” is not responding (offline, or access was removed)"
+      }
+    ],
+    "output": {
+      "state": "unreachable",
+      "message": "",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "unknown",
+      "relay": "",
+      "latencyMs": null,
+      "gameReachable": "unknown",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0,
+      "simulated": false
+    },
+    "previous": "reconnecting",
+    "status": {
+      "state": "unreachable",
+      "message": "",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "",
+      "relay": "",
+      "latencyMs": 0,
+      "latencyKnown": false,
+      "gameReachable": "",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0
+    }
+  },
+  {
+    "kind": "status",
+    "logs": [
+      {
+        "kind": "connect",
+        "message": "Reconnected to “World”"
+      }
+    ],
+    "output": {
+      "state": "connected",
+      "message": "",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "unknown",
+      "relay": "",
+      "latencyMs": null,
+      "gameReachable": "unknown",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0,
+      "simulated": false
+    },
+    "previous": "unreachable",
+    "status": {
+      "state": "connected",
+      "message": "",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "",
+      "relay": "",
+      "latencyMs": 0,
+      "latencyKnown": false,
+      "gameReachable": "",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0
+    }
+  },
+  {
+    "kind": "status",
+    "logs": null,
+    "output": {
+      "state": "connected",
+      "message": "",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "unknown",
+      "relay": "",
+      "latencyMs": null,
+      "gameReachable": "unknown",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0,
+      "simulated": false
+    },
+    "previous": "connected",
+    "status": {
+      "state": "connected",
+      "message": "",
+      "localAddr": "",
+      "localPort": 0,
+      "portFallback": false,
+      "path": "",
+      "relay": "",
+      "latencyMs": 0,
+      "latencyKnown": false,
+      "gameReachable": "",
+      "since": "0001-01-01T00:00:00Z",
+      "activeConns": 0,
+      "udpFlows": 0,
+      "reconnects": 0,
+      "oversizeDrops": 0,
+      "bytesToServer": 0,
+      "bytesFromServer": 0
+    }
+  }
+]

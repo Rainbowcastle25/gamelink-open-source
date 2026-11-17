@@ -1,0 +1,1 @@
+The crate manifest declares Apache-2.0/MIT. The README states that some code is adapted from Rust core string code and identifies The Rust Project Developers and individual Rust contributors as copyright holders for those portions.

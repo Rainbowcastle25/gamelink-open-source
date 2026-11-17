@@ -1,0 +1,404 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"text/tabwriter"
+	"time"
+
+	"tailscale.com/types/logger"
+
+	"github.com/gamelink-project/gamelink/internal/config"
+	"github.com/gamelink-project/gamelink/internal/games"
+	"github.com/gamelink-project/gamelink/internal/invite"
+	"github.com/gamelink-project/gamelink/internal/security"
+	"github.com/gamelink-project/gamelink/internal/transport"
+)
+
+var errUsage = errors.New("usage")
+
+type cli struct {
+	dir string
+	in  io.Reader
+	out io.Writer
+	err io.Writer
+}
+
+func (c *cli) store() *config.AgentStore { return config.NewAgentStore(c.dir) }
+
+func (c *cli) flags(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(c.err)
+	return fs
+}
+
+func (c *cli) parse(fs *flag.FlagSet, args []string) error {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return errUsage
+		}
+		return errUsage
+	}
+	return nil
+}
+
+func (c *cli) cmdInit(args []string) error {
+	fs := c.flags("init")
+	if err := c.parse(fs, args); err != nil {
+		return err
+	}
+	if err := c.store().Init(); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Initialised %s\n\nNext: expose a game, for example\n  gamelink-agent games add --type minecraft-java\n", c.dir)
+	return nil
+}
+
+func (c *cli) cmdGames(args []string) error {
+	if len(args) == 0 {
+		fmt.Fprintln(c.err, "usage: gamelink-agent games add|list|remove")
+		return errUsage
+	}
+	switch args[0] {
+	case "add":
+		return c.gamesAdd(args[1:])
+	case "list":
+		return c.gamesList(args[1:])
+	case "remove":
+		return c.gamesRemove(args[1:])
+	}
+	fmt.Fprintf(c.err, "unknown games command %q\n", args[0])
+	return errUsage
+}
+
+func (c *cli) gamesAdd(args []string) error {
+	fs := c.flags("games add")
+	typ := fs.String("type", "", "game type: minecraft-java, minecraft-bedrock, factorio or custom (required)")
+	id := fs.String("id", "", "short identifier (default: derived from the name)")
+	name := fs.String("name", "", "display name shown to friends (default: the game type's name)")
+	desc := fs.String("description", "", "optional short description")
+	proto := fs.String("proto", "", "tcp or udp (required for custom games)")
+	port := fs.Int("port", 0, "port inside the tunnel (default: the game's standard port)")
+	dest := fs.String("dest", "", "where to forward to, as ip:port (default: 127.0.0.1:<port>); use this for Docker or Pterodactyl")
+	bridgeEnabled := fs.Bool("console-bridge", false, "enable Bedrock LAN console bridge")
+	bedrockIP := fs.String("bedrock-ip", "", "Bedrock server LAN IPv4 address")
+	bindIP := fs.String("bridge-bind-ip", "", "agent LAN IPv4 address")
+	mediaPorts := fs.String("media-ports", "", "allowed Bedrock media port range, e.g. 19132-19136")
+	relayRegion := fs.Int("relay-region", 0, "use this region of the public Tailcat relay map (default: nearest)")
+	relayHost := fs.String("relay-host", "", "use your own DERP relay at this host name instead of the public relays")
+	if err := c.parse(fs, args); err != nil {
+		return err
+	}
+	if *typ == "" {
+		return errors.New("--type is required (minecraft-java, minecraft-bedrock, factorio or custom)")
+	}
+	if err := security.ValidateOptionalPort(*port); err != nil {
+		return fmt.Errorf("--port: %w", err)
+	}
+	var bridge *config.ConsoleBridge
+	if *bridgeEnabled {
+		parts := strings.Split(*mediaPorts, "-")
+		if len(parts) != 2 {
+			return errors.New("--media-ports must be a first-last range")
+		}
+		first, e1 := strconv.ParseUint(parts[0], 10, 16)
+		last, e2 := strconv.ParseUint(parts[1], 10, 16)
+		if e1 != nil || e2 != nil {
+			return errors.New("invalid --media-ports")
+		}
+		bridge = &config.ConsoleBridge{ServerIP: *bedrockIP, BindIP: *bindIP, MediaPortFirst: uint16(first), MediaPortLast: uint16(last)}
+		if err := bridge.Validate(); err != nil {
+			return err
+		}
+	} else if *bedrockIP != "" || *bindIP != "" || *mediaPorts != "" {
+		return errors.New("bridge options require --console-bridge")
+	}
+	store := c.store()
+	if !store.Exists() {
+		return fmt.Errorf("agent is not initialised in %s; run `gamelink-agent init` first", c.dir)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	region, err := transport.ResolveRegion(ctx, transport.RegionSpec{Host: *relayHost, RegionID: *relayRegion})
+	if err != nil {
+		return err
+	}
+	g, err := store.AddGame(config.AddGameInput{
+		ID: *id, Name: *name, Description: *desc, Type: games.Type(*typ), Protocol: games.Protocol(*proto),
+		TunnelPort: uint16(*port), Dest: *dest, Region: region, ConsoleBridge: bridge,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Added game %q (%s)\n  %s port %d in the tunnel -> %s\n  relay: %s\n\n", g.ID, g.Name, g.Protocol, g.TunnelPort, g.Dest, region.RegionName)
+	fmt.Fprintf(c.out, "Nobody can reach it yet: no devices are approved. Next:\n  gamelink-agent devices approve --game %s --key nodekey:<friend's key> --label <name>\n  gamelink-agent invite --game %s\n", g.ID, g.ID)
+	return nil
+}
+
+func (c *cli) gamesList(args []string) error {
+	fs := c.flags("games list")
+	if err := c.parse(fs, args); err != nil {
+		return err
+	}
+	cfg, err := c.store().Load()
+	if err != nil {
+		return err
+	}
+	if len(cfg.Games) == 0 {
+		fmt.Fprintln(c.out, "No games configured. Add one with: gamelink-agent games add --type minecraft-java")
+		return nil
+	}
+	tw := tabwriter.NewWriter(c.out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tNAME\tTYPE\tTUNNEL\tFORWARDS TO\tDEVICES")
+	for _, g := range cfg.Games {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s/%d\t%s\t%d\n", g.ID, g.Name, g.Type, g.Protocol, g.TunnelPort, g.Dest, len(g.Devices))
+	}
+	return tw.Flush()
+}
+
+func (c *cli) gamesRemove(args []string) error {
+	fs := c.flags("games remove")
+	if err := c.parse(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(c.err, "usage: gamelink-agent games remove <id>")
+		return errUsage
+	}
+	if err := c.store().RemoveGame(fs.Arg(0)); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Removed %q and deleted its identity. Invitations for it no longer work. A running agent stops serving it within a few seconds.\n", fs.Arg(0))
+	return nil
+}
+
+func (c *cli) cmdDevices(args []string) error {
+	if len(args) == 0 {
+		fmt.Fprintln(c.err, "usage: gamelink-agent devices approve|revoke|list")
+		return errUsage
+	}
+	switch args[0] {
+	case "approve":
+		return c.devicesApprove(args[1:])
+	case "revoke":
+		return c.devicesRevoke(args[1:])
+	case "list":
+		return c.devicesList(args[1:])
+	}
+	fmt.Fprintf(c.err, "unknown devices command %q\n", args[0])
+	return errUsage
+}
+
+func (c *cli) devicesApprove(args []string) error {
+	fs := c.flags("devices approve")
+	game := fs.String("game", "", "game id (required)")
+	pub := fs.String("key", "", "the friend's public key, nodekey:... (required)")
+	label := fs.String("label", "", "a name to remember this device by")
+	if err := c.parse(fs, args); err != nil {
+		return err
+	}
+	if *game == "" || *pub == "" {
+		return errors.New("--game and --key are required")
+	}
+	d, err := c.store().Approve(*game, *pub, *label)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Approved %s for %q", d.PublicKey, *game)
+	if d.Label != "" {
+		fmt.Fprintf(c.out, " (%s)", d.Label)
+	}
+	fmt.Fprintln(c.out, ".\nA running agent picks this up within a few seconds. Share the invitation privately: gamelink-agent invite --game "+*game)
+	return nil
+}
+
+func (c *cli) devicesRevoke(args []string) error {
+	fs := c.flags("devices revoke")
+	game := fs.String("game", "", "game id (required)")
+	pub := fs.String("key", "", "public key to revoke, nodekey:... (required)")
+	if err := c.parse(fs, args); err != nil {
+		return err
+	}
+	if *game == "" || *pub == "" {
+		return errors.New("--game and --key are required")
+	}
+	if err := c.store().Revoke(*game, *pub); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Revoked. A running agent restarts %q within a few seconds, which ends that device's open sessions and blocks new ones.\n", *game)
+	fmt.Fprintln(c.out, "Other approved devices reconnect automatically after the brief restart.")
+	return nil
+}
+
+func (c *cli) devicesList(args []string) error {
+	fs := c.flags("devices list")
+	game := fs.String("game", "", "only this game")
+	if err := c.parse(fs, args); err != nil {
+		return err
+	}
+	cfg, err := c.store().Load()
+	if err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(c.out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "GAME\tLABEL\tPUBLIC KEY\tAPPROVED")
+	n := 0
+	for _, g := range cfg.Games {
+		if *game != "" && g.ID != *game {
+			continue
+		}
+		for _, d := range g.Devices {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", g.ID, d.Label, d.PublicKey, d.ApprovedAt.Format("2006-01-02"))
+			n++
+		}
+	}
+	if n == 0 {
+		fmt.Fprintln(c.out, "No approved devices.")
+		return nil
+	}
+	return tw.Flush()
+}
+
+func (c *cli) cmdInvite(args []string) error {
+	fs := c.flags("invite")
+	game := fs.String("game", "", "game id (required)")
+	name := fs.String("name", "", "name shown in the friend's GameLink (default: the game's name)")
+	note := fs.String("note", "", "optional short note shown on import")
+	local := fs.Bool("allow-local-relay", false, "allow a relay on a private IP (for LAN-only test setups)")
+	if err := c.parse(fs, args); err != nil {
+		return err
+	}
+	if *game == "" {
+		return errors.New("--game is required")
+	}
+	store := c.store()
+	cfg, err := store.Load()
+	if err != nil {
+		return err
+	}
+	g, ok := cfg.FindGame(*game)
+	if !ok {
+		return fmt.Errorf("no game with id %q", *game)
+	}
+	keys, err := store.LoadKeys(g.ID)
+	if err != nil {
+		return err
+	}
+	n := g.Name
+	if *name != "" {
+		n = *name
+	}
+	bridgeVersion := 0
+	if g.ConsoleBridge != nil {
+		bridgeVersion = 1
+	}
+	s, err := invite.Encode(invite.Invite{
+		Name: n, Game: g.Type, Proto: g.Protocol, Port: g.TunnelPort, Addr: string(keys.Addr()), Note: *note, ConsoleBridge: bridgeVersion,
+	}, invite.Options{AllowLocalRelay: *local})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(c.out, s)
+	fmt.Fprintln(c.err, "\nThis invitation is a SECRET: share it privately (direct message), never publicly.")
+	fmt.Fprintln(c.err, "It only works for devices you have approved for this game.")
+	if len(g.Devices) == 0 {
+		fmt.Fprintf(c.err, "Warning: no devices are approved for %q yet, so nobody can connect.\n", g.ID)
+	}
+	return nil
+}
+
+func (c *cli) cmdStatus(args []string) error {
+	fs := c.flags("status")
+	if err := c.parse(fs, args); err != nil {
+		return err
+	}
+	store := c.store()
+	cfg, err := store.Load()
+	if err != nil {
+		return err
+	}
+	rs, fresh, rerr := transport.ReadRuntime(c.dir)
+	if rerr == nil && fresh {
+		fmt.Fprintf(c.out, "Agent: running (pid %d, up since %s)\n\n", rs.PID, rs.Started.Local().Format("2006-01-02 15:04:05"))
+	} else {
+		fmt.Fprintln(c.out, "Agent: not running (start it with `gamelink-agent serve`)")
+		fmt.Fprintln(c.out)
+	}
+	state := map[string]transport.GameState{}
+	if fresh {
+		for _, g := range rs.Games {
+			state[g.ID] = g
+		}
+	}
+	if len(cfg.Games) == 0 {
+		fmt.Fprintln(c.out, "No games configured.")
+		return nil
+	}
+	tw := tabwriter.NewWriter(c.out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "GAME\tTUNNEL\tFORWARDS TO\tDEVICES\tSTATE\tACTIVE\tACCEPTED\tDENIED")
+	for _, g := range cfg.Games {
+		st := "not running"
+		active, acc, den := "-", "-", "-"
+		if gs, ok := state[g.ID]; ok {
+			st = gs.State
+			if gs.Detail != "" {
+				st += " (" + gs.Detail + ")"
+			}
+			active, acc, den = fmt.Sprint(gs.Stats.Active), fmt.Sprint(gs.Stats.Accepted), fmt.Sprint(gs.Stats.Denied)
+		} else if len(g.Devices) == 0 {
+			st = "inactive (no approved devices)"
+		}
+		fmt.Fprintf(tw, "%s\t%s/%d\t%s\t%d\t%s\t%s\t%s\t%s\n", g.ID, g.Protocol, g.TunnelPort, g.Dest, len(g.Devices), st, active, acc, den)
+	}
+	return tw.Flush()
+}
+
+func (c *cli) cmdServe(args []string) error {
+	fs := c.flags("serve")
+	verbose := fs.Bool("verbose", false, "include Tailcat's own (redacted) network log output")
+	if err := c.parse(fs, args); err != nil {
+		return err
+	}
+	store := c.store()
+	cfg, err := store.Load()
+	if err != nil {
+		return err
+	}
+	red := security.NewRedactor()
+	for _, g := range cfg.Games {
+		if k, err := store.LoadKeys(g.ID); err == nil {
+			txt, _ := k.Private.MarshalText()
+			psk, _ := k.PSK.MarshalText()
+			red.Add(string(txt), string(psk), string(k.Addr()))
+		}
+	}
+	logf := func(format string, args ...any) {
+		fmt.Fprintf(c.err, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), red.Redact(fmt.Sprintf(format, args...)))
+	}
+	var tclogf logger.Logf
+	if *verbose {
+		tclogf = func(format string, args ...any) { logf("tailcat: "+format, args...) }
+	}
+	if len(cfg.Games) == 0 {
+		logf("no games configured yet; add one with `gamelink-agent games add`. Waiting for configuration changes.")
+	}
+	sup := &transport.Supervisor{Store: store, Logf: logf, TailcatLogf: tclogf}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	logf("gamelink-agent %s started; configuration in %s", version, c.dir)
+	logf("only approved devices can reach a game; games with no approved devices are not served")
+	if err := sup.Run(ctx); err != nil {
+		return err
+	}
+	logf("shut down cleanly")
+	return nil
+}

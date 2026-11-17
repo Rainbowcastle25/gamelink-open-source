@@ -1,0 +1,8 @@
+package main
+import("bytes";"encoding/json";"os";"strings";"testing")
+func TestFreezePhase6(t *testing.T){
+ cases:=[][]string{{},{"help"},{"version"},{"--dir"},{"unknown"},{"games"},{"devices"},{"games","wat"},{"devices","wat"},{"init","-h"},{"games","add","-h"},{"devices","approve","-h"},{"devices","revoke","-h"},{"devices","list","-h"},{"games","list","-h"},{"games","remove","-h"},{"invite","-h"},{"serve","-h"},{"status","-h"},{"games","remove"},{"games","add"},{"invite"},{"devices","approve"},{"devices","revoke"},{"init","--unknown"},{"games","add","--port","x"},{"serve","--verbose=bad"}}
+ var fixtures []map[string]any
+ for _,args:=range cases { var out,err bytes.Buffer; code:=run(append([]string{"--dir","/FROZEN"},args...),strings.NewReader(""),&out,&err); fixtures=append(fixtures,map[string]any{"args":args,"code":code,"stdout":out.String(),"stderr":err.String()}) }
+ data,_:=json.MarshalIndent(fixtures,"","  ");if err:=os.WriteFile("../../core/crates/gamelink-agent/tests/fixtures/cli-go-c320fc7.json",data,0600);err!=nil{t.Fatal(err)}
+}

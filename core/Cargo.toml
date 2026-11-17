@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/gamelink-core", "crates/gamelink-ffi", "crates/gamelink-agent"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace.dependencies]
+gamelink-core = { path = "crates/gamelink-core" }
+jni = "=0.21.1"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"

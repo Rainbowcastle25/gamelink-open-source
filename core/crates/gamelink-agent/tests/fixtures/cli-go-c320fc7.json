@@ -1,0 +1,243 @@
+[
+  {
+    "args": [],
+    "code": 0,
+    "stderr": "",
+    "stdout": "gamelink-agent - expose approved game ports through Tailcat (no router port forwarding)\n\nUsage:\n  gamelink-agent [--dir DIR] \u003ccommand\u003e [options]\n\nSetup:\n  init                          create the agent configuration directory\n  games add                     expose a game port (generates the game's own Tailcat identity)\n  games list                    list configured games\n  games remove \u003cid\u003e             stop exposing a game and delete its identity\n\nAccess control (per game; a game with no approved devices is unreachable):\n  devices approve               approve a friend's public key for one game\n  devices revoke                revoke a device (a running agent restarts that game and ends the session)\n  devices list                  list approved devices\n\nSharing and running:\n  invite                        print the invitation a friend imports into GameLink (a secret)\n  serve                         run the agent in the foreground (Ctrl-C / SIGTERM to stop)\n  status                        show games, approvals and whether the agent is running\n  version                       print the version\n\nThe configuration directory defaults to $GAMELINK_AGENT_DIR, else\n\u003cuser config dir\u003e/gamelink-agent. Run 'gamelink-agent \u003ccommand\u003e -h' for options.\n"
+  },
+  {
+    "args": [
+      "help"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "gamelink-agent - expose approved game ports through Tailcat (no router port forwarding)\n\nUsage:\n  gamelink-agent [--dir DIR] \u003ccommand\u003e [options]\n\nSetup:\n  init                          create the agent configuration directory\n  games add                     expose a game port (generates the game's own Tailcat identity)\n  games list                    list configured games\n  games remove \u003cid\u003e             stop exposing a game and delete its identity\n\nAccess control (per game; a game with no approved devices is unreachable):\n  devices approve               approve a friend's public key for one game\n  devices revoke                revoke a device (a running agent restarts that game and ends the session)\n  devices list                  list approved devices\n\nSharing and running:\n  invite                        print the invitation a friend imports into GameLink (a secret)\n  serve                         run the agent in the foreground (Ctrl-C / SIGTERM to stop)\n  status                        show games, approvals and whether the agent is running\n  version                       print the version\n\nThe configuration directory defaults to $GAMELINK_AGENT_DIR, else\n\u003cuser config dir\u003e/gamelink-agent. Run 'gamelink-agent \u003ccommand\u003e -h' for options.\n"
+  },
+  {
+    "args": [
+      "version"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "gamelink-agent 0.1.0-alpha\n"
+  },
+  {
+    "args": [
+      "--dir"
+    ],
+    "code": 2,
+    "stderr": "error: --dir needs a value\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "unknown"
+    ],
+    "code": 2,
+    "stderr": "unknown command \"unknown\"\n\ngamelink-agent - expose approved game ports through Tailcat (no router port forwarding)\n\nUsage:\n  gamelink-agent [--dir DIR] \u003ccommand\u003e [options]\n\nSetup:\n  init                          create the agent configuration directory\n  games add                     expose a game port (generates the game's own Tailcat identity)\n  games list                    list configured games\n  games remove \u003cid\u003e             stop exposing a game and delete its identity\n\nAccess control (per game; a game with no approved devices is unreachable):\n  devices approve               approve a friend's public key for one game\n  devices revoke                revoke a device (a running agent restarts that game and ends the session)\n  devices list                  list approved devices\n\nSharing and running:\n  invite                        print the invitation a friend imports into GameLink (a secret)\n  serve                         run the agent in the foreground (Ctrl-C / SIGTERM to stop)\n  status                        show games, approvals and whether the agent is running\n  version                       print the version\n\nThe configuration directory defaults to $GAMELINK_AGENT_DIR, else\n\u003cuser config dir\u003e/gamelink-agent. Run 'gamelink-agent \u003ccommand\u003e -h' for options.\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "games"
+    ],
+    "code": 2,
+    "stderr": "usage: gamelink-agent games add|list|remove\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "devices"
+    ],
+    "code": 2,
+    "stderr": "usage: gamelink-agent devices approve|revoke|list\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "games",
+      "wat"
+    ],
+    "code": 2,
+    "stderr": "unknown games command \"wat\"\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "devices",
+      "wat"
+    ],
+    "code": 2,
+    "stderr": "unknown devices command \"wat\"\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "init",
+      "-h"
+    ],
+    "code": 2,
+    "stderr": "Usage of init:\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "games",
+      "add",
+      "-h"
+    ],
+    "code": 2,
+    "stderr": "Usage of games add:\n  -bedrock-ip string\n    \tBedrock server LAN IPv4 address\n  -bridge-bind-ip string\n    \tagent LAN IPv4 address\n  -console-bridge\n    \tenable Bedrock LAN console bridge\n  -description string\n    \toptional short description\n  -dest string\n    \twhere to forward to, as ip:port (default: 127.0.0.1:\u003cport\u003e); use this for Docker or Pterodactyl\n  -id string\n    \tshort identifier (default: derived from the name)\n  -media-ports string\n    \tallowed Bedrock media port range, e.g. 19132-19136\n  -name string\n    \tdisplay name shown to friends (default: the game type's name)\n  -port int\n    \tport inside the tunnel (default: the game's standard port)\n  -proto string\n    \ttcp or udp (required for custom games)\n  -relay-host string\n    \tuse your own DERP relay at this host name instead of the public relays\n  -relay-region int\n    \tuse this region of the public Tailcat relay map (default: nearest)\n  -type string\n    \tgame type: minecraft-java, minecraft-bedrock, factorio or custom (required)\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "devices",
+      "approve",
+      "-h"
+    ],
+    "code": 2,
+    "stderr": "Usage of devices approve:\n  -game string\n    \tgame id (required)\n  -key string\n    \tthe friend's public key, nodekey:... (required)\n  -label string\n    \ta name to remember this device by\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "devices",
+      "revoke",
+      "-h"
+    ],
+    "code": 2,
+    "stderr": "Usage of devices revoke:\n  -game string\n    \tgame id (required)\n  -key string\n    \tpublic key to revoke, nodekey:... (required)\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "devices",
+      "list",
+      "-h"
+    ],
+    "code": 2,
+    "stderr": "Usage of devices list:\n  -game string\n    \tonly this game\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "games",
+      "list",
+      "-h"
+    ],
+    "code": 2,
+    "stderr": "Usage of games list:\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "games",
+      "remove",
+      "-h"
+    ],
+    "code": 2,
+    "stderr": "Usage of games remove:\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "invite",
+      "-h"
+    ],
+    "code": 2,
+    "stderr": "Usage of invite:\n  -allow-local-relay\n    \tallow a relay on a private IP (for LAN-only test setups)\n  -game string\n    \tgame id (required)\n  -name string\n    \tname shown in the friend's GameLink (default: the game's name)\n  -note string\n    \toptional short note shown on import\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "serve",
+      "-h"
+    ],
+    "code": 2,
+    "stderr": "Usage of serve:\n  -verbose\n    \tinclude Tailcat's own (redacted) network log output\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "status",
+      "-h"
+    ],
+    "code": 2,
+    "stderr": "Usage of status:\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "games",
+      "remove"
+    ],
+    "code": 2,
+    "stderr": "usage: gamelink-agent games remove \u003cid\u003e\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "games",
+      "add"
+    ],
+    "code": 1,
+    "stderr": "error: --type is required (minecraft-java, minecraft-bedrock, factorio or custom)\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "invite"
+    ],
+    "code": 1,
+    "stderr": "error: --game is required\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "devices",
+      "approve"
+    ],
+    "code": 1,
+    "stderr": "error: --game and --key are required\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "devices",
+      "revoke"
+    ],
+    "code": 1,
+    "stderr": "error: --game and --key are required\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "init",
+      "--unknown"
+    ],
+    "code": 2,
+    "stderr": "flag provided but not defined: -unknown\nUsage of init:\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "games",
+      "add",
+      "--port",
+      "x"
+    ],
+    "code": 2,
+    "stderr": "invalid value \"x\" for flag -port: parse error\nUsage of games add:\n  -bedrock-ip string\n    \tBedrock server LAN IPv4 address\n  -bridge-bind-ip string\n    \tagent LAN IPv4 address\n  -console-bridge\n    \tenable Bedrock LAN console bridge\n  -description string\n    \toptional short description\n  -dest string\n    \twhere to forward to, as ip:port (default: 127.0.0.1:\u003cport\u003e); use this for Docker or Pterodactyl\n  -id string\n    \tshort identifier (default: derived from the name)\n  -media-ports string\n    \tallowed Bedrock media port range, e.g. 19132-19136\n  -name string\n    \tdisplay name shown to friends (default: the game type's name)\n  -port int\n    \tport inside the tunnel (default: the game's standard port)\n  -proto string\n    \ttcp or udp (required for custom games)\n  -relay-host string\n    \tuse your own DERP relay at this host name instead of the public relays\n  -relay-region int\n    \tuse this region of the public Tailcat relay map (default: nearest)\n  -type string\n    \tgame type: minecraft-java, minecraft-bedrock, factorio or custom (required)\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "serve",
+      "--verbose=bad"
+    ],
+    "code": 2,
+    "stderr": "invalid boolean value \"bad\" for -verbose: parse error\nUsage of serve:\n  -verbose\n    \tinclude Tailcat's own (redacted) network log output\n",
+    "stdout": ""
+  }
+]

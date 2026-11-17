@@ -1,0 +1,190 @@
+[
+  {
+    "args": [
+      "init"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "Initialised \u003cDIR\u003e\n\nNext: expose a game, for example\n  gamelink-agent games add --type minecraft-java\n"
+  },
+  {
+    "args": [
+      "init"
+    ],
+    "code": 1,
+    "stderr": "error: \u003cDIR\u003e/agent.json already exists; refusing to overwrite\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "games",
+      "list"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "No games configured. Add one with: gamelink-agent games add --type minecraft-java\n"
+  },
+  {
+    "args": [
+      "status"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "Agent: not running (start it with `gamelink-agent serve`)\n\nNo games configured.\n"
+  },
+  {
+    "args": [
+      "games",
+      "add",
+      "--id",
+      "survival-world",
+      "--name",
+      "Survival World",
+      "--type",
+      "minecraft-java",
+      "--relay-host",
+      "derp.example.com"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "Added game \"survival-world\" (Survival World)\n  tcp port 25565 in the tunnel -\u003e 127.0.0.1:25565\n  relay: Custom relay\n\nNobody can reach it yet: no devices are approved. Next:\n  gamelink-agent devices approve --game survival-world --key nodekey:\u003cfriend's key\u003e --label \u003cname\u003e\n  gamelink-agent invite --game survival-world\n"
+  },
+  {
+    "args": [
+      "games",
+      "list"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "ID              NAME            TYPE            TUNNEL     FORWARDS TO      DEVICES\nsurvival-world  Survival World  minecraft-java  tcp/25565  127.0.0.1:25565  0\n"
+  },
+  {
+    "args": [
+      "status"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "Agent: not running (start it with `gamelink-agent serve`)\n\nGAME            TUNNEL     FORWARDS TO      DEVICES  STATE                           ACTIVE  ACCEPTED  DENIED\nsurvival-world  tcp/25565  127.0.0.1:25565  0        inactive (no approved devices)  -       -         -\n"
+  },
+  {
+    "args": [
+      "devices",
+      "list"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "No approved devices.\n"
+  },
+  {
+    "args": [
+      "devices",
+      "approve",
+      "--game",
+      "survival-world",
+      "--key",
+      "nodekey:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "--label",
+      "alice"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "Approved nodekey:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef for \"survival-world\" (alice).\nA running agent picks this up within a few seconds. Share the invitation privately: gamelink-agent invite --game survival-world\n"
+  },
+  {
+    "args": [
+      "devices",
+      "list"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "GAME            LABEL  PUBLIC KEY                                                                APPROVED\nsurvival-world  alice  nodekey:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  \u003cDATE\u003e\n"
+  },
+  {
+    "args": [
+      "status"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "Agent: not running (start it with `gamelink-agent serve`)\n\nGAME            TUNNEL     FORWARDS TO      DEVICES  STATE        ACTIVE  ACCEPTED  DENIED\nsurvival-world  tcp/25565  127.0.0.1:25565  1        not running  -       -         -\n"
+  },
+  {
+    "args": [
+      "devices",
+      "approve",
+      "--game",
+      "survival-world",
+      "--key",
+      "nodekey:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "--label",
+      "renamed"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "Approved nodekey:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef for \"survival-world\" (renamed).\nA running agent picks this up within a few seconds. Share the invitation privately: gamelink-agent invite --game survival-world\n"
+  },
+  {
+    "args": [
+      "devices",
+      "list",
+      "--game",
+      "survival-world"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "GAME            LABEL    PUBLIC KEY                                                                APPROVED\nsurvival-world  renamed  nodekey:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  \u003cDATE\u003e\n"
+  },
+  {
+    "args": [
+      "devices",
+      "revoke",
+      "--game",
+      "survival-world",
+      "--key",
+      "nodekey:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "Revoked. A running agent restarts \"survival-world\" within a few seconds, which ends that device's open sessions and blocks new ones.\nOther approved devices reconnect automatically after the brief restart.\n"
+  },
+  {
+    "args": [
+      "devices",
+      "revoke",
+      "--game",
+      "survival-world",
+      "--key",
+      "nodekey:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    ],
+    "code": 1,
+    "stderr": "error: device nodekey:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef is not approved for \"survival-world\"\n",
+    "stdout": ""
+  },
+  {
+    "args": [
+      "devices",
+      "list"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "No approved devices.\n"
+  },
+  {
+    "args": [
+      "games",
+      "remove",
+      "survival-world"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "Removed \"survival-world\" and deleted its identity. Invitations for it no longer work. A running agent stops serving it within a few seconds.\n"
+  },
+  {
+    "args": [
+      "games",
+      "list"
+    ],
+    "code": 0,
+    "stderr": "",
+    "stdout": "No games configured. Add one with: gamelink-agent games add --type minecraft-java\n"
+  }
+]

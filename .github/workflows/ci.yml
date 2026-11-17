@@ -1,0 +1,274 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go tests, vet, hardening checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # shim/rustcore (and ./mobile) link the Rust core through cgo.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+          components: llvm-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            core
+            apps/desktop-tauri
+      - name: Go vet and hermetic tests (without production tags)
+        run: bash scripts/check.sh go
+      - name: Production dependency and secret gates, including negative probes
+        run: bash scripts/check.sh safety
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Install Rust musl targets and ARM emulator
+        run: |
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install -y qemu-user
+      - name: Build and smoke-test fully static Linux agents
+        run: bash scripts/check.sh static
+      - uses: actions/upload-artifact@v4
+        with:
+          retention-days: 30
+          name: gamelink-agent-linux
+          path: dist/
+
+  race:
+    name: Race detector
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+          components: llvm-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            core
+            apps/desktop-tauri
+      - run: bash scripts/check.sh race
+
+  frontend:
+    name: Front end (lint, types, tests, build)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/desktop/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: npm
+          cache-dependency-path: apps/desktop/frontend/package-lock.json
+      - run: npm ci
+      - name: Lint, types, tests, production build and dependency audit
+        run: bash ../../../scripts/check.sh frontend
+
+  desktop:
+    name: Tauri desktop (Linux tests and Windows cross-build)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: npm
+          cache-dependency-path: apps/desktop/frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+          components: llvm-tools, rustfmt, clippy
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            core
+            apps/desktop-tauri
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Native GUI and Windows resource/link tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+      - name: Production Linux/Windows desktop, formatting, lint and ABI tests
+        run: bash scripts/check.sh desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          retention-days: 30
+          name: gamelink-desktop
+          path: dist/desktop/
+
+  rust:
+    name: Shared Rust core
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+          components: llvm-tools, rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            core
+            apps/desktop-tauri
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Shared core formatting, tests and strict lint
+        working-directory: .
+        run: bash scripts/check.sh rust
+      - name: Install cbindgen 0.29.4
+        run: cargo install cbindgen --version =0.29.4 --locked
+      - name: C header matches the Rust ABI
+        working-directory: .
+        run: bash scripts/check.sh header
+
+  windows-rust:
+    name: Rust core tests on Windows (DPAPI, storage, launch)
+    runs-on: windows-2025
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            core
+            apps/desktop-tauri
+      # gamelink-agent is left out on purpose: its build script links the Go
+      # archive. gamelink-core and gamelink-ffi are plain Rust and run natively,
+      # which exercises the real DPAPI seal/unseal and ShellExecute paths.
+      - name: Test the Rust core natively on Windows
+        run: cargo test --locked -p gamelink-core -p gamelink-ffi
+
+  windows-cross:
+    name: Windows cgo cross-build (Go + Rust via zig)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+          components: llvm-tools
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            core
+            apps/desktop-tauri
+      # Verifies the download against the Zig Software Foundation's minisign key.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.1
+      - name: Windows Rust FFI panic probe and migrated Go test executables
+        run: bash scripts/check.sh windows-cross
+      - uses: actions/upload-artifact@v4
+        with:
+          retention-days: 30
+          name: migrated-tests-windows
+          path: dist/*.test.exe
+
+  windows-run:
+    name: Run Windows cgo and DPAPI parity tests
+    needs: windows-cross
+    runs-on: windows-2025
+    steps:
+      # Package tests read repository fixtures relative to their package directory.
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: migrated-tests-windows
+      - name: Run migrated package tests (including Windows DPAPI)
+        shell: pwsh
+        env:
+          GAMELINK_REQUIRE_PANIC_PROBE: '1'
+        run: |
+          Get-ChildItem *.test.exe | ForEach-Object {
+            $test = $_.FullName
+            $package = $_.Name -replace '\.test\.exe$', ''
+            Push-Location "shim/$package"
+            try {
+              & $test '-test.v'
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            } finally {
+              Pop-Location
+            }
+          }
+
+  android:
+    name: Android native libraries, APK and lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+          components: llvm-tools
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            core
+            apps/desktop-tauri
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' 'ndk;29.0.14206865'
+      # Builds the Rust staticlibs (linked into the Go AAR via cgo), the AAR,
+      # the Rust JNI cdylib, then the APK and lint.
+      - run: bash scripts/check.sh android
+      - uses: actions/upload-artifact@v4
+        with:
+          retention-days: 30
+          name: gamelink-android-debug
+          path: |
+            apps/android/app/build/outputs/apk/debug/*.apk
+            apps/android/app/build/outputs/apk/androidTest/debug/*.apk
+            apps/android/app/build/reports/lint-results-debug.html
+            THIRD_PARTY_NOTICES.md
+            third_party/licenses/

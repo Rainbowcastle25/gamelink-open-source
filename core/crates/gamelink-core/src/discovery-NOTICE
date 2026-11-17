@@ -1,0 +1,6 @@
+The discovery packet and advertisement codec in discovery.rs is adapted from
+ github.com/df-mc/go-nethernet v1.0.26 (Dragonfly Tech), copyright (c) 2019,
+under the MIT license reproduced in discovery-LICENSE. The source Go adaptation
+and its LICENSE/NOTICE remain under shim/consolebridge/discovery/.
+The AES-ECB/HMAC wire compatibility implementation is local; the shared wire
+key does not authenticate peers. Cryptographic primitives use RustCrypto crates.

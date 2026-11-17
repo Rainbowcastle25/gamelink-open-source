@@ -1,0 +1,403 @@
+package transport
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
+
+	"github.com/gamelink-project/gamelink/internal/config"
+	"github.com/gamelink-project/gamelink/internal/consolebridge"
+	"github.com/gamelink-project/gamelink/internal/games"
+	"github.com/gamelink-project/gamelink/internal/security"
+)
+
+// GameState is the externally visible state of one configured game.
+type GameState struct {
+	ID         string         `json:"id"`
+	Name       string         `json:"name"`
+	Protocol   games.Protocol `json:"protocol"`
+	TunnelPort uint16         `json:"tunnelPort"`
+	Dest       string         `json:"dest"`
+	Approved   int            `json:"approved"`
+	State      string         `json:"state"` // serving, inactive, error
+	Detail     string         `json:"detail,omitempty"`
+	Stats      ServerStats    `json:"stats"`
+}
+
+// RuntimeStatus is written to runtime.json by `serve`.
+type RuntimeStatus struct {
+	PID     int         `json:"pid"`
+	Started time.Time   `json:"started"`
+	Updated time.Time   `json:"updated"`
+	Games   []GameState `json:"games"`
+}
+
+type runningGame struct {
+	srv         *GameServer
+	fingerprint string
+}
+
+// Supervisor keeps one GameServer running per configured game that has at
+// least one approved device, and reconciles with the configuration on disk so
+// that approvals and revocations made by other CLI invocations take effect
+// without any remote management interface.
+type Supervisor struct {
+	Store *config.AgentStore
+	// TailcatLogf receives Tailcat's own log output (must be redacted).
+	TailcatLogf logger.Logf
+	// Logf receives the agent's event log lines (must be redacted).
+	Logf         func(format string, args ...any)
+	PollInterval time.Duration // default 1s
+	// Tuning knobs passed to every GameServer (zero = defaults).
+	MaxSessions    int
+	UDPIdleTimeout time.Duration
+
+	started      time.Time
+	mu           sync.Mutex
+	configMu     sync.Mutex
+	configData   []byte
+	configValue  config.AgentConfig
+	configLoaded bool
+	running      map[string]*runningGame
+	states       map[string]GameState
+	retryAt      map[string]time.Time
+}
+
+func (s *Supervisor) logf(format string, args ...any) {
+	if s.Logf != nil {
+		s.Logf(format, args...)
+	}
+}
+
+// Run reconciles immediately and then every PollInterval until ctx is done,
+// at which point every game server is shut down.
+func (s *Supervisor) Run(ctx context.Context) error {
+	if s.PollInterval <= 0 {
+		s.PollInterval = time.Second
+	}
+	s.mu.Lock()
+	s.started = time.Now().UTC()
+	s.running = map[string]*runningGame{}
+	s.states = map[string]GameState{}
+	s.retryAt = map[string]time.Time{}
+	s.mu.Unlock()
+	defer s.shutdown()
+
+	if err := s.Reconcile(); err != nil {
+		return err
+	}
+	tick := time.NewTicker(s.PollInterval)
+	defer tick.Stop()
+	statusTick := time.NewTicker(5 * time.Second)
+	defer statusTick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-tick.C:
+			if err := s.Reconcile(); err != nil {
+				s.logf("configuration problem: %v", err)
+			}
+		case <-statusTick.C:
+			s.writeRuntime()
+		}
+	}
+}
+
+func (s *Supervisor) shutdown() {
+	s.mu.Lock()
+	run := s.running
+	s.running = map[string]*runningGame{}
+	s.mu.Unlock()
+	for id, r := range run {
+		s.logf("stopping %s", id)
+		r.srv.Close()
+	}
+	_ = os.Remove(filepath.Join(s.Store.Dir, config.RuntimeFileName))
+}
+
+// Reconcile brings the running servers in line with the configuration.
+func (s *Supervisor) Reconcile() error {
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.failClosed(err)
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running == nil {
+		s.running = map[string]*runningGame{}
+		s.states = map[string]GameState{}
+		s.retryAt = map[string]time.Time{}
+	}
+	before := cloneStates(s.states)
+	seen := map[string]bool{}
+	for _, g := range cfg.Games {
+		seen[g.ID] = true
+		s.reconcileGame(g)
+	}
+	for id := range s.states {
+		if !seen[id] {
+			s.logf("game %q was removed from the configuration; stopping it", id)
+			s.stopLocked(id, "")
+			delete(s.states, id)
+		}
+	}
+	if !sameRuntimeStates(before, s.states) {
+		s.writeRuntimeLocked()
+	}
+	return nil
+}
+
+// loadConfig still reads the file every poll so a config update is observed
+// within PollInterval, but avoids decoding unchanged JSON on every poll.
+func (s *Supervisor) loadConfig() (config.AgentConfig, error) {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	data, err := os.ReadFile(filepath.Join(s.Store.Dir, config.AgentFileName))
+	if err != nil {
+		return config.AgentConfig{}, err
+	}
+	if s.configLoaded && bytes.Equal(data, s.configData) {
+		return s.configValue, nil
+	}
+	cfg, err := s.Store.Decode(data)
+	if err != nil {
+		return config.AgentConfig{}, err
+	}
+	s.configData = append(s.configData[:0], data...)
+	s.configValue = cfg
+	s.configLoaded = true
+	return cfg, nil
+}
+
+func (s *Supervisor) failClosed(cause error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	before := cloneStates(s.states)
+	for id, r := range s.running {
+		r.srv.Close()
+		delete(s.running, id)
+	}
+	for id, st := range s.states {
+		st.State = "error"
+		st.Detail = "configuration is invalid: " + cause.Error()
+		s.states[id] = st
+	}
+	if !sameRuntimeStates(before, s.states) {
+		s.writeRuntimeLocked()
+	}
+}
+
+func cloneStates(states map[string]GameState) map[string]GameState {
+	copy := make(map[string]GameState, len(states))
+	for id, st := range states {
+		copy[id] = st
+	}
+	return copy
+}
+
+// Runtime status is a heartbeat plus state changes. Live counters are copied
+// into snapshots and the five-second heartbeat without forcing disk writes on
+// every config poll.
+func sameRuntimeStates(a, b map[string]GameState) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id, x := range a {
+		y, ok := b[id]
+		if !ok || x.ID != y.ID || x.Name != y.Name || x.Protocol != y.Protocol ||
+			x.TunnelPort != y.TunnelPort || x.Dest != y.Dest || x.Approved != y.Approved ||
+			x.State != y.State || x.Detail != y.Detail {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Supervisor) reconcileGame(g config.Game) {
+	st := GameState{ID: g.ID, Name: g.Name, Protocol: g.Protocol, TunnelPort: g.TunnelPort, Dest: g.Dest, Approved: len(g.Devices)}
+	approved, err := g.ApprovedKeys()
+	if err != nil {
+		s.stopLocked(g.ID, "its approved-device list is invalid")
+		st.State, st.Detail = "error", err.Error()
+		s.states[g.ID] = st
+		return
+	}
+	if len(approved) == 0 {
+		// Zero approved devices: the game must stay completely unreachable.
+		if s.running[g.ID] != nil {
+			s.logf("game %q has no approved devices left; stopping it", g.ID)
+			s.stopLocked(g.ID, "")
+		}
+		st.State, st.Detail = "inactive", "no approved devices; the game is not reachable"
+		s.states[g.ID] = st
+		return
+	}
+	fp := fingerprint(s.Store, g)
+	if r := s.running[g.ID]; r != nil {
+		if r.fingerprint == fp {
+			st.State = "serving"
+			st.Stats = r.srv.Stats()
+			s.states[g.ID] = st
+			return
+		}
+		// Tailcat cannot remove a client from a running server, so any change
+		// to the approved set restarts the game's server. Closing the old one
+		// first is what terminates sessions of a revoked device.
+		s.logf("game %q: approved devices or settings changed; restarting its Tailcat server and ending existing sessions", g.ID)
+		s.stopLocked(g.ID, "")
+	}
+	if t, ok := s.retryAt[g.ID]; ok && time.Now().Before(t) {
+		st.State, st.Detail = "error", s.states[g.ID].Detail
+		s.states[g.ID] = st
+		return
+	}
+	srv, err := s.start(g, approved)
+	if err != nil {
+		s.logf("game %q failed to start: %v", g.ID, err)
+		s.retryAt[g.ID] = time.Now().Add(10 * time.Second)
+		st.State, st.Detail = "error", err.Error()
+		s.states[g.ID] = st
+		return
+	}
+	delete(s.retryAt, g.ID)
+	s.running[g.ID] = &runningGame{srv: srv, fingerprint: fp}
+	s.logf("serving %q (%s %d -> %s) for %d approved device(s)", g.ID, g.Protocol, g.TunnelPort, g.Dest, len(approved))
+	st.State = "serving"
+	st.Stats = srv.Stats()
+	s.states[g.ID] = st
+}
+
+func (s *Supervisor) start(g config.Game, approved []key.NodePublic) (*GameServer, error) {
+	keys, err := s.Store.LoadKeys(g.ID)
+	if err != nil {
+		return nil, err
+	}
+	dest, err := security.ParseDestination(g.Dest)
+	if err != nil {
+		return nil, err
+	}
+	id := g.ID
+	var bridge *consolebridge.Host
+	if g.ConsoleBridge != nil {
+		if g.Type != games.MinecraftBedrock {
+			return nil, fmt.Errorf("console bridge requires Minecraft Bedrock")
+		}
+		if err := g.ConsoleBridge.Validate(); err != nil {
+			return nil, err
+		}
+		bridge, err = consolebridge.NewHost(consolebridge.HostConfig{ServerIP: netip.MustParseAddr(g.ConsoleBridge.ServerIP), BindIP: netip.MustParseAddr(g.ConsoleBridge.BindIP), DiscoveryPort: g.ConsoleBridge.DiscoveryPort, MediaPortFirst: g.ConsoleBridge.MediaPortFirst, MediaPortLast: g.ConsoleBridge.MediaPortLast})
+		if err != nil {
+			return nil, err
+		}
+	}
+	opts := ServerOptions{
+		ID: id, Protocol: g.Protocol, TunnelPort: g.TunnelPort, Dest: dest,
+		Private: keys.Private, PSK: keys.PSK, Region: keys.Region, Approved: approved,
+		Logf:           s.TailcatLogf,
+		Event:          func(kind, msg string) { s.logf("[%s] %s: %s", id, kind, msg) },
+		MaxSessions:    s.MaxSessions,
+		UDPIdleTimeout: s.UDPIdleTimeout,
+	}
+	if bridge != nil {
+		opts.ConsoleBridge = bridge
+	}
+	server, err := StartGameServer(opts)
+	if err != nil && bridge != nil {
+		bridge.Close()
+	}
+	return server, err
+}
+
+func (s *Supervisor) stopLocked(id, _ string) {
+	if r := s.running[id]; r != nil {
+		r.srv.Close()
+		delete(s.running, id)
+	}
+}
+
+// Snapshot returns the current state of every game.
+func (s *Supervisor) Snapshot() []GameState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.snapshotLocked()
+}
+
+func (s *Supervisor) snapshotLocked() []GameState {
+	out := make([]GameState, 0, len(s.states))
+	for id, st := range s.states {
+		if r := s.running[id]; r != nil {
+			st.Stats = r.srv.Stats()
+		}
+		out = append(out, st)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// Addr returns the live Tailcat address of a running game (tests only).
+func (s *Supervisor) Addr(id string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r := s.running[id]; r != nil {
+		return string(r.srv.Addr()), true
+	}
+	return "", false
+}
+
+func (s *Supervisor) writeRuntime() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writeRuntimeLocked()
+}
+
+func (s *Supervisor) writeRuntimeLocked() {
+	rs := RuntimeStatus{PID: os.Getpid(), Started: s.started, Updated: time.Now().UTC(), Games: s.snapshotLocked()}
+	data, err := json.MarshalIndent(rs, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = security.WriteFileAtomic(filepath.Join(s.Store.Dir, config.RuntimeFileName), data)
+}
+
+// ReadRuntime reads runtime.json. fresh reports whether it was updated
+// recently enough to mean the agent is currently running.
+func ReadRuntime(dir string) (rs RuntimeStatus, fresh bool, err error) {
+	data, err := os.ReadFile(filepath.Join(dir, config.RuntimeFileName))
+	if err != nil {
+		return rs, false, err
+	}
+	if err := json.Unmarshal(data, &rs); err != nil {
+		return rs, false, err
+	}
+	return rs, time.Since(rs.Updated) < 20*time.Second, nil
+}
+
+func fingerprint(store *config.AgentStore, g config.Game) string {
+	keys := make([]string, 0, len(g.Devices))
+	for _, d := range g.Devices {
+		keys = append(keys, d.PublicKey)
+	}
+	sort.Strings(keys)
+	var mt int64
+	if fi, err := os.Stat(filepath.Join(store.Dir, config.KeysDirName, g.ID+".json")); err == nil {
+		mt = fi.ModTime().UnixNano()
+	}
+	bridge, _ := json.Marshal(g.ConsoleBridge)
+	h := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%s|%d|%s|%s", g.Protocol, g.TunnelPort, g.Dest, mt, strings.Join(keys, ","), bridge)))
+	return hex.EncodeToString(h[:])
+}

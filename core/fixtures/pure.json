@@ -1,0 +1,2427 @@
+[
+  {
+    "method": "security.port",
+    "input": {
+      "optional": false,
+      "port": -1
+    },
+    "value": null,
+    "error": "port -1 is out of range (1-65535)"
+  },
+  {
+    "method": "security.port",
+    "input": {
+      "optional": true,
+      "port": -1
+    },
+    "value": null,
+    "error": "port -1 is out of range (1-65535)"
+  },
+  {
+    "method": "security.port",
+    "input": {
+      "optional": false,
+      "port": 0
+    },
+    "value": null,
+    "error": "port 0 is out of range (1-65535)"
+  },
+  {
+    "method": "security.port",
+    "input": {
+      "optional": true,
+      "port": 0
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.port",
+    "input": {
+      "optional": false,
+      "port": 1
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.port",
+    "input": {
+      "optional": true,
+      "port": 1
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.port",
+    "input": {
+      "optional": false,
+      "port": 80
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.port",
+    "input": {
+      "optional": true,
+      "port": 80
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.port",
+    "input": {
+      "optional": false,
+      "port": 65535
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.port",
+    "input": {
+      "optional": true,
+      "port": 65535
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.port",
+    "input": {
+      "optional": false,
+      "port": 65536
+    },
+    "value": null,
+    "error": "port 65536 is out of range (1-65535)"
+  },
+  {
+    "method": "security.port",
+    "input": {
+      "optional": true,
+      "port": 65536
+    },
+    "value": null,
+    "error": "port 65536 is out of range (1-65535)"
+  },
+  {
+    "method": "security.port",
+    "input": {
+      "optional": false,
+      "port": 100000
+    },
+    "value": null,
+    "error": "port 100000 is out of range (1-65535)"
+  },
+  {
+    "method": "security.port",
+    "input": {
+      "optional": true,
+      "port": 100000
+    },
+    "value": null,
+    "error": "port 100000 is out of range (1-65535)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": ""
+    },
+    "value": null,
+    "error": "\"\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "a"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "a-b"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "A"
+    },
+    "value": null,
+    "error": "\"A\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "-a"
+    },
+    "value": null,
+    "error": "\"-a\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "a-"
+    },
+    "value": null,
+    "error": "\"a-\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "a_b"
+    },
+    "value": null,
+    "error": "\"a_b\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "a.b"
+    },
+    "value": null,
+    "error": "\"a.b\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "../x"
+    },
+    "value": null,
+    "error": "\"../x\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "a/b"
+    },
+    "value": null,
+    "error": "\"a/b\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "value": null,
+    "error": "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "a\n"
+    },
+    "value": null,
+    "error": "\"a\\n\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "\u0000"
+    },
+    "value": null,
+    "error": "\"\\x00\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": ""
+    },
+    "value": null,
+    "error": "\"\\u0085\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "­"
+    },
+    "value": null,
+    "error": "\"\\u00ad\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "\u2028"
+    },
+    "value": null,
+    "error": "\"\\u2028\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.slug",
+    "input": {
+      "text": "😀"
+    },
+    "value": null,
+    "error": "\"😀\" is not a valid identifier (use 1-32 lowercase letters, digits or dashes)"
+  },
+  {
+    "method": "security.hostname",
+    "input": {
+      "text": "derp.example.com"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.hostname",
+    "input": {
+      "text": ""
+    },
+    "value": null,
+    "error": "\"\" is not a valid host name"
+  },
+  {
+    "method": "security.hostname",
+    "input": {
+      "text": "a b"
+    },
+    "value": null,
+    "error": "\"a b\" is not a valid host name"
+  },
+  {
+    "method": "security.hostname",
+    "input": {
+      "text": "-bad.com"
+    },
+    "value": null,
+    "error": "\"-bad.com\" is not a valid host name"
+  },
+  {
+    "method": "security.hostname",
+    "input": {
+      "text": "a."
+    },
+    "value": null,
+    "error": "\"a.\" is not a valid host name"
+  },
+  {
+    "method": "security.hostname",
+    "input": {
+      "text": "127.0.0.1"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.hostname",
+    "input": {
+      "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.hostname",
+    "input": {
+      "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "value": null,
+    "error": "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is not a valid host name"
+  },
+  {
+    "method": "security.hostname",
+    "input": {
+      "text": "x\n"
+    },
+    "value": null,
+    "error": "\"x\\n\" is not a valid host name"
+  },
+  {
+    "method": "security.hostname",
+    "input": {
+      "text": "é"
+    },
+    "value": null,
+    "error": "\"é\" is not a valid host name"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": ""
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": ""
+    },
+    "value": null,
+    "error": "name must not be empty"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": "  "
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": "  "
+    },
+    "value": null,
+    "error": "name must not be empty"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": "ok name"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": "ok name"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": "tab\there"
+    },
+    "value": null,
+    "error": "name contains control characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": "tab\there"
+    },
+    "value": null,
+    "error": "name contains control characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": "x‮y"
+    },
+    "value": null,
+    "error": "name contains control characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": "x‮y"
+    },
+    "value": null,
+    "error": "name contains control characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": "ééééééééééé"
+    },
+    "value": null,
+    "error": "name is too long (11 characters, max 10)"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": "ééééééééééé"
+    },
+    "value": null,
+    "error": "name is too long (11 characters, max 10)"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": " hi"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": " hi"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": "a b"
+    },
+    "value": null,
+    "error": "name contains unprintable characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": "a b"
+    },
+    "value": null,
+    "error": "name contains unprintable characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": "a​b"
+    },
+    "value": null,
+    "error": "name contains unprintable characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": "a​b"
+    },
+    "value": null,
+    "error": "name contains unprintable characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": "😀"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": "😀"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": "a⁩b"
+    },
+    "value": null,
+    "error": "name contains control characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": "a⁩b"
+    },
+    "value": null,
+    "error": "name contains control characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": "﻿"
+    },
+    "value": null,
+    "error": "name contains unprintable characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": "﻿"
+    },
+    "value": null,
+    "error": "name contains unprintable characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": "͏"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": "͏"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": ""
+    },
+    "value": null,
+    "error": "name contains unprintable characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": ""
+    },
+    "value": null,
+    "error": "name contains unprintable characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": false,
+      "text": "͸"
+    },
+    "value": null,
+    "error": "name contains unprintable characters"
+  },
+  {
+    "method": "security.display",
+    "input": {
+      "field": "name",
+      "maxRunes": 10,
+      "required": true,
+      "text": "͸"
+    },
+    "value": null,
+    "error": "name contains unprintable characters"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": ""
+    },
+    "value": null,
+    "error": "destination \"\" must look like host:port (for example 127.0.0.1:25565)"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "127.0.0.1"
+    },
+    "value": null,
+    "error": "destination \"127.0.0.1\" must look like host:port (for example 127.0.0.1:25565)"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "127.0.0.1:0"
+    },
+    "value": null,
+    "error": "port 0 is out of range (1-65535)"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "127.0.0.1:99999"
+    },
+    "value": null,
+    "error": "port 99999 is out of range (1-65535)"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "example.com:80"
+    },
+    "value": null,
+    "error": "destination host \"example.com\" must be an IP address (or localhost)"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "0.0.0.0:80"
+    },
+    "value": null,
+    "error": "destination must be a specific unicast address"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "[::]:80"
+    },
+    "value": null,
+    "error": "destination must be a specific unicast address"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "224.0.0.1:80"
+    },
+    "value": null,
+    "error": "destination must be a specific unicast address"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "127.0.0.1:abc"
+    },
+    "value": null,
+    "error": "destination port \"abc\" is not a number"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "127.0.0.1:80x"
+    },
+    "value": null,
+    "error": "destination port \"80x\" is not a number"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": " localhost:+80 "
+    },
+    "value": "127.0.0.1:80",
+    "error": ""
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "[::ffff:127.0.0.1]:80"
+    },
+    "value": "127.0.0.1:80",
+    "error": ""
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "[fe80::1%eth0]:80"
+    },
+    "value": "[fe80::1%eth0]:80",
+    "error": ""
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "[127.0.0.1]:80"
+    },
+    "value": "127.0.0.1:80",
+    "error": ""
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "127.0.0.1:00080"
+    },
+    "value": "127.0.0.1:80",
+    "error": ""
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": ":80"
+    },
+    "value": null,
+    "error": "destination host \"\" must be an IP address (or localhost)"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "[::1]x:80"
+    },
+    "value": null,
+    "error": "destination \"[::1]x:80\" must look like host:port (for example 127.0.0.1:25565)"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "[::1]:80:90"
+    },
+    "value": null,
+    "error": "destination \"[::1]:80:90\" must look like host:port (for example 127.0.0.1:25565)"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "127.0.0.1:+9223372036854775808"
+    },
+    "value": null,
+    "error": "destination port \"+9223372036854775808\" is not a number"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "[::1%]:80"
+    },
+    "value": null,
+    "error": "destination host \"::1%\" must be an IP address (or localhost)"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "127.0.0.1:+"
+    },
+    "value": null,
+    "error": "destination port \"+\" is not a number"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "[::1]:-80"
+    },
+    "value": null,
+    "error": "port -80 is out of range (1-65535)"
+  },
+  {
+    "method": "security.destination",
+    "input": {
+      "text": "[fe80::1%zone space]:80"
+    },
+    "value": "[fe80::1%zone space]:80",
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": ""
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "8.8.8.8"
+    },
+    "value": true,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "203.0.113.5"
+    },
+    "value": true,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "2606:4700::1"
+    },
+    "value": true,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "127.0.0.1"
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "10.1.2.3"
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "192.168.0.1"
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "172.16.5.5"
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "169.254.169.254"
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "100.64.0.1"
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "0.0.0.0"
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "::1"
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "fe80::1"
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "fd00::1"
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "224.0.0.1"
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "ff02::1"
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "::ffff:10.0.0.1"
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "255.255.255.255"
+    },
+    "value": true,
+    "error": ""
+  },
+  {
+    "method": "security.public_ip",
+    "input": {
+      "text": "0.1.2.3"
+    },
+    "value": true,
+    "error": ""
+  },
+  {
+    "method": "identity.public_key",
+    "input": {
+      "text": ""
+    },
+    "value": null,
+    "error": "public key must start with \"nodekey:\""
+  },
+  {
+    "method": "identity.public_key",
+    "input": {
+      "text": "nodekey:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "value": null,
+    "error": "public key must not be all zeros"
+  },
+  {
+    "method": "identity.public_key",
+    "input": {
+      "text": "nodekey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "value": "nodekey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "error": ""
+  },
+  {
+    "method": "identity.public_key",
+    "input": {
+      "text": " \nnodekey:1111111111111111111111111111111111111111111111111111111111111111 "
+    },
+    "value": "nodekey:1111111111111111111111111111111111111111111111111111111111111111",
+    "error": ""
+  },
+  {
+    "method": "identity.public_key",
+    "input": {
+      "text": "nodekey:abc"
+    },
+    "value": null,
+    "error": "public key must be 64 hex characters after \"nodekey:\" (got 3)"
+  },
+  {
+    "method": "identity.public_key",
+    "input": {
+      "text": "nodekey:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "value": null,
+    "error": "public key must be lowercase hexadecimal"
+  },
+  {
+    "method": "identity.public_key",
+    "input": {
+      "text": "nodekey:éééééééééééééééééééééééééééééééé"
+    },
+    "value": null,
+    "error": "public key must be lowercase hexadecimal"
+  },
+  {
+    "method": "identity.public_key",
+    "input": {
+      "text": "x"
+    },
+    "value": null,
+    "error": "public key must start with \"nodekey:\""
+  },
+  {
+    "method": "games.all",
+    "input": {},
+    "value": [
+      {
+        "type": "minecraft-java",
+        "name": "Minecraft: Java Edition",
+        "protocol": "tcp",
+        "defaultPort": 25565,
+        "verified": "protocol",
+        "hint": "In Minecraft choose Multiplayer, then Add Server, and enter the local address shown here as the server address.",
+        "launchArgs": "",
+        "launchUri": ""
+      },
+      {
+        "type": "minecraft-bedrock",
+        "name": "Minecraft: Bedrock Edition",
+        "protocol": "udp",
+        "defaultPort": 19132,
+        "verified": "protocol",
+        "hint": "In Minecraft Bedrock choose Play, Servers, Add Server and enter 127.0.0.1 with the port shown here. The Windows Store edition blocks connections to the same PC by default; a one-time loopback exemption may be required (see the docs). Bedrock on consoles and phones is not supported.",
+        "launchArgs": "",
+        "launchUri": "minecraft://connect?serverUrl={host}\u0026serverPort={port}"
+      },
+      {
+        "type": "factorio",
+        "name": "Factorio",
+        "protocol": "udp",
+        "defaultPort": 34197,
+        "verified": "protocol",
+        "hint": "In Factorio choose Multiplayer, Connect to address, and enter the local address shown here.",
+        "launchArgs": "--mp-connect {address}",
+        "launchUri": ""
+      },
+      {
+        "type": "custom",
+        "name": "Other game",
+        "protocol": "",
+        "defaultPort": 0,
+        "verified": "protocol",
+        "hint": "Point your game at the local address shown here.",
+        "launchArgs": "",
+        "launchUri": ""
+      }
+    ],
+    "error": ""
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "minecraft-java",
+      "proto": "tcp"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "minecraft-java",
+      "proto": "udp"
+    },
+    "value": null,
+    "error": "Minecraft: Java Edition uses tcp, not udp"
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "minecraft-java",
+      "proto": "icmp"
+    },
+    "value": null,
+    "error": "unknown protocol \"icmp\" (use tcp or udp)"
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "minecraft-bedrock",
+      "proto": "tcp"
+    },
+    "value": null,
+    "error": "Minecraft: Bedrock Edition uses udp, not tcp"
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "minecraft-bedrock",
+      "proto": "udp"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "minecraft-bedrock",
+      "proto": "icmp"
+    },
+    "value": null,
+    "error": "unknown protocol \"icmp\" (use tcp or udp)"
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "factorio",
+      "proto": "tcp"
+    },
+    "value": null,
+    "error": "Factorio uses udp, not tcp"
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "factorio",
+      "proto": "udp"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "factorio",
+      "proto": "icmp"
+    },
+    "value": null,
+    "error": "unknown protocol \"icmp\" (use tcp or udp)"
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "custom",
+      "proto": "tcp"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "custom",
+      "proto": "udp"
+    },
+    "value": null,
+    "error": ""
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "custom",
+      "proto": "icmp"
+    },
+    "value": null,
+    "error": "unknown protocol \"icmp\" (use tcp or udp)"
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "bad",
+      "proto": "tcp"
+    },
+    "value": null,
+    "error": "unknown game type \"bad\""
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "bad",
+      "proto": "udp"
+    },
+    "value": null,
+    "error": "unknown game type \"bad\""
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "bad",
+      "proto": "icmp"
+    },
+    "value": null,
+    "error": "unknown game type \"bad\""
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "x\n",
+      "proto": "tcp"
+    },
+    "value": null,
+    "error": "unknown game type \"x\\n\""
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "x\n",
+      "proto": "udp"
+    },
+    "value": null,
+    "error": "unknown game type \"x\\n\""
+  },
+  {
+    "method": "games.check",
+    "input": {
+      "game": "x\n",
+      "proto": "icmp"
+    },
+    "value": null,
+    "error": "unknown game type \"x\\n\""
+  },
+  {
+    "method": "games.expand",
+    "input": {
+      "port": 19132,
+      "text": ""
+    },
+    "value": "",
+    "error": ""
+  },
+  {
+    "method": "games.placeholder",
+    "input": {
+      "text": ""
+    },
+    "value": false,
+    "error": ""
+  },
+  {
+    "method": "games.expand",
+    "input": {
+      "port": 19132,
+      "text": "--mp-connect {address}"
+    },
+    "value": "--mp-connect 127.0.0.1:19132",
+    "error": ""
+  },
+  {
+    "method": "games.placeholder",
+    "input": {
+      "text": "--mp-connect {address}"
+    },
+    "value": true,
+    "error": ""
+  },
+  {
+    "method": "games.expand",
+    "input": {
+      "port": 19132,
+      "text": "{host}:{port}"
+    },
+    "value": "127.0.0.1:19132",
+    "error": ""
+  },
+  {
+    "method": "games.placeholder",
+    "input": {
+      "text": "{host}:{port}"
+    },
+    "value": true,
+    "error": ""
+  },
+  {
+    "method": "games.expand",
+    "input": {
+      "port": 19132,
+      "text": "{address}{host}{port}"
+    },
+    "value": "127.0.0.1:19132127.0.0.119132",
+    "error": ""
+  },
+  {
+    "method": "games.placeholder",
+    "input": {
+      "text": "{address}{host}{port}"
+    },
+    "value": true,
+    "error": ""
+  },
+  {
+    "method": "games.expand",
+    "input": {
+      "port": 19132,
+      "text": "{{host}}"
+    },
+    "value": "{127.0.0.1}",
+    "error": ""
+  },
+  {
+    "method": "games.placeholder",
+    "input": {
+      "text": "{{host}}"
+    },
+    "value": true,
+    "error": ""
+  },
+  {
+    "method": "security.redact",
+    "input": {
+      "secrets": [
+        "short",
+        "SYNTHETIC_SECRET"
+      ],
+      "text": "normal tcp message"
+    },
+    "value": "normal tcp message",
+    "error": ""
+  },
+  {
+    "method": "security.redact",
+    "input": {
+      "secrets": [
+        "short",
+        "SYNTHETIC_SECRET"
+      ],
+      "text": "secret SYNTHETIC_SECRET ok"
+    },
+    "value": "secret [redacted] ok",
+    "error": ""
+  },
+  {
+    "method": "security.redact",
+    "input": {
+      "secrets": [
+        "short",
+        "SYNTHETIC_SECRET"
+      ],
+      "text": "privkey:0123456789abcdef"
+    },
+    "value": "[redacted]",
+    "error": ""
+  },
+  {
+    "method": "security.redact",
+    "input": {
+      "secrets": [
+        "short",
+        "SYNTHETIC_SECRET"
+      ],
+      "text": "tcaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "value": "[redacted]",
+    "error": ""
+  },
+  {
+    "method": "security.redact",
+    "input": {
+      "secrets": [
+        "short",
+        "SYNTHETIC_SECRET"
+      ],
+      "text": "étcaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "value": "é[redacted]",
+    "error": ""
+  },
+  {
+    "method": "security.redact",
+    "input": {
+      "secrets": [
+        "short",
+        "SYNTHETIC_SECRET"
+      ],
+      "text": "xtcaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "value": "xtcaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "error": ""
+  },
+  {
+    "method": "security.redact",
+    "input": {
+      "secrets": [
+        "short",
+        "SYNTHETIC_SECRET"
+      ],
+      "text": "tcaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "value": "tcaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "error": ""
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": ""
+    },
+    "value": null,
+    "error": "paste an invitation first"
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": " \n"
+    },
+    "value": null,
+    "error": "paste an invitation first"
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "bad"
+    },
+    "value": null,
+    "error": "this does not look like a GameLink invitation (it should start with \"glink1.\")"
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.!!!"
+    },
+    "value": null,
+    "error": "invitation is damaged (could not decode it); ask for a fresh copy"
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.eyJ2IjoxLCJleHRyYSI6MX0"
+    },
+    "value": null,
+    "error": "invitation is damaged or from an incompatible version"
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.eyJ2IjoxfXt9"
+    },
+    "value": null,
+    "error": "invitation has unexpected trailing data"
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.eyJ2IjoxLCJuYW1lIjoiU3ludGhldGljIGZpeHR1cmUiLCJnYW1lIjoibWluZWNyYWZ0LWphdmEiLCJwcm90byI6InRjcCIsInBvcnQiOjI1NTY1LCJhZGRyIjoidGNwR0Z3V0NET3pmODN3LV9DR3FWUm5ZNi03U013R1NWS2s3ZkV5QVRDd2pvUXlKdThRbUZyV0NBM28wTnpJLUwtT2ZoQXE1ZFc4VlJfNmd3VE1iSGRaaF8yc1Fod1F2THBJR0Z4V0NEcHNwTHVFdXdwa2Z0NWZ3VXVNMEE4dTZocVVhVFI1MDc5SmZDTnEwZkt6V0Z5Z2FGaFRvR2hZV2h3WkdWeWNDNWxlR0Z0Y0d4bExtTnZiUSJ9"
+    },
+    "value": {
+      "v": 1,
+      "name": "Synthetic fixture",
+      "game": "minecraft-java",
+      "proto": "tcp",
+      "port": 25565,
+      "addr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhwZGVycC5leGFtcGxlLmNvbQ"
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.eyJ2IjoxLCJuYW1lIjoiU3ludGhldGljIGZpeHR1cmUiLCJnYW1lIjoibWluZWNyYWZ0LWphdmEiLCJwcm90byI6InRjcCIsInBvcnQiOjI1NTY1LCJhZGRyIjoidGNwR0Z3V0NET3pmODN3LV9DR3FWUm5ZNi03U013R1NWS2s3ZkV5QVRDd2pvUXlKdThRbUZyV0NBM28wTnpJLUwtT2ZoQXE1ZFc4VlJfNmd3VE1iSGRaaF8yc1Fod1F2THBJR0Z4V0NEcHNwTHVFdXdwa2Z0NWZ3VXVNMEE4dTZocVVhVFI1MDc5SmZDTnEwZkt6V0Z5Z2FGaFRvR2hZV2h3WkdWeWNDNWxlR0Z0Y0d4bExtTnZiUSJ9==="
+    },
+    "value": {
+      "v": 1,
+      "name": "Synthetic fixture",
+      "game": "minecraft-java",
+      "proto": "tcp",
+      "port": 25565,
+      "addr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhwZGVycC5leGFtcGxlLmNvbQ"
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.eyJ2IjoxLCJuYW1lIjoiU3l\n udGhldGljIGZpeHR1cmUiLCJnYW1lIjoibWluZWNyYWZ0LWphdmEiLCJwcm90byI6InRjcCIsInBvcnQiOjI1NTY1LCJhZGRyIjoidGNwR0Z3V0NET3pmODN3LV9DR3FWUm5ZNi03U013R1NWS2s3ZkV5QVRDd2pvUXlKdThRbUZyV0NBM28wTnpJLUwtT2ZoQXE1ZFc4VlJfNmd3VE1iSGRaaF8yc1Fod1F2THBJR0Z4V0NEcHNwTHVFdXdwa2Z0NWZ3VXVNMEE4dTZocVVhVFI1MDc5SmZDTnEwZkt6V0Z5Z2FGaFRvR2hZV2h3WkdWeWNDNWxlR0Z0Y0d4bExtTnZiUSJ9"
+    },
+    "value": {
+      "v": 1,
+      "name": "Synthetic fixture",
+      "game": "minecraft-java",
+      "proto": "tcp",
+      "port": 25565,
+      "addr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhwZGVycC5leGFtcGxlLmNvbQ"
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": false,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhwZGVycC5leGFtcGxlLmNvbQ",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": {
+      "relayHosts": [
+        "derp.example.com"
+      ],
+      "relayRegion": "",
+      "serverKey": "nodekey:cecdff37",
+      "defaultRelay": false
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": true,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhwZGVycC5leGFtcGxlLmNvbQ",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": {
+      "relayHosts": [
+        "derp.example.com"
+      ],
+      "relayRegion": "",
+      "serverKey": "nodekey:cecdff37",
+      "defaultRelay": false
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": false,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWE0aTEyNy4wLjAuMQ",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "IPv4": "127.0.0.1"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": null,
+    "error": "the address points the relay at a private or invalid IP and was rejected"
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": true,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWE0aTEyNy4wLjAuMQ",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "IPv4": "127.0.0.1"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": {
+      "relayHosts": [
+        "derp.example.com"
+      ],
+      "relayRegion": "",
+      "serverKey": "nodekey:cecdff37",
+      "defaultRelay": false
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": false,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWE0ajEwMC42NC4wLjE",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "IPv4": "100.64.0.1"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": null,
+    "error": "the address points the relay at a private or invalid IP and was rejected"
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": true,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWE0ajEwMC42NC4wLjE",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "IPv4": "100.64.0.1"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": {
+      "relayHosts": [
+        "derp.example.com"
+      ],
+      "relayRegion": "",
+      "serverKey": "nodekey:cecdff37",
+      "defaultRelay": false
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": false,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWE2Z2ZkMDA6OjE",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "IPv6": "fd00::1"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": null,
+    "error": "the address points the relay at a private or invalid IP and was rejected"
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": true,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWE2Z2ZkMDA6OjE",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "IPv6": "fd00::1"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": {
+      "relayHosts": [
+        "derp.example.com"
+      ],
+      "relayRegion": "",
+      "serverKey": "nodekey:cecdff37",
+      "defaultRelay": false
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": false,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWF49Q",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "InsecureForTests": true
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": null,
+    "error": "the address asks for an insecure relay connection and was rejected"
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": true,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWF49Q",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "InsecureForTests": true
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": {
+      "relayHosts": [
+        "derp.example.com"
+      ],
+      "relayRegion": "",
+      "serverKey": "nodekey:cecdff37",
+      "defaultRelay": false
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": false,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWFkFg",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "DERPPort": 22
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": null,
+    "error": "the address uses a non-standard relay port and was rejected"
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": true,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWFkFg",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "DERPPort": 22
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": {
+      "relayHosts": [
+        "derp.example.com"
+      ],
+      "relayRegion": "",
+      "serverKey": "nodekey:cecdff37",
+      "defaultRelay": false
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": false,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhoMTAuMC4wLjE",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "10.0.0.1",
+              "RegionID": 1,
+              "HostName": "10.0.0.1"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": null,
+    "error": "the address names a private relay IP and was rejected"
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": true,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhoMTAuMC4wLjE",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "10.0.0.1",
+              "RegionID": 1,
+              "HostName": "10.0.0.1"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": {
+      "relayHosts": [
+        "10.0.0.1"
+      ],
+      "relayRegion": "",
+      "serverKey": "nodekey:cecdff37",
+      "defaultRelay": false
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": false,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhpZXZpbCBob3N0",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "evil host",
+              "RegionID": 1,
+              "HostName": "evil host"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": null,
+    "error": "relay host: \"evil host\" is not a valid host name"
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": true,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhpZXZpbCBob3N0",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "evil host",
+              "RegionID": 1,
+              "HostName": "evil host"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": null,
+    "error": "relay host: \"evil host\" is not a valid host name"
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": false,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWF0aGJhZCBjZXJ0",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "CertName": "bad cert"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": null,
+    "error": "relay certificate name: \"bad cert\" is not a valid host name"
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": true,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWF0aGJhZCBjZXJ0",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "CertName": "bad cert"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": null,
+    "error": "relay certificate name: \"bad cert\" is not a valid host name"
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": false,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWF0c3NoYTI1Ni1yYXc6YW55dGhpbmc",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "CertName": "sha256-raw:anything"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": {
+      "relayHosts": [
+        "derp.example.com"
+      ],
+      "relayRegion": "",
+      "serverKey": "nodekey:cecdff37",
+      "defaultRelay": false
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": true,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWF0c3NoYTI1Ni1yYXc6YW55dGhpbmc",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "CertName": "sha256-raw:anything"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": {
+      "relayHosts": [
+        "derp.example.com"
+      ],
+      "relayRegion": "",
+      "serverKey": "nodekey:cecdff37",
+      "defaultRelay": false
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": false,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhxcmVsYXkudGFpbGNhdC5kZXY",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "relay.tailcat.dev",
+              "RegionID": 1,
+              "HostName": "relay.tailcat.dev"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": {
+      "relayHosts": [
+        "relay.tailcat.dev"
+      ],
+      "relayRegion": "",
+      "serverKey": "nodekey:cecdff37",
+      "defaultRelay": true
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": true,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhxcmVsYXkudGFpbGNhdC5kZXY",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "relay.tailcat.dev",
+              "RegionID": 1,
+              "HostName": "relay.tailcat.dev"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": {
+      "relayHosts": [
+        "relay.tailcat.dev"
+      ],
+      "relayRegion": "",
+      "serverKey": "nodekey:cecdff37",
+      "defaultRelay": true
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": false,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWE0azIwMy4wLjExMy43",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "IPv4": "203.0.113.7"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": {
+      "relayHosts": [
+        "derp.example.com"
+      ],
+      "relayRegion": "",
+      "serverKey": "nodekey:cecdff37",
+      "defaultRelay": false
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.relay",
+    "input": {
+      "allowLocalRelay": true,
+      "fixtureAddr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGiYWhwZGVycC5leGFtcGxlLmNvbWE0azIwMy4wLjExMy43",
+      "presharedKeyPresent": true,
+      "regions": [
+        {
+          "RegionID": 1,
+          "RegionCode": "1",
+          "RegionName": "",
+          "Nodes": [
+            {
+              "Name": "derp.example.com",
+              "RegionID": 1,
+              "HostName": "derp.example.com",
+              "IPv4": "203.0.113.7"
+            }
+          ]
+        }
+      ],
+      "serverKey": "nodekey:cecdff37c3efc21aa5519d8ebeed233019254a93b7c4c804c2c23a10c89bbc42",
+      "serverKeyPresent": true
+    },
+    "value": {
+      "relayHosts": [
+        "derp.example.com"
+      ],
+      "relayRegion": "",
+      "serverKey": "nodekey:cecdff37",
+      "defaultRelay": false
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.bnVsbA"
+    },
+    "value": null,
+    "error": "invitation version 0 is not supported by this GameLink"
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.W10"
+    },
+    "value": null,
+    "error": "invitation is damaged or from an incompatible version"
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.eyJWIjoyLCJ2IjoxfQ"
+    },
+    "value": null,
+    "error": "name must not be empty"
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.eyJ2IjoxLCJWIjoyLCJuYW1lIjoiU3ludGhldGljIGZpeHR1cmUiLCJnYW1lIjoibWluZWNyYWZ0LWphdmEiLCJwcm90byI6InRjcCIsInBvcnQiOjI1NTY1LCJhZGRyIjoidGNwR0Z3V0NET3pmODN3LV9DR3FWUm5ZNi03U013R1NWS2s3ZkV5QVRDd2pvUXlKdThRbUZyV0NBM28wTnpJLUwtT2ZoQXE1ZFc4VlJfNmd3VE1iSGRaaF8yc1Fod1F2THBJR0Z4V0NEcHNwTHVFdXdwa2Z0NWZ3VXVNMEE4dTZocVVhVFI1MDc5SmZDTnEwZkt6V0Z5Z2FGaFRvR2hZV2h3WkdWeWNDNWxlR0Z0Y0d4bExtTnZiUSJ9"
+    },
+    "value": null,
+    "error": "invitation version 2 is not supported by this GameLink"
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.eyJWIjoyLCJ2IjoxLCJuYW1lIjoiU3ludGhldGljIGZpeHR1cmUiLCJnYW1lIjoibWluZWNyYWZ0LWphdmEiLCJwcm90byI6InRjcCIsInBvcnQiOjI1NTY1LCJhZGRyIjoidGNwR0Z3V0NET3pmODN3LV9DR3FWUm5ZNi03U013R1NWS2s3ZkV5QVRDd2pvUXlKdThRbUZyV0NBM28wTnpJLUwtT2ZoQXE1ZFc4VlJfNmd3VE1iSGRaaF8yc1Fod1F2THBJR0Z4V0NEcHNwTHVFdXdwa2Z0NWZ3VXVNMEE4dTZocVVhVFI1MDc5SmZDTnEwZkt6V0Z5Z2FGaFRvR2hZV2h3WkdWeWNDNWxlR0Z0Y0d4bExtTnZiUSJ9"
+    },
+    "value": {
+      "v": 1,
+      "name": "Synthetic fixture",
+      "game": "minecraft-java",
+      "proto": "tcp",
+      "port": 25565,
+      "addr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhwZGVycC5leGFtcGxlLmNvbQ"
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.eyJ2IjoxLCJ2IjoyLCJuYW1lIjoiU3ludGhldGljIGZpeHR1cmUiLCJnYW1lIjoibWluZWNyYWZ0LWphdmEiLCJwcm90byI6InRjcCIsInBvcnQiOjI1NTY1LCJhZGRyIjoidGNwR0Z3V0NET3pmODN3LV9DR3FWUm5ZNi03U013R1NWS2s3ZkV5QVRDd2pvUXlKdThRbUZyV0NBM28wTnpJLUwtT2ZoQXE1ZFc4VlJfNmd3VE1iSGRaaF8yc1Fod1F2THBJR0Z4V0NEcHNwTHVFdXdwa2Z0NWZ3VXVNMEE4dTZocVVhVFI1MDc5SmZDTnEwZkt6V0Z5Z2FGaFRvR2hZV2h3WkdWeWNDNWxlR0Z0Y0d4bExtTnZiUSJ9"
+    },
+    "value": null,
+    "error": "invitation version 2 is not supported by this GameLink"
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.eyJ2IjoxLCJuYW1lIjoiU3ludGhldGljIGZpeHR1cmUiLCJnYW1lIjoibWluZWNyYWZ0LWphdmEiLCJwcm90byI6InRjcCIsInBvcnQiOjI1NTY1LCJhZGRyIjoidGNwR0Z3V0NET3pmODN3LV9DR3FWUm5ZNi03U013R1NWS2s3ZkV5QVRDd2pvUXlKdThRbUZyV0NBM28wTnpJLUwtT2ZoQXE1ZFc4VlJfNmd3VE1iSGRaaF8yc1Fod1F2THBJR0Z4V0NEcHNwTHVFdXdwa2Z0NWZ3VXVNMEE4dTZocVVhVFI1MDc5SmZDTnEwZkt6V0Z5Z2FGaFRvR2hZV2h3WkdWeWNDNWxlR0Z0Y0d4bExtTnZiUSJ9fQ"
+    },
+    "value": {
+      "v": 1,
+      "name": "Synthetic fixture",
+      "game": "minecraft-java",
+      "proto": "tcp",
+      "port": 25565,
+      "addr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhwZGVycC5leGFtcGxlLmNvbQ"
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.eyJ2IjoxLCJuYW1lIjoiU3ludGhldGljIGZpeHR1cmUiLCJnYW1lIjoibWluZWNyYWZ0LWphdmEiLCJwcm90byI6InRjcCIsInBvcnQiOjI1NTY1LCJhZGRyIjoidGNwR0Z3V0NET3pmODN3LV9DR3FWUm5ZNi03U013R1NWS2s3ZkV5QVRDd2pvUXlKdThRbUZyV0NBM28wTnpJLUwtT2ZoQXE1ZFc4VlJfNmd3VE1iSGRaaF8yc1Fod1F2THBJR0Z4V0NEcHNwTHVFdXdwa2Z0NWZ3VXVNMEE4dTZocVVhVFI1MDc5SmZDTnEwZkt6V0Z5Z2FGaFRvR2hZV2h3WkdWeWNDNWxlR0Z0Y0d4bExtTnZiUSJ9XQ"
+    },
+    "value": {
+      "v": 1,
+      "name": "Synthetic fixture",
+      "game": "minecraft-java",
+      "proto": "tcp",
+      "port": 25565,
+      "addr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhwZGVycC5leGFtcGxlLmNvbQ"
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.eyJ2IjoxLCJuYW1lIjoiU3ludGhldGljIGZpeHR1cmUiLCJnYW1lIjoibWluZWNyYWZ0LWphdmEiLCJwcm90byI6InRjcCIsInBvcnQiOjI1NTY1LCJhZGRyIjoidGNwR0Z3V0NET3pmODN3LV9DR3FWUm5ZNi03U013R1NWS2s3ZkV5QVRDd2pvUXlKdThRbUZyV0NBM28wTnpJLUwtT2ZoQXE1ZFc4VlJfNmd3VE1iSGRaaF8yc1Fod1F2THBJR0Z4V0NEcHNwTHVFdXdwa2Z0NWZ3VXVNMEE4dTZocVVhVFI1MDc5SmZDTnEwZkt6V0Z5Z2FGaFRvR2hZV2h3WkdWeWNDNWxlR0Z0Y0d4bExtTnZiUSJ9IHRyYWlsaW5n"
+    },
+    "value": null,
+    "error": "invitation has unexpected trailing data"
+  },
+  {
+    "method": "invite.decode",
+    "input": {
+      "text": "glink1.eyJ2IjoxLCJuYW1lIjoiXHVkODAwIiwiZ2FtZSI6Im1pbmVjcmFmdC1qYXZhIiwicHJvdG8iOiJ0Y3AiLCJwb3J0IjoyNTU2NSwiYWRkciI6InRjcEdGd1dDRE96Zjgzdy1fQ0dxVlJuWTYtN1NNd0dTVktrN2ZFeUFUQ3dqb1F5SnU4UW1GcldDQTNvME56SS1MLU9maEFxNWRXOFZSXzZnd1RNYkhkWmhfMnNRaHdRdkxwSUdGeFdDRHBzcEx1RXV3cGtmdDVmd1V1TTBBOHU2aHFVYVRSNTA3OUpmQ05xMGZLeldGeWdhRmhUb0doWVdod1pHVnljQzVsZUdGdGNHeGxMbU52YlEifQ"
+    },
+    "value": {
+      "v": 1,
+      "name": "�",
+      "game": "minecraft-java",
+      "proto": "tcp",
+      "port": 25565,
+      "addr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhwZGVycC5leGFtcGxlLmNvbQ"
+    },
+    "error": ""
+  },
+  {
+    "method": "invite.encode",
+    "input": {
+      "v": 1,
+      "name": "Synthetic fixture",
+      "game": "minecraft-java",
+      "proto": "tcp",
+      "port": 25565,
+      "addr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhwZGVycC5leGFtcGxlLmNvbQ",
+      "note": "\u003c\u0026é\u2028"
+    },
+    "value": "glink1.eyJ2IjoxLCJuYW1lIjoiU3ludGhldGljIGZpeHR1cmUiLCJnYW1lIjoibWluZWNyYWZ0LWphdmEiLCJwcm90byI6InRjcCIsInBvcnQiOjI1NTY1LCJhZGRyIjoidGNwR0Z3V0NET3pmODN3LV9DR3FWUm5ZNi03U013R1NWS2s3ZkV5QVRDd2pvUXlKdThRbUZyV0NBM28wTnpJLUwtT2ZoQXE1ZFc4VlJfNmd3VE1iSGRaaF8yc1Fod1F2THBJR0Z4V0NEcHNwTHVFdXdwa2Z0NWZ3VXVNMEE4dTZocVVhVFI1MDc5SmZDTnEwZkt6V0Z5Z2FGaFRvR2hZV2h3WkdWeWNDNWxlR0Z0Y0d4bExtTnZiUSIsIm5vdGUiOiJcdTAwM2NcdTAwMjbDqVx1MjAyOCJ9",
+    "error": ""
+  },
+  {
+    "method": "invite.encode",
+    "input": {
+      "v": 1,
+      "name": "\u003c\u0026é😀",
+      "game": "minecraft-java",
+      "proto": "tcp",
+      "port": 25565,
+      "addr": "tcpGFwWCDOzf83w-_CGqVRnY6-7SMwGSVKk7fEyATCwjoQyJu8QmFrWCA3o0NzI-L-OfhAq5dW8VR_6gwTMbHdZh_2sQhwQvLpIGFxWCDpspLuEuwpkft5fwUuM0A8u6hqUaTR5079JfCNq0fKzWFygaFhToGhYWhwZGVycC5leGFtcGxlLmNvbQ",
+      "note": "\u003c\u0026é\u2028"
+    },
+    "value": "glink1.eyJ2IjoxLCJuYW1lIjoiXHUwMDNjXHUwMDI2w6nwn5iAIiwiZ2FtZSI6Im1pbmVjcmFmdC1qYXZhIiwicHJvdG8iOiJ0Y3AiLCJwb3J0IjoyNTU2NSwiYWRkciI6InRjcEdGd1dDRE96Zjgzdy1fQ0dxVlJuWTYtN1NNd0dTVktrN2ZFeUFUQ3dqb1F5SnU4UW1GcldDQTNvME56SS1MLU9maEFxNWRXOFZSXzZnd1RNYkhkWmhfMnNRaHdRdkxwSUdGeFdDRHBzcEx1RXV3cGtmdDVmd1V1TTBBOHU2aHFVYVRSNTA3OUpmQ05xMGZLeldGeWdhRmhUb0doWVdod1pHVnljQzVsZUdGdGNHeGxMbU52YlEiLCJub3RlIjoiXHUwMDNjXHUwMDI2w6lcdTIwMjgifQ",
+    "error": ""
+  }
+]

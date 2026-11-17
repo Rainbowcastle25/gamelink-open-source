@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "games": [
+    {
+      "id": "our-minecraft",
+      "name": "Our Minecraft",
+      "type": "minecraft-java",
+      "protocol": "tcp",
+      "tunnelPort": 25565,
+      "dest": "127.0.0.1:25565",
+      "devices": [
+        {
+          "publicKey": "nodekey:0000000000000000000000000000000000000000000000000000000000000000",
+          "label": "Example friend (placeholder key)",
+          "approvedAt": "2026-01-01T00:00:00Z"
+        }
+      ],
+      "created": "2026-01-01T00:00:00Z"
+    }
+  ]
+}

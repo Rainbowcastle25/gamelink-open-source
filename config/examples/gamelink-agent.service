@@ -1,0 +1,49 @@
+# Example systemd unit for the GameLink server agent.
+#
+#   sudo useradd --system --create-home --home-dir /var/lib/gamelink-agent --shell /usr/sbin/nologin gamelink
+#   sudo install -m 0755 gamelink-agent /usr/local/bin/gamelink-agent
+#   sudo -u gamelink env GAMELINK_AGENT_DIR=/var/lib/gamelink-agent/config gamelink-agent init
+#   (add games / approve devices as that user, then:)
+#   sudo cp gamelink-agent.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now gamelink-agent
+#
+# Adjust the paths and, if your game server runs elsewhere, nothing else needs
+# to change: the agent only makes outbound connections plus the traffic to the
+# one destination you configured per game.
+
+[Unit]
+Description=GameLink server agent (private game tunnels over Tailcat)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gamelink
+Group=gamelink
+Environment=GAMELINK_AGENT_DIR=/var/lib/gamelink-agent/config
+ExecStart=/usr/local/bin/gamelink-agent serve
+Restart=on-failure
+RestartSec=5
+
+# Hardening: the agent needs outbound network and its own config directory only.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gamelink-agent
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

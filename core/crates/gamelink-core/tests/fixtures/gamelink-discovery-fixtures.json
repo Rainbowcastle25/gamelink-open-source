@@ -1,0 +1,314 @@
+[
+  {
+    "error": false,
+    "input": {
+      "ServerName": "server",
+      "Protocol": 2181,
+      "Version": "1.26.50",
+      "LevelName": "🎮 world",
+      "GameType": 2,
+      "PlayerCount": 1,
+      "MaxPlayerCount": 8,
+      "EditorWorld": false,
+      "Hardcore": false,
+      "AcceptsOnlineAuth": false,
+      "AcceptsSelfSignedAuth": true,
+      "Nonce": "nonce",
+      "ConnectionType": 4
+    },
+    "method": "discovery.ad_encode",
+    "output": {
+      "data": "BwZzZXJ2ZXKKIgcxLjI2LjUwCvCfjq4gd29ybGQCEAQAAAABBW5vbmNlCA=="
+    }
+  },
+  {
+    "error": false,
+    "input": {
+      "data": "BwZzZXJ2ZXKKIgcxLjI2LjUwCvCfjq4gd29ybGQCEAQAAAABBW5vbmNlCA=="
+    },
+    "method": "discovery.ad_decode",
+    "output": {
+      "ServerName": "server",
+      "Protocol": 2181,
+      "Version": "1.26.50",
+      "LevelName": "🎮 world",
+      "GameType": 2,
+      "PlayerCount": 1,
+      "MaxPlayerCount": 8,
+      "EditorWorld": false,
+      "Hardcore": false,
+      "AcceptsOnlineAuth": false,
+      "AcceptsSelfSignedAuth": true,
+      "Nonce": "nonce",
+      "ConnectionType": 4
+    }
+  },
+  {
+    "error": true,
+    "input": {
+      "data": "BwZzZXJ2ZXKKIgcxLjI2LjUwCvCfjq4gd29ybGQCEAQAAAABBW5vbmNlCAA="
+    },
+    "method": "discovery.ad_decode",
+    "output": {
+      "ServerName": "server",
+      "Protocol": 2181,
+      "Version": "1.26.50",
+      "LevelName": "🎮 world",
+      "GameType": 2,
+      "PlayerCount": 1,
+      "MaxPlayerCount": 8,
+      "EditorWorld": false,
+      "Hardcore": false,
+      "AcceptsOnlineAuth": false,
+      "AcceptsSelfSignedAuth": true,
+      "Nonce": "nonce",
+      "ConnectionType": 4
+    }
+  },
+  {
+    "error": true,
+    "input": {
+      "data": "BwZzZXJ2ZXKKIgcxLjI2LjUwCvCfjq4gd29ybGQCEAQAAAABBW5vbmNl"
+    },
+    "method": "discovery.ad_decode",
+    "output": {
+      "ServerName": "server",
+      "Protocol": 2181,
+      "Version": "1.26.50",
+      "LevelName": "🎮 world",
+      "GameType": 2,
+      "PlayerCount": 1,
+      "MaxPlayerCount": 8,
+      "EditorWorld": false,
+      "Hardcore": false,
+      "AcceptsOnlineAuth": false,
+      "AcceptsSelfSignedAuth": true,
+      "Nonce": "nonce",
+      "ConnectionType": 0
+    }
+  },
+  {
+    "error": true,
+    "input": {
+      "data": "CA=="
+    },
+    "method": "discovery.ad_decode",
+    "output": {
+      "ServerName": "",
+      "Protocol": 0,
+      "Version": "",
+      "LevelName": "",
+      "GameType": 0,
+      "PlayerCount": 0,
+      "MaxPlayerCount": 0,
+      "EditorWorld": false,
+      "Hardcore": false,
+      "AcceptsOnlineAuth": false,
+      "AcceptsSelfSignedAuth": false,
+      "Nonce": "",
+      "ConnectionType": 0
+    }
+  },
+  {
+    "error": true,
+    "input": {
+      "data": "B/////9/"
+    },
+    "method": "discovery.ad_decode",
+    "output": {
+      "ServerName": "",
+      "Protocol": 0,
+      "Version": "",
+      "LevelName": "",
+      "GameType": 0,
+      "PlayerCount": 0,
+      "MaxPlayerCount": 0,
+      "EditorWorld": false,
+      "Hardcore": false,
+      "AcceptsOnlineAuth": false,
+      "AcceptsSelfSignedAuth": false,
+      "Nonce": "",
+      "ConnectionType": 0
+    }
+  },
+  {
+    "error": true,
+    "input": {
+      "data": "B///////AA=="
+    },
+    "method": "discovery.ad_decode",
+    "output": {
+      "ServerName": "",
+      "Protocol": 0,
+      "Version": "",
+      "LevelName": "",
+      "GameType": 0,
+      "PlayerCount": 0,
+      "MaxPlayerCount": 0,
+      "EditorWorld": false,
+      "Hardcore": false,
+      "AcceptsOnlineAuth": false,
+      "AcceptsSelfSignedAuth": false,
+      "Nonce": "",
+      "ConnectionType": 0
+    }
+  },
+  {
+    "error": false,
+    "input": {
+      "id": 0,
+      "sender": 1161981756646125696
+    },
+    "method": "discovery.packet_encode",
+    "output": {
+      "data": "l9BxpSstD1S8/xgD2atGQH4dKYJZVdr9u6EVH+byhpyobHg3R2C8f0nPuuTwEIYG/w+HCeE79oWOIFHDIdthXg=="
+    }
+  },
+  {
+    "error": false,
+    "input": {
+      "data": "l9BxpSstD1S8/xgD2atGQH4dKYJZVdr9u6EVH+byhpyobHg3R2C8f0nPuuTwEIYG/w+HCeE79oWOIFHDIdthXg=="
+    },
+    "method": "discovery.packet_decode",
+    "output": {
+      "id": 0,
+      "sender": 1161981756646125696
+    }
+  },
+  {
+    "error": false,
+    "input": {
+      "data": "BwZzZXJ2ZXKKIgcxLjI2LjUwCvCfjq4gd29ybGQCEAQAAAABBW5vbmNlCA==",
+      "id": 1,
+      "sender": 1161981756646125696
+    },
+    "method": "discovery.packet_encode",
+    "output": {
+      "data": "5TapLhgq8fU9eI4lEzHhWQx8Mod0drTZsfYrTNQpiZC7auV/Utl7FiNZU5skYM0g375sYVeiH+0jS3CPLup1zrWNuftbDauc0c+s1JmDU2/b/vYIhVnxmURFX400HGkf+W8z39j/6hPKoSzW1JvWjixQJCIxLPdBa4A4s8l+lffjrU5MnLuF8VlQFMvUapuB"
+    }
+  },
+  {
+    "error": false,
+    "input": {
+      "data": "5TapLhgq8fU9eI4lEzHhWQx8Mod0drTZsfYrTNQpiZC7auV/Utl7FiNZU5skYM0g375sYVeiH+0jS3CPLup1zrWNuftbDauc0c+s1JmDU2/b/vYIhVnxmURFX400HGkf+W8z39j/6hPKoSzW1JvWjixQJCIxLPdBa4A4s8l+lffjrU5MnLuF8VlQFMvUapuB"
+    },
+    "method": "discovery.packet_decode",
+    "output": {
+      "data": "BwZzZXJ2ZXKKIgcxLjI2LjUwCvCfjq4gd29ybGQCEAQAAAABBW5vbmNlCA==",
+      "id": 1,
+      "sender": 1161981756646125696
+    }
+  },
+  {
+    "error": false,
+    "input": {
+      "data": "Q09OTkVDVFJFUVVFU1QgNDIgdj0wDQo=",
+      "id": 2,
+      "recipient": 18446744073709551615,
+      "sender": 1161981756646125696
+    },
+    "method": "discovery.packet_encode",
+    "output": {
+      "data": "C2lbGhHtfMjjtUWleZYV/m+HLzdvhjcWOrk4UpEnpaUmGJDxJ+O/f6NoyNmGACJDw8nYKuwHl6UfertSFgJEhId17aY3I6lyvyK2NqrhxcQQvEIPr45eFmudXA3emgUD"
+    }
+  },
+  {
+    "error": false,
+    "input": {
+      "data": "C2lbGhHtfMjjtUWleZYV/m+HLzdvhjcWOrk4UpEnpaUmGJDxJ+O/f6NoyNmGACJDw8nYKuwHl6UfertSFgJEhId17aY3I6lyvyK2NqrhxcQQvEIPr45eFmudXA3emgUD"
+    },
+    "method": "discovery.packet_decode",
+    "output": {
+      "data": "Q09OTkVDVFJFUVVFU1QgNDIgdj0wDQo=",
+      "id": 2,
+      "recipient": 18446744073709551615,
+      "sender": 1161981756646125696
+    }
+  },
+  {
+    "error": false,
+    "input": {
+      "data": "rLVELuUIKoSn2KmOgDMyhnGheL4BQPCd0bYg5DpNFUwCnebv5wc1xLvnBDMGcI8X/w+HCeE79oWOIFHDIdthXg=="
+    },
+    "method": "discovery.packet_decode",
+    "output": {
+      "id": 0,
+      "sender": 1
+    }
+  },
+  {
+    "error": false,
+    "input": {
+      "data": "qOgazDX5JsSDP/us5YoxhQSLIWKj01Ni0ioBoMGOSGHvEbVpahFwZxa8+IjtIMgT/w+HCeE79oWOIFHDIdthXg=="
+    },
+    "method": "discovery.packet_decode",
+    "output": {
+      "id": 0,
+      "sender": 1
+    }
+  },
+  {
+    "error": true,
+    "input": {
+      "data": "0SKwV7pAKvlFL7WL7F8d3fZNTIWjXvkY7gD3MPl5jpXUlZn32G5JFzmDCN+RLlVbv9BHnMQAOrTU+0GBZNFjERawaIAQYKOqjd9cANRfVZI="
+    },
+    "method": "discovery.packet_decode",
+    "output": null
+  },
+  {
+    "error": true,
+    "input": {
+      "data": "1Jq4t97IeJ+T8fRL8Xuc+IatpEQ2yaeEadv6iqaSH0dbMeSkca1I7Tel32WAqasHe2TDzr6wff8WEcYQ7gLgKw=="
+    },
+    "method": "discovery.packet_decode",
+    "output": null
+  },
+  {
+    "error": true,
+    "input": {
+      "data": "1mloWUdOC6KO8aDGMyaZLLFgfhpNvoxn3x9hTRrUYtJSUxhRfiOkC+2AqiVoNI50wA3isRQzEjlL0iCjOAWp0g=="
+    },
+    "method": "discovery.packet_decode",
+    "output": null
+  },
+  {
+    "error": true,
+    "input": {
+      "data": "kpXf3wT9Pl3gdgK1Puet1pKj1JxxY4m7YuGdBBNi91Lh+XKo4xE6OrHOUpjWU+mO/w+HCeE79oWOIFHDIdthXg=="
+    },
+    "method": "discovery.packet_decode",
+    "output": null
+  },
+  {
+    "error": true,
+    "input": {
+      "data": "0ObMrkBwW5ibfxk6XZ8aroB/kooREJ2gl0Wzp9b3jhlx0bgNyuqVRW6PI90bws8Lb7mkWzumlh/irqmZcwF66A=="
+    },
+    "method": "discovery.packet_decode",
+    "output": null
+  },
+  {
+    "error": true,
+    "input": {
+      "data": ""
+    },
+    "method": "discovery.packet_decode",
+    "output": null
+  },
+  {
+    "error": true,
+    "input": {
+      "data": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    },
+    "method": "discovery.packet_decode",
+    "output": null
+  },
+  {
+    "error": true,
+    "input": {
+      "data": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "method": "discovery.packet_decode",
+    "output": null
+  }
+]

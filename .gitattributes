@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.ico binary
+*.png binary
+# Upstream license copies retain their original whitespace and line endings.
+third_party/licenses/** -text -whitespace

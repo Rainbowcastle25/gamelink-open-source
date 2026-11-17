@@ -1,0 +1,28 @@
+[package]
+name = "gamelink-ffi"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+gamelink-core.workspace = true
+jni = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+zeroize = "=1.8.2"
+
+[features]
+# The Android JNI entrypoint. Default on, so `cargo build`/`test`/`clippy` cover
+# it and the Android cdylib gets it. scripts/build-rust-ffi.sh builds the cgo
+# staticlib with --no-default-features: Go links that archive into binaries
+# (including gomobile's libgojni.so, which exports every global symbol), and a
+# second copy of the JNI symbol there must not compete with libgamelink_ffi.so.
+default = ["jni"]
+jni = ["dep:jni"]
+# Test-only: adds a `test.panic` method that panics inside the C ABI, so the
+# cross-built Windows test binary can prove panics are caught across the zig
+# libunwind link. Never enable it for release builds.
+panic-probe = []

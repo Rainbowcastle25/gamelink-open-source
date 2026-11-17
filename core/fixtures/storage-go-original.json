@@ -1,0 +1,83 @@
+[
+  {
+    "input": "Survival World",
+    "kind": "slug",
+    "output": "survival-world"
+  },
+  {
+    "input": "  !!!",
+    "kind": "slug",
+    "output": "game"
+  },
+  {
+    "input": "École 你好",
+    "kind": "slug",
+    "output": "cole"
+  },
+  {
+    "input": "a---B",
+    "kind": "slug",
+    "output": "a-b"
+  },
+  {
+    "input": "abcdefghijklmnopqrstuvwxyz0123456789",
+    "kind": "slug",
+    "output": "abcdefghijklmnopqrstuvwxyz012345"
+  },
+  {
+    "input": "İWorld",
+    "kind": "slug",
+    "output": "iworld"
+  },
+  {
+    "input": "İ World",
+    "kind": "slug",
+    "output": "i-world"
+  },
+  {
+    "error": "unrecognised secret format",
+    "input": "",
+    "kind": "unseal",
+    "output": ""
+  },
+  {
+    "error": "unrecognised secret format",
+    "input": "plain",
+    "kind": "unseal",
+    "output": ""
+  },
+  {
+    "error": "protected data is corrupt",
+    "input": "gls1:!!!",
+    "kind": "unseal",
+    "output": ""
+  },
+  {
+    "error": "protected data is corrupt",
+    "input": "gls1:",
+    "kind": "unseal",
+    "output": ""
+  },
+  {
+    "error": "",
+    "input": "gls1:c3ludGhldGljLXZhbHVl",
+    "kind": "unseal",
+    "output": "synthetic-value"
+  },
+  {
+    "error": "",
+    "input": "gls1:c3ludGhldGlj\nLXZhbHVl",
+    "kind": "unseal",
+    "output": "synthetic-value"
+  },
+  {
+    "kind": "settings",
+    "output": {
+      "demoMode": false,
+      "autoReconnect": true,
+      "checkOnStartup": true,
+      "verboseLogging": false,
+      "allowLocalRelay": false
+    }
+  }
+]

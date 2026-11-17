@@ -1,0 +1,223 @@
+[
+  {
+    "fingerprint": "6e23b6dedc41354468868e2559358f20b4252ebc5b2f0746d6bbc5d4252e7467",
+    "game": {
+      "id": "x",
+      "name": "Game",
+      "type": "",
+      "protocol": "tcp",
+      "tunnelPort": 25565,
+      "dest": "127.0.0.1:25565",
+      "devices": [
+        {
+          "publicKey": "nodekey:bbbb",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        },
+        {
+          "publicKey": "nodekey:aaaa",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        }
+      ],
+      "created": "0001-01-01T00:00:00Z"
+    },
+    "keyMtimeNs": 1700000000123456789,
+    "name": "base"
+  },
+  {
+    "fingerprint": "6e23b6dedc41354468868e2559358f20b4252ebc5b2f0746d6bbc5d4252e7467",
+    "game": {
+      "id": "x",
+      "name": "Renamed",
+      "type": "",
+      "protocol": "tcp",
+      "tunnelPort": 25565,
+      "dest": "127.0.0.1:25565",
+      "devices": [
+        {
+          "publicKey": "nodekey:bbbb",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        },
+        {
+          "publicKey": "nodekey:aaaa",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        }
+      ],
+      "created": "0001-01-01T00:00:00Z"
+    },
+    "keyMtimeNs": 1700000000123456789,
+    "name": "name_ignored"
+  },
+  {
+    "fingerprint": "6e23b6dedc41354468868e2559358f20b4252ebc5b2f0746d6bbc5d4252e7467",
+    "game": {
+      "id": "x",
+      "name": "Game",
+      "type": "",
+      "protocol": "tcp",
+      "tunnelPort": 25565,
+      "dest": "127.0.0.1:25565",
+      "devices": [
+        {
+          "publicKey": "nodekey:aaaa",
+          "label": "renamed",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        },
+        {
+          "publicKey": "nodekey:bbbb",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        }
+      ],
+      "created": "0001-01-01T00:00:00Z"
+    },
+    "keyMtimeNs": 1700000000123456789,
+    "name": "order_labels_ignored"
+  },
+  {
+    "fingerprint": "4a27d0c1de526fbe77c926fdf531cafba729e04a93e5b4eee56e1dc24501af30",
+    "game": {
+      "id": "x",
+      "name": "Game",
+      "type": "",
+      "protocol": "udp",
+      "tunnelPort": 25565,
+      "dest": "127.0.0.1:25565",
+      "devices": [
+        {
+          "publicKey": "nodekey:bbbb",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        },
+        {
+          "publicKey": "nodekey:aaaa",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        }
+      ],
+      "created": "0001-01-01T00:00:00Z"
+    },
+    "keyMtimeNs": 1700000000123456789,
+    "name": "protocol"
+  },
+  {
+    "fingerprint": "d504b27cc69650e0b6ef5250e493bc72734f3a40526cd56faf92ecbc51afc819",
+    "game": {
+      "id": "x",
+      "name": "Game",
+      "type": "",
+      "protocol": "tcp",
+      "tunnelPort": 25566,
+      "dest": "127.0.0.1:25565",
+      "devices": [
+        {
+          "publicKey": "nodekey:bbbb",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        },
+        {
+          "publicKey": "nodekey:aaaa",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        }
+      ],
+      "created": "0001-01-01T00:00:00Z"
+    },
+    "keyMtimeNs": 1700000000123456789,
+    "name": "port"
+  },
+  {
+    "fingerprint": "a6d8e4e0ec61dad670883e0e398f5be16620ec622a95ef2cae50e4eeb2b77da7",
+    "game": {
+      "id": "x",
+      "name": "Game",
+      "type": "",
+      "protocol": "tcp",
+      "tunnelPort": 25565,
+      "dest": "127.0.0.1:25566",
+      "devices": [
+        {
+          "publicKey": "nodekey:bbbb",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        },
+        {
+          "publicKey": "nodekey:aaaa",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        }
+      ],
+      "created": "0001-01-01T00:00:00Z"
+    },
+    "keyMtimeNs": 1700000000123456789,
+    "name": "dest"
+  },
+  {
+    "fingerprint": "c74c70d278245a384cf1b93e01f128374d1ba1d2d84b3a3ae43b9e92744dc2cd",
+    "game": {
+      "id": "x",
+      "name": "Game",
+      "type": "",
+      "protocol": "tcp",
+      "tunnelPort": 25565,
+      "dest": "127.0.0.1:25565",
+      "devices": [
+        {
+          "publicKey": "nodekey:bbbb",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        },
+        {
+          "publicKey": "nodekey:aaaa",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        }
+      ],
+      "created": "0001-01-01T00:00:00Z",
+      "consoleBridge": {
+        "serverIp": "127.0.0.1",
+        "bindIp": "127.0.0.1",
+        "mediaPortFirst": 1000,
+        "mediaPortLast": 1001
+      }
+    },
+    "keyMtimeNs": 1700000000123456789,
+    "name": "bridge"
+  },
+  {
+    "fingerprint": "c347dfecf0551b37d35b94526ac1c7ce2f5625dec90d67e7f66f751b3741def7",
+    "game": {
+      "id": "x",
+      "name": "Game",
+      "type": "",
+      "protocol": "tcp",
+      "tunnelPort": 25565,
+      "dest": "127.0.0.1:25565",
+      "devices": [
+        {
+          "publicKey": "nodekey:bbbb",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        },
+        {
+          "publicKey": "nodekey:aaaa",
+          "label": "",
+          "approvedAt": "0001-01-01T00:00:00Z"
+        }
+      ],
+      "created": "0001-01-01T00:00:00Z",
+      "consoleBridge": {
+        "serverIp": "127.0.0.1",
+        "bindIp": "127.0.0.1",
+        "discoveryPort": 19132,
+        "mediaPortFirst": 1000,
+        "mediaPortLast": 1001
+      }
+    },
+    "keyMtimeNs": 1700000000123456789,
+    "name": "bridge_discovery"
+  }
+]

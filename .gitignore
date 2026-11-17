@@ -1,0 +1,49 @@
+# Local toolchains and dependencies
+.tools/
+node_modules/
+
+# Build output
+bin/
+/dist/
+*.exe
+# Only the frontend build placeholder is tracked.
+apps/desktop/frontend/dist/*
+!apps/desktop/frontend/dist/.gitkeep
+apps/desktop/frontend/.vite/
+coverage/
+
+# Secrets and local state. GameLink never needs these in the repository.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.private.json
+# Agent / client state directories if someone runs with --dir inside the repo
+/gamelink-agent/
+/GameLink/
+/keys/
+runtime.json
+gamelink.log
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Android and Rust generated artifacts (sources/wrappers/lockfiles are tracked)
+apps/android/.gradle/
+apps/android/.kotlin/
+apps/android/**/build/
+apps/android/local.properties
+apps/android/app/libs/*.aar
+apps/android/app/libs/gamelink-sources.jar
+apps/android/app/src/main/jniLibs/
+core/target/
+# Written by scripts/build-rust-ffi.sh so Go relinks when the Rust archive changes.
+shim/rustcore/zz_ffistamp_*.go
+
+# Standalone Tauri workspace (keeps GUI dependencies out of core/Android)
+apps/desktop-tauri/target/
+apps/desktop-tauri/gen/

@@ -1,0 +1,154 @@
+package main
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"tailscale.com/types/key"
+
+	"github.com/gamelink-project/gamelink/internal/invite"
+)
+
+func runCLI(t *testing.T, dir string, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	code = run(append([]string{"--dir", dir}, args...), strings.NewReader(""), &out, &errb)
+	return code, out.String(), errb.String()
+}
+
+func mustRun(t *testing.T, dir string, args ...string) (string, string) {
+	t.Helper()
+	code, out, errs := runCLI(t, dir, args...)
+	if code != 0 {
+		t.Fatalf("gamelink-agent %v exited %d\nstdout: %s\nstderr: %s", args, code, out, errs)
+	}
+	return out, errs
+}
+
+func TestCLIFullAdminFlow(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent")
+	mustRun(t, dir, "init")
+	if code, _, _ := runCLI(t, dir, "init"); code == 0 {
+		t.Fatal("second init must refuse to overwrite")
+	}
+
+	// --relay-host avoids any network access in tests.
+	mustRun(t, dir, "games", "add", "--type", "minecraft-java", "--relay-host", "derp.example.com", "--name", "Survival World")
+	out, _ := mustRun(t, dir, "games", "list")
+	if !strings.Contains(out, "survival-world") || !strings.Contains(out, "127.0.0.1:25565") {
+		t.Fatalf("games list: %s", out)
+	}
+
+	// Brand new game: invite warns that nobody is approved.
+	_, errs := mustRun(t, dir, "invite", "--game", "survival-world")
+	if !strings.Contains(errs, "no devices are approved") {
+		t.Fatalf("expected an empty-allowlist warning, got: %s", errs)
+	}
+	if code, _, e := runCLI(t, dir, "status"); code != 0 || !strings.Contains(e+"", "") {
+		t.Fatal("status failed")
+	}
+
+	pub := key.NewNode().Public().String()
+	mustRun(t, dir, "devices", "approve", "--game", "survival-world", "--key", pub, "--label", "alice")
+	out, _ = mustRun(t, dir, "devices", "list")
+	if !strings.Contains(out, pub) || !strings.Contains(out, "alice") {
+		t.Fatalf("devices list: %s", out)
+	}
+
+	inv, errs := mustRun(t, dir, "invite", "--game", "survival-world", "--note", "welcome")
+	if strings.Contains(errs, "Warning") {
+		t.Fatalf("unexpected warning with an approved device: %s", errs)
+	}
+	got, det, err := invite.Parse(strings.TrimSpace(inv), invite.Options{})
+	if err != nil {
+		t.Fatalf("the invitation the CLI printed does not parse: %v", err)
+	}
+	if got.Name != "Survival World" || got.Port != 25565 || got.Proto != "tcp" || got.Note != "welcome" {
+		t.Fatalf("invite contents: %+v", got)
+	}
+	if len(det.RelayHosts) != 1 || det.RelayHosts[0] != "derp.example.com" {
+		t.Fatalf("relay hosts %v", det.RelayHosts)
+	}
+	// The invitation must not reveal where the game server really lives.
+	if strings.Contains(inv, "127.0.0.1") {
+		t.Fatal("invitation leaks the destination")
+	}
+
+	out, _ = mustRun(t, dir, "status")
+	if !strings.Contains(out, "not running") {
+		t.Fatalf("status: %s", out)
+	}
+
+	mustRun(t, dir, "devices", "revoke", "--game", "survival-world", "--key", pub)
+	if code, _, _ := runCLI(t, dir, "devices", "revoke", "--game", "survival-world", "--key", pub); code == 0 {
+		t.Fatal("revoking an unknown device must fail")
+	}
+	out, _ = mustRun(t, dir, "devices", "list")
+	if !strings.Contains(out, "No approved devices") {
+		t.Fatalf("after revoke: %s", out)
+	}
+	mustRun(t, dir, "games", "remove", "survival-world")
+	if _, err := os.Stat(filepath.Join(dir, "keys", "survival-world.json")); err == nil {
+		t.Fatal("removing a game must delete its identity file")
+	}
+}
+
+func TestCLIRejectsBadInput(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent")
+	mustRun(t, dir, "init")
+	good := key.NewNode().Public().String()
+	cases := map[string][]string{
+		"unknown type":      {"games", "add", "--type", "quake", "--relay-host", "derp.example.com"},
+		"bad port":          {"games", "add", "--type", "custom", "--proto", "tcp", "--port", "70000", "--relay-host", "derp.example.com"},
+		"bad dest host":     {"games", "add", "--type", "minecraft-java", "--dest", "evil.example.com:25565", "--relay-host", "derp.example.com"},
+		"unspecified dest":  {"games", "add", "--type", "minecraft-java", "--dest", "0.0.0.0:25565", "--relay-host", "derp.example.com"},
+		"proto mismatch":    {"games", "add", "--type", "factorio", "--proto", "tcp", "--relay-host", "derp.example.com"},
+		"custom needs prot": {"games", "add", "--type", "custom", "--port", "5000", "--relay-host", "derp.example.com"},
+		"bad relay host":    {"games", "add", "--type", "minecraft-java", "--relay-host", "bad host!", "--dest", "127.0.0.1:1"},
+		"bad id":            {"games", "add", "--type", "minecraft-java", "--id", "../etc", "--relay-host", "derp.example.com"},
+		"approve unknown":   {"devices", "approve", "--game", "nope", "--key", good},
+	}
+	for name, args := range cases {
+		if code, _, _ := runCLI(t, dir, args...); code == 0 {
+			t.Errorf("%s: %v was accepted", name, args)
+		}
+	}
+	mustRun(t, dir, "games", "add", "--type", "minecraft-java", "--relay-host", "derp.example.com")
+	for name, k := range map[string]string{"garbage": "hello", "private-looking": "privkey:" + strings.Repeat("a", 64), "short": "nodekey:abcd"} {
+		if code, _, _ := runCLI(t, dir, "devices", "approve", "--game", "minecraft-java", "--key", k); code == 0 {
+			t.Errorf("bad key %s accepted", name)
+		}
+	}
+	// Duplicate id.
+	if code, _, _ := runCLI(t, dir, "games", "add", "--type", "minecraft-java", "--relay-host", "derp.example.com"); code == 0 {
+		t.Error("duplicate game id accepted")
+	}
+}
+
+func TestCLINoDirNoInit(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "never-initialised")
+	if code, _, _ := runCLI(t, dir, "games", "list"); code == 0 {
+		t.Fatal("games list should fail before init")
+	}
+}
+
+func TestKeyFilesArePrivate(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent")
+	mustRun(t, dir, "init")
+	mustRun(t, dir, "games", "add", "--type", "factorio", "--relay-host", "derp.example.com")
+	fi, err := os.Stat(filepath.Join(dir, "keys", "factorio.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimeGOOS() != "windows" && fi.Mode().Perm() != 0o600 {
+		t.Fatalf("key file mode %v, want 0600", fi.Mode().Perm())
+	}
+	// agent.json (non-secret) must not contain any key material.
+	data, _ := os.ReadFile(filepath.Join(dir, "agent.json"))
+	if strings.Contains(string(data), "privkey:") || strings.Contains(string(data), "presharedKey") {
+		t.Fatal("agent.json contains secrets")
+	}
+}
