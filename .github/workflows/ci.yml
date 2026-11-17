@@ -259,6 +259,12 @@ jobs:
         with:
           packages: platform-tools
       - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' 'ndk;29.0.14206865'
+      # The Android dependency exclusion gate uses ripgrep, which hosted
+      # runner images do not include.
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
       # Builds the Rust staticlibs (linked into the Go AAR via cgo), the AAR,
       # the Rust JNI cdylib, then the APK and lint.
       - run: bash scripts/check.sh android
