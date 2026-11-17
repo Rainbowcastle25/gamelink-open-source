@@ -16,6 +16,23 @@ no public server list and no cloud service of ours in the middle.
 > app-store release; see [Alpha limitations](#alpha-limitations) and the
 > [Console Bridge guide](docs/android-console-bridge.md).
 
+## Goal
+
+A safe and secure way to play with your friends without opening ports on your
+router or setting up port forwarding.
+
+The aim is to support pretty much any game you can play in multiplayer, from
+dedicated servers to plain LAN sessions: a Minecraft world opened to LAN, a
+Stronghold Crusader lobby, and so on.
+
+GameLink starts with three games:
+
+- Minecraft: Bedrock Edition
+- Minecraft: Java Edition
+- Factorio
+
+Other games come later; see the [roadmap](docs/roadmap.md).
+
 ## How it works
 
 ```
