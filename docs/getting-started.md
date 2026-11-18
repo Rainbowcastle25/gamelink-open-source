@@ -222,9 +222,10 @@ files it cannot read. Turning the setting off or deleting a server removes
 the corresponding GameLink entries.
 
 Click **Join** or **Play** in GameLink, then select **Our Minecraft (GameLink)**
-under **Multiplayer**. If the stable port was busy, use **Direct Connection**
-with the temporary address shown in GameLink. With the list setting off, you
-can use **Multiplayer → Add Server** and enter the address shown on the card.
+under **Multiplayer**. If the stable port was busy, GameLink updates the entry
+to the temporary port it is using. With the list setting off, you can use
+**Multiplayer → Add Server** or **Direct Connection** and enter the address
+shown on the card.
 
 🟡 *Verification covers generated server-list fixtures and the tunnel's TCP
 echo tests. Real Minecraft gameplay has not been exercised.*

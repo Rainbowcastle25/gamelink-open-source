@@ -15,11 +15,18 @@ pub struct MinecraftLists {
     default_ready: bool,
     prism_ready: bool,
     pub error: String,
+    /// Tests use this instead of the player's real default Minecraft folder.
+    #[cfg(test)]
+    pub default_dir: Option<PathBuf>,
 }
 
 impl MinecraftLists {
     pub fn refresh(&mut self, state_dir: &Path, cfg: &Value) {
-        self.refresh_from(state_dir, cfg, default_minecraft_dir());
+        #[cfg(not(test))]
+        let default = default_minecraft_dir();
+        #[cfg(test)]
+        let default = self.default_dir.clone();
+        self.refresh_from(state_dir, cfg, default);
     }
 
     fn refresh_from(&mut self, state_dir: &Path, cfg: &Value, default: Option<PathBuf>) {
@@ -173,6 +180,7 @@ impl MinecraftLists {
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn default_minecraft_dir() -> Option<PathBuf> {
     let base = std::env::var_os(if cfg!(windows) { "APPDATA" } else { "HOME" })?;
     (!base.is_empty()).then(|| PathBuf::from(base).join(".minecraft"))

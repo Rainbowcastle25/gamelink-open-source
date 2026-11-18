@@ -35,7 +35,8 @@ function Note({ children }: { children: ReactNode }) {
 export function ConnectionPanel({ server, joining, onDisconnect, onRetry, onLaunch, onOpenRequests }: Props) {
   const c = server.connection;
   const state = joining && c.state === "disconnected" ? "connecting" : c.state;
-  const listed = server.minecraftListed && !c.portFallback;
+  // The synced list entry follows the port the tunnel actually bound.
+  const listed = server.minecraftListed;
   const hint = listed
     ? `In Minecraft Multiplayer, select “${server.name} (GameLink)”.`
     : server.launchConnects ? "Launch the game from GameLink to join automatically." : server.hint;
@@ -92,7 +93,6 @@ export function ConnectionPanel({ server, joining, onDisconnect, onRetry, onLaun
       {c.portFallback && (
         <Note>
           {server.stablePort ? `Stable port ${server.stablePort}` : "Stable port"} was unavailable. Using temporary port {c.localPort}.
-          {server.minecraftListed && " The Minecraft list entry still points to the stable port."}
         </Note>
       )}
       {c.localAddr && (listed || (server.launchConnects && !c.portFallback) ? (
