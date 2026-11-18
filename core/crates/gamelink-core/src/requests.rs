@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn pending_requests_deduplicate_expire_and_keep_their_ids() {
-        let now = Utc::now();
+        let now = DateTime::<Utc>::from(std::time::SystemTime::now());
         let game = "game".to_owned();
         let scope = Scope::new(&json!({}), json!({"privateKey":"old"}));
         let running = BTreeMap::from([(game.clone(), scope.identity.clone())]);
