@@ -220,6 +220,10 @@ Microsoft WebView2 system runtime remains separately installed. Linux GTK,
 WebKitGTK, JavaScriptCore and system libraries are dynamically linked platform
 prerequisites, not copied into the application artifact.
 
+Desktop presence notifications on Linux use `tauri-plugin-notification`
+and `notify-rust`, under their MIT or Apache-2.0 terms. The Windows
+notification area uses the existing MIT/Apache-2.0 `windows` bindings.
+
 To refresh the conservative Rust inventory and copies:
 
 ```sh

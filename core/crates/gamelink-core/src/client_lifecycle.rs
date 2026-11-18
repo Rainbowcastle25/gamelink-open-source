@@ -322,6 +322,9 @@ pub fn reduce(input: Value) -> Result<Value, String> {
                     "address_error" => {
                         json!({"state":"unreachable","message":"Cannot read the saved address","checkedAt":event["now"]})
                     }
+                    "start_error" => {
+                        json!({"state":"unknown","message":"Could not start the server check","checkedAt":event["now"]})
+                    }
                     "error" => {
                         json!({"state":"unreachable","message":format!("No response: the server may be offline, or this device is not approved for “{}”",s.name),"checkedAt":event["now"]})
                     }
@@ -340,6 +343,15 @@ pub fn reduce(input: Value) -> Result<Value, String> {
                 notify = true;
             }
             result = check(&s);
+        }
+        "cancel_check" => {
+            if s.probe
+                .as_ref()
+                .is_some_and(|probe| Some(probe.generation) == generation)
+            {
+                cancel_probe(&mut s, &mut effects);
+                notify = true;
+            }
         }
         "demo_timer" => {
             if generation == s.active && s.active.is_some() && s.demo && s.pending {

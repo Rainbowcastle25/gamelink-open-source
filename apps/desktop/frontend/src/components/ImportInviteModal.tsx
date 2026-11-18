@@ -166,7 +166,7 @@ export function ImportInviteModal({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        <Field label="Local port (leave empty for automatic)" error={portError} hint="Only needed if your game must use a specific port on this PC.">
+        <Field label="Local port (leave empty for automatic)" error={portError} hint="GameLink assigns a stable port when you leave this blank.">
           {({ id, describedBy }) => (
             <input
               id={id}

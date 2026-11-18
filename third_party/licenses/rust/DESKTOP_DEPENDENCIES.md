@@ -57,6 +57,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `cfb-0.14.0` | MIT | [texts](cfb-0.14.0/) |
 | `cfg-expr-0.15.8` | MIT OR Apache-2.0 | [texts](cfg-expr-0.15.8/) |
 | `cfg-if-1.0.5` | MIT OR Apache-2.0 | [texts](cfg-if-1.0.5/) |
+| `chacha20-0.10.2` | MIT OR Apache-2.0 | [texts](chacha20-0.10.2/) |
 | `chrono-0.4.44` | MIT OR Apache-2.0 | [texts](chrono-0.4.44/) |
 | `cipher-0.4.4` | MIT OR Apache-2.0 | [texts](cipher-0.4.4/) |
 | `clipboard-win-5.4.3` | BSL-1.0 | [texts](clipboard-win-5.4.3/) |
@@ -68,6 +69,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `core-graphics-0.25.0` | MIT OR Apache-2.0 | [texts](core-graphics-0.25.0/) |
 | `core-graphics-types-0.2.0` | MIT OR Apache-2.0 | [texts](core-graphics-types-0.2.0/) |
 | `cpufeatures-0.2.17` | MIT OR Apache-2.0 | [texts](cpufeatures-0.2.17/) |
+| `cpufeatures-0.3.1` | MIT OR Apache-2.0 | [texts](cpufeatures-0.3.1/) |
 | `crc32fast-1.5.5` | MIT OR Apache-2.0 | [texts](crc32fast-1.5.5/) |
 | `crossbeam-channel-0.5.17` | MIT OR Apache-2.0 | [texts](crossbeam-channel-0.5.17/) |
 | `crossbeam-utils-0.8.23` | MIT OR Apache-2.0 | [texts](crossbeam-utils-0.8.23/) |
@@ -220,6 +222,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `litemap-0.8.3` | Unicode-3.0 | [texts](litemap-0.8.3/) |
 | `lock_api-0.4.14` | MIT OR Apache-2.0 | [texts](lock_api-0.4.14/) |
 | `log-0.4.35` | MIT OR Apache-2.0 | [texts](log-0.4.35/) |
+| `mac-notification-sys-0.6.15` | MIT/Apache-2.0 | [texts](mac-notification-sys-0.6.15/) |
 | `markup5ever-0.39.0` | MIT OR Apache-2.0 | [texts](markup5ever-0.39.0/) |
 | `markup5ever-0.40.0` | MIT OR Apache-2.0 | [texts](markup5ever-0.40.0/) |
 | `memchr-2.8.3` | Unlicense OR MIT | [texts](memchr-2.8.3/) |
@@ -236,6 +239,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `ndk-sys-0.6.0+11769913` | MIT OR Apache-2.0 | [texts](ndk-sys-0.6.0+11769913/) |
 | `new_debug_unreachable-1.0.6` | MIT | [texts](new_debug_unreachable-1.0.6/) |
 | `nom-8.0.0` | MIT | [texts](nom-8.0.0/) |
+| `notify-rust-4.19.0` | MIT OR Apache-2.0 | [texts](notify-rust-4.19.0/) |
 | `num-conv-0.2.2` | MIT OR Apache-2.0 | [texts](num-conv-0.2.2/) |
 | `num-traits-0.2.19` | MIT OR Apache-2.0 | [texts](num-traits-0.2.19/) |
 | `num_enum-0.7.6` | BSD-3-Clause OR MIT OR Apache-2.0 | [texts](num_enum-0.7.6/) |
@@ -303,6 +307,8 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `quote-1.0.47` | MIT OR Apache-2.0 | [texts](quote-1.0.47/) |
 | `r-efi-5.3.0` | MIT OR Apache-2.0 OR LGPL-2.1-or-later | [texts](r-efi-5.3.0/) |
 | `r-efi-6.0.0` | MIT OR Apache-2.0 OR LGPL-2.1-or-later | [texts](r-efi-6.0.0/) |
+| `rand-0.10.4` | MIT OR Apache-2.0 | [texts](rand-0.10.4/) |
+| `rand_core-0.10.1` | MIT OR Apache-2.0 | [texts](rand_core-0.10.1/) |
 | `raw-window-handle-0.6.2` | MIT OR Apache-2.0 OR Zlib | [texts](raw-window-handle-0.6.2/) |
 | `redox_syscall-0.5.18` | MIT | [texts](redox_syscall-0.5.18/) |
 | `redox_users-0.5.3` | MIT | [texts](redox_users-0.5.3/) |
@@ -382,12 +388,14 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `tauri-plugin-clipboard-manager-2.5.0` | Apache-2.0 OR MIT | [texts](tauri-plugin-clipboard-manager-2.5.0/) |
 | `tauri-plugin-dialog-2.8.4` | Apache-2.0 OR MIT | [texts](tauri-plugin-dialog-2.8.4/) |
 | `tauri-plugin-fs-2.7.1` | Apache-2.0 OR MIT | [texts](tauri-plugin-fs-2.7.1/) |
+| `tauri-plugin-notification-2.8.1` | Apache-2.0 OR MIT | [texts](tauri-plugin-notification-2.8.1/) |
 | `tauri-plugin-opener-2.7.3` | Apache-2.0 OR MIT | [texts](tauri-plugin-opener-2.7.3/) |
 | `tauri-plugin-single-instance-2.5.5` | Apache-2.0 OR MIT | [texts](tauri-plugin-single-instance-2.5.5/) |
 | `tauri-runtime-2.12.2` | Apache-2.0 OR MIT | [texts](tauri-runtime-2.12.2/) |
 | `tauri-runtime-wry-2.12.3` | Apache-2.0 OR MIT | [texts](tauri-runtime-wry-2.12.3/) |
 | `tauri-utils-2.10.2` | Apache-2.0 OR MIT | [texts](tauri-utils-2.10.2/) |
 | `tauri-winres-0.3.7` | MIT | [texts](tauri-winres-0.3.7/) |
+| `tauri-winrt-notification-0.8.1` | MIT OR Apache-2.0 | [texts](tauri-winrt-notification-0.8.1/) |
 | `tempfile-3.24.0` | MIT OR Apache-2.0 | [texts](tempfile-3.24.0/) |
 | `tendril-0.5.1` | MIT OR Apache-2.0 | [texts](tendril-0.5.1/) |
 | `thiserror-1.0.69` | MIT OR Apache-2.0 | [texts](thiserror-1.0.69/) |
@@ -517,8 +525,11 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `yoke-0.8.4` | Unicode-3.0 | [texts](yoke-0.8.4/) |
 | `yoke-derive-0.8.4` | Unicode-3.0 | [texts](yoke-derive-0.8.4/) |
 | `zbus-5.19.0` | MIT | [texts](zbus-5.19.0/) |
+| `zbus-6.3.0` | MIT | [texts](zbus-6.3.0/) |
 | `zbus_macros-5.19.0` | MIT | [texts](zbus_macros-5.19.0/) |
+| `zbus_macros-6.3.0` | MIT | [texts](zbus_macros-6.3.0/) |
 | `zbus_names-4.3.5` | MIT | [texts](zbus_names-4.3.5/) |
+| `zbus_utils-6.1.0` | MIT | [texts](zbus_utils-6.1.0/) |
 | `zcheapstr-1.2.0` | MIT | [texts](zcheapstr-1.2.0/) |
 | `zerocopy-0.8.63` | BSD-2-Clause OR Apache-2.0 OR MIT | [texts](zerocopy-0.8.63/) |
 | `zerocopy-derive-0.8.63` | BSD-2-Clause OR Apache-2.0 OR MIT | [texts](zerocopy-derive-0.8.63/) |
@@ -530,6 +541,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `zerovec-derive-0.11.7` | Unicode-3.0 | [texts](zerovec-derive-0.11.7/) |
 | `zlib-rs-0.6.8` | Zlib | [texts](zlib-rs-0.6.8/) |
 | `zmij-1.0.23` | MIT | [texts](zmij-1.0.23/) |
+| `zruntime-0.2.3` | MIT | [texts](zruntime-0.2.3/) |
 | `zune-core-0.5.3` | MIT OR Apache-2.0 OR Zlib | [texts](zune-core-0.5.3/) |
 | `zune-jpeg-0.5.15` | MIT OR Apache-2.0 OR Zlib | [texts](zune-jpeg-0.5.15/) |
 | `zvariant-5.15.1` | MIT | [texts](zvariant-5.15.1/) |

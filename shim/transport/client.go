@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -85,7 +86,10 @@ type TunnelOptions struct {
 	// port.
 	LocalPort  uint16
 	PreferPort uint16
-	Identity   key.NodePrivate
+	// ReservedPorts belong to other saved desktop servers. A temporary
+	// fallback must not route those servers' saved addresses to this game.
+	ReservedPorts []uint16
+	Identity      key.NodePrivate
 	// AllowLocalRelay permits relay nodes on private networks for LAN testing.
 	// Relay DNS answers are still pinned before each Tailcat client is started.
 	AllowLocalRelay bool
@@ -306,6 +310,10 @@ func (t *Tunnel) kickHealth() {
 
 func (t *Tunnel) bind() error {
 	loop := netip.AddrFrom4([4]byte{127, 0, 0, 1})
+	reserved := func(requested, bound int) bool {
+		return requested == 0 && slices.Contains(t.opts.ReservedPorts, uint16(bound))
+	}
+	reservedError := errors.New("temporary port belongs to another saved server")
 	try := func(port int) (bool, error) {
 		switch t.opts.Proto {
 		case games.TCP:
@@ -313,14 +321,23 @@ func (t *Tunnel) bind() error {
 			if err != nil {
 				return false, err
 			}
+			boundPort := ln.Addr().(*net.TCPAddr).Port
+			if reserved(port, boundPort) {
+				ln.Close()
+				return false, reservedError
+			}
 			t.tcpLn = ln
-			t.noteBound(ln.Addr().(*net.TCPAddr).Port)
+			t.noteBound(boundPort)
 		default:
 			pc, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(netip.AddrPortFrom(loop, uint16(port))))
 			if err != nil {
 				return false, err
 			}
 			boundPort := pc.LocalAddr().(*net.UDPAddr).Port
+			if reserved(port, boundPort) {
+				pc.Close()
+				return false, reservedError
+			}
 			if t.opts.Game == games.MinecraftBedrock {
 				ln, err := net.Listen("tcp4", netip.AddrPortFrom(loop, uint16(boundPort)).String())
 				if err != nil {

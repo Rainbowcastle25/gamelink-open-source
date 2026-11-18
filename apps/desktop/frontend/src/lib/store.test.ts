@@ -28,6 +28,19 @@ describe("Play (one-click join and launch)", () => {
     expect(t.copy).toHaveBeenCalledWith("127.0.0.1:25565");
   });
 
+  it("shows the saved Minecraft entry and leaves the clipboard alone", async () => {
+    const t = setup();
+    stop = t.stop;
+    vi.spyOn(t.backend, "launchGame").mockResolvedValue({
+      autoConnect: false,
+      address: "127.0.0.1:25565",
+      minecraftEntry: "Friends Survival (GameLink)",
+    });
+    await t.store.loadAll();
+    await t.store.launch("mock-survival");
+    expect(t.copy).not.toHaveBeenCalled();
+  });
+
   it("waits through a failed attempt, launches after Retry connects, and never relaunches on reconnect", async () => {
     const t = setup();
     stop = t.stop;

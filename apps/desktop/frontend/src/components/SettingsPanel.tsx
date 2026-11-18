@@ -71,6 +71,37 @@ function Mono({ children }: { children: ReactNode }) {
   return <code className="font-mono text-xs break-all text-fg/90">{children}</code>;
 }
 
+function PrismFolderField({ value }: { value: string }) {
+  const store = useStore();
+  const id = useId();
+  const [text, setText] = useState(value);
+  return (
+    <>
+      <label htmlFor={id} className="sr-only">Prism instances folder</label>
+      <input
+        id={id}
+        className={inputCls}
+        value={text}
+        placeholder="Full path to the instances folder"
+        spellCheck={false}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => {
+          const folder = text.trim();
+          setText(folder);
+          if (folder !== value) {
+            void store.updateSettings({ prismInstancesDir: folder }).then((ok) => {
+              if (!ok) setText(value);
+            });
+          }
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        }}
+      />
+    </>
+  );
+}
+
 export function SettingsPanel() {
   const { ready, settings, identity, paths, version } = useAppState();
   const store = useStore();
@@ -139,6 +170,9 @@ export function SettingsPanel() {
         <Row title="Check servers on startup" description="Quickly see which servers answer when GameLink opens.">
           <Toggle label="Check servers on startup" checked={settings.checkOnStartup} onChange={(v) => void store.updateSettings({ checkOnStartup: v })} />
         </Row>
+        <Row title="Notify me when servers come online" description="Checks saved servers about every two minutes while GameLink is open. Each check reveals to the host’s agent that you are online.">
+          <Toggle label="Notify me when servers come online" checked={settings.presenceNotifications} onChange={(v) => void store.updateSettings({ presenceNotifications: v })} />
+        </Row>
         <div className="pt-3.5">
           <button
             type="button"
@@ -165,6 +199,20 @@ export function SettingsPanel() {
             </div>
           )}
         </div>
+      </Section>
+
+      <Section title="Minecraft Java">
+        <Row title="Add GameLink servers to Minecraft's multiplayer list" description="Find your servers by name under Multiplayer after joining in GameLink. Close Minecraft before changing its list.">
+          <Toggle label="Add GameLink servers to Minecraft's multiplayer list" checked={settings.minecraftServerList} onChange={(v) => void store.updateSettings({ minecraftServerList: v })} />
+        </Row>
+        {settings.minecraftServerList && (
+          <Row title="Prism instances folder" stack description="Optional. Also sync the multiplayer lists in the Prism instances in this folder.">
+            <PrismFolderField key={settings.prismInstancesDir} value={settings.prismInstancesDir} />
+          </Row>
+        )}
+        {settings.minecraftSyncError && (
+          <p className="pt-3.5 text-[13px] text-warn" role="alert">Minecraft list sync failed. {settings.minecraftSyncError}</p>
+        )}
       </Section>
 
       <Section

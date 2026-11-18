@@ -16,11 +16,30 @@ fn game(typ: &Value) -> Value {
         .cloned()
         .unwrap_or(Value::Null)
 }
+pub(crate) fn default_local_port(server: &Value) -> u16 {
+    game(&server["game"])["defaultPort"]
+        .as_u64()
+        .filter(|&port| port != 0)
+        .or_else(|| server["port"].as_u64())
+        .and_then(|port| u16::try_from(port).ok())
+        .unwrap_or(0)
+}
 fn args(settings: &Value, info: &Value) -> Value {
     settings["gameLaunchArgs"]
         .get(text(info, "type"))
         .cloned()
         .unwrap_or_else(|| info["launchArgs"].clone())
+}
+pub fn launch_connects(game_type: &Value, settings: &Value, can_open_uri: bool) -> bool {
+    let info = game(game_type);
+    if text(&settings["gameExecutables"], text(&info, "type")).is_empty() {
+        can_open_uri && !text(&info, "launchUri").is_empty()
+    } else {
+        has_placeholders(args(settings, &info))
+    }
+}
+fn has_placeholders(template: Value) -> bool {
+    pure::dispatch("games.placeholder", json!({"text":template})).is_ok_and(|v| v == true)
 }
 fn executable(p: &str) -> Result<(), String> {
     if !Path::new(p).is_absolute() {
@@ -42,6 +61,10 @@ pub fn dispatch(method: &str, v: Value) -> Result<Value, String> {
         "desktop.settings_view" => {
             let mut out = v["settings"].clone();
             out["checkForUpdates"] = json!(out["checkForUpdates"] == true);
+            for key in ["minecraftServerList", "presenceNotifications"] {
+                out[key] = json!(out[key] == true);
+            }
+            out["prismInstancesDir"] = json!(text(&out, "prismInstancesDir"));
             out["gameExecutables"] = out["gameExecutables"]
                 .as_object()
                 .cloned()
@@ -60,6 +83,13 @@ pub fn dispatch(method: &str, v: Value) -> Result<Value, String> {
                 .as_bool()
                 .or_else(|| v["saved"]["checkForUpdates"].as_bool())
                 .unwrap_or(false));
+            let prism = text(&out, "prismInstancesDir").trim();
+            if !prism.is_empty()
+                && (prism.len() > 1024 || prism.contains('\0') || !Path::new(prism).is_absolute())
+            {
+                return Err("use a full path to the Prism instances folder".into());
+            }
+            out["prismInstancesDir"] = json!(prism);
             let mut exes = json!({});
             if let Some(values) = out["gameExecutables"].as_object() {
                 for (typ, p) in values {
@@ -191,8 +221,7 @@ pub fn dispatch(method: &str, v: Value) -> Result<Value, String> {
                     ),
                 )
             };
-            let auto = kind == "uri"
-                || pure::dispatch("games.placeholder", json!({"text":template}))? == true;
+            let auto = kind == "uri" || has_placeholders(template.clone());
             let expanded = pure::dispatch("games.expand", json!({"text":template,"port":port}))?;
             let message = if auto {
                 format!("{message_prefix} and asked it to join {address}")
@@ -242,14 +271,11 @@ pub fn dispatch(method: &str, v: Value) -> Result<Value, String> {
         }
         "desktop.join_parameters" => {
             let server = &v["server"];
-            let info = game(&server["game"]);
-            let prefer = if server["localPort"].as_u64().unwrap_or(0) != 0 {
-                json!(0)
-            } else if info["defaultPort"].as_u64().unwrap_or(0) != 0 {
-                info["defaultPort"].clone()
-            } else {
-                server["port"].clone()
-            };
+            let prefer = server["stablePort"]
+                .as_u64()
+                .filter(|&port| port != 0)
+                .or_else(|| server["localPort"].as_u64().filter(|&port| port != 0))
+                .unwrap_or_else(|| u64::from(default_local_port(server)));
             Ok(json!({"preferPort":prefer}))
         }
         _ => Err("unknown desktop policy method".into()),
@@ -654,7 +680,7 @@ mod policy_tests {
         };
         assert_eq!(
             params(json!({"game":"factorio","localPort":4000,"port":1})),
-            0
+            4000
         );
         assert_eq!(
             params(json!({"game":"factorio","localPort":0,"port":1})),

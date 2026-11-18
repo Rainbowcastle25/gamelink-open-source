@@ -131,8 +131,10 @@ gamelink-agent requests list --game our-minecraft
 gamelink-agent requests approve 1 --label "Sam's PC"
 ```
 
-If the first attempt timed out, your friend clicks **Join** again. Once
-connected, they add the server in Minecraft at the address GameLink shows
+If the first attempt timed out, your friend clicks **Join** again. With
+**Add GameLink servers to Minecraft's multiplayer list** enabled in Settings,
+they then select **Our Minecraft (GameLink)** in Minecraft's multiplayer list;
+with it off, they use the local address shown on the server card
 (normally `127.0.0.1:25565`).
 
 **One-click Play.** In Settings, under *Local game executables*, pick the
@@ -143,12 +145,18 @@ tunnel is up, and starts the game:
 |---|---|
 | Factorio | Starts `factorio.exe --mp-connect 127.0.0.1:<port>`; Factorio joins on start |
 | Minecraft Bedrock | Needs no program: opens a `minecraft://connect` link that joins the server |
-| Minecraft Java (official launcher) | Starts the launcher and copies the address; the launcher cannot be told a server, so paste it under Multiplayer |
-| Minecraft Java (Prism Launcher) | Set the connect arguments to `-l <instance> -s {address}` and it joins directly |
+| Minecraft Java (official launcher) | Starts the launcher. With multiplayer list integration on, select `<server name> (GameLink)` in Multiplayer. Otherwise paste the address Play copies. |
+| Minecraft Java (Prism Launcher) | Use `-l <instance> -s {address}` to join directly, or configure your Prism instances folder in Settings and select the named entry in Multiplayer. |
 | Other | Your own connect arguments, with `{address}`, `{host}` or `{port}` |
 
-The arguments only ever contain GameLink's local address, never the server's.
-**Join only** still connects without starting anything.
+GameLink gives each saved server a stable local port. If the port is busy,
+the card shows the temporary address for that session. **Join only** opens
+the tunnel without starting the game.
+
+Friends can also enable **Notify me when servers come online**. GameLink checks
+saved servers about every two minutes while the app is open and posts an OS
+notification when a previously offline server answers. Each check reveals to
+the host's agent that the player's device is online.
 
 To stop someone: `gamelink-agent devices revoke --game our-minecraft --key nodekey:...`
 

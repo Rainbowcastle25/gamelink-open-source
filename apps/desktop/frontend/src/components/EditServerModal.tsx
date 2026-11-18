@@ -64,7 +64,7 @@ export function EditServerModal({ server, onClose }: { server: ServerView; onClo
         <Field label="Description (optional)">
           {({ id }) => <input id={id} value={description} onChange={(e) => setDescription(e.target.value)} className={inputCls} />}
         </Field>
-        <Field label="Local port (empty or 0 = automatic)" error={portError} hint="The port on this PC that your game connects to.">
+        <Field label="Local port (empty or 0 = automatic)" error={portError} hint={server.stablePort ? `Currently assigned port ${server.stablePort}. Enter a different port to change it.` : "The port on this PC that your game connects to."}>
           {({ id, describedBy }) => (
             <input
               id={id}

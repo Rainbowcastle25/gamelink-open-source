@@ -159,8 +159,8 @@ In GameLink: **Servers → Add server → Import invitation**, paste the whole
 `glink1.…` text. GameLink shows the name, game and port for confirmation (never
 the secret). Press **Add server** in the dialog, then press **Join** on the new
 server's card. (If you have set Minecraft's program in **Settings → Local game
-executables**, the card shows **Play** instead. Play joins and then starts the
-game, copying the address for you; **Join only** just connects.)
+executables**, the card shows **Play** alongside **Join only**. Play connects
+and starts the game.)
 
 The first attempt can show **no response** while the host is waiting to approve
 your device. Let the host know when you clicked **Join**. The agent must be
@@ -185,16 +185,35 @@ host administrator approve their current device and import a game.
 If the first attempt timed out, the friend clicks **Join** again after the
 agent reloads. The card shows **Connected**, the network path
 (**Direct** or **Relay**), latency and the local
-address (normally `127.0.0.1:25565`). If 25565 is busy, GameLink picks a free
-port and shows which one it chose. ✅
+address (normally `127.0.0.1:25565`). Each saved server keeps the same local
+port between sessions. If that port is busy, GameLink shows the temporary
+address for this connection and keeps the stable port for the next join. ✅
+
+To get notified after a server comes online, turn on **Settings → Notify me
+when servers come online**. GameLink checks saved servers about every two
+minutes while open. Each check reveals to the host's agent that your device
+is online. The first result establishes a baseline. GameLink sends a local
+OS notification after an observed offline-to-online change, at most once per
+server every ten minutes. For legacy UDP games such as Factorio, the check
+measures whether the host agent answers.
 
 ## H. Connect from Minecraft Java (friend)
 
-With the tunnel connected, start Minecraft Java Edition, **Multiplayer → Add
-Server**, and enter the local address shown in GameLink (for example
-`127.0.0.1:25565`). Join. 🟡 *Minecraft's own protocol has not been exercised
-end to end; the tunnel carries arbitrary TCP and is tested with an echo server,
-including half-close behaviour.*
+With Minecraft closed, turn on **Settings → Add GameLink servers to
+Minecraft's multiplayer list**. GameLink adds your Java servers to the
+default `.minecraft/servers.dat`. For Prism, enter the full path to Prism's
+`instances` folder to sync its existing instances too. GameLink backs up an
+existing list to `servers.dat.gamelink-backup` before modifying it and skips
+files it cannot read. Turning the setting off or deleting a server removes
+the corresponding GameLink entries.
+
+Click **Join** or **Play** in GameLink, then select **Our Minecraft (GameLink)**
+under **Multiplayer**. If the stable port was busy, use **Direct Connection**
+with the temporary address shown in GameLink. With the list setting off, you
+can use **Multiplayer → Add Server** and enter the address shown on the card.
+
+🟡 *Verification covers generated server-list fixtures and the tunnel's TCP
+echo tests. Real Minecraft gameplay has not been exercised.*
 
 Tip: the server's `online-mode` and whitelist are separate from GameLink. Keep
 `online-mode=true` unless you know why you are changing it, and consider also
@@ -271,7 +290,7 @@ hardware checks.
 | "no response from the server" | Agent not running, not approved, wrong/old invitation, or the host has no outbound internet |
 | Connected, but the game says refused/timeout | The game server itself is down or listens elsewhere. GameLink shows *game not reachable* when the agent cannot reach the destination |
 | Works on Relay only | Strict NAT; normal. Latency will be higher |
-| "port busy" | Pick another local port in the server's settings |
+| "stable port was unavailable" | Use the temporary address for this session, or release the stable port and rejoin |
 | Host or `gl status` says "waiting for join requests" | Ask your friend to join, then check **People** on desktop or run `gl requests list --game <id>` on Linux |
 | Friend's PC changed or reinstalled | New device key; approve the new key and revoke the old one |
 

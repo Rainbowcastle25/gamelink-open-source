@@ -192,7 +192,7 @@ export function ServerCard({ server, busy, onJoin, onPlay, onDisconnect, onCheck
             <Detail label="Protocol and port">
               {protoLabel(server.proto || "tcp")} · tunnel port {server.port}
             </Detail>
-            <Detail label="Local port">{server.localPort ? server.localPort : `Automatic (starts at ${server.defaultPort || server.port})`}</Detail>
+            <Detail label="Stable local port">{server.stablePort || server.localPort || server.defaultPort || server.port}</Detail>
             <Detail label="Relay">
               <span title={relayText}>{relayText}</span> <span className="text-muted">({server.defaultRelay ? "public relay" : "custom relay"})</span>
             </Detail>
