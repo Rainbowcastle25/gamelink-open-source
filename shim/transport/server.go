@@ -53,6 +53,9 @@ type ServerOptions struct {
 	// Event, if set, receives human-readable events (denials, dial failures).
 	Event func(kind, msg string)
 
+	// AllowTCPDial optionally gates each new TCP connection to Dest.
+	AllowTCPDial func() bool
+
 	// Peers optionally records authorized gameplay sessions.
 	Peers *PeerActivity
 
@@ -337,6 +340,10 @@ func (g *GameServer) onTCP(port uint16) func(net.Conn) {
 		if g.bedrockHost != nil {
 			g.opts.Peers.recordSession(g.allowed, c.RemoteAddr())
 			g.bedrockHost.Handle(c)
+			return
+		}
+		if g.opts.AllowTCPDial != nil && !g.opts.AllowTCPDial() {
+			c.Close()
 			return
 		}
 		d := net.Dialer{Timeout: g.opts.DialTimeout}

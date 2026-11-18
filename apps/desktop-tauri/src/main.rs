@@ -3,7 +3,6 @@ mod bridge;
 mod host;
 mod host_connection;
 mod hosting;
-mod lan;
 mod minecraft_lists;
 mod presence;
 #[cfg(windows)]

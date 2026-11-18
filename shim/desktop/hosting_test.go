@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -179,4 +181,73 @@ func TestDesktopHostAccessAndRevocation(t *testing.T) {
 	must(map[string]any{"method": "host_stop", "id": "game", "generation": 2}) // stale stop
 	noResponse(alice)
 	echoThrough(bob).Close()
+	must(map[string]any{"method": "host_stop", "id": "game", "generation": 3})
+
+	t.Run("LANExpiryRefusesDialAfterSuspendBeforePoll", func(t *testing.T) {
+		discovery := owner.lan
+		started := lanNow()
+		var suspended atomic.Int64
+		discovery.clock = func() lanTime {
+			return lanTime{monotonic: started.monotonic, wall: started.wall.Add(time.Duration(suspended.Load()))}
+		}
+		world := lanWorld{Name: "Cabin", Port: netip.MustParseAddrPort(echo.Addr().String()).Port()}
+		discovery.record(world)
+		_, err := invoke(map[string]any{
+			"method": "host_start", "id": "game", "generation": 4,
+			"keys": keys, "approved": []key.NodePublic{bob.Public()},
+			"game": hostedGame{Type: games.MinecraftJava, Protocol: games.TCP, TunnelPort: 25565, Dest: echo.Addr().String(), LANName: &world.Name},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tun, err := join(bob)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tun.Stop()
+		open := func() net.Conn {
+			t.Helper()
+			c, err := net.DialTimeout("tcp", tun.Status().LocalAddr, 5*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.SetDeadline(time.Now().Add(5 * time.Second))
+			return c
+		}
+		live := open()
+		defer live.Close()
+		if _, err := live.Write([]byte("a")); err != nil {
+			t.Fatal(err)
+		}
+		var got [1]byte
+		if _, err := io.ReadFull(live, got[:]); err != nil || got[0] != 'a' {
+			t.Fatal("a fresh LAN announcement did not allow forwarding")
+		}
+
+		suspended.Store(int64(lanPacketTTL))
+		worlds, err := discovery.snapshot(lanPacketTTL)
+		if err != nil || slices.Contains(worlds, world) || !discovery.live(world) {
+			t.Fatal("a packet aged six seconds should only remain visible to the existing share")
+		}
+
+		// Only the wall clock advances. The last packet is still cached and
+		// the owner has not made a LAN or host reconciliation call.
+		suspended.Store(int64(lanShareTTL))
+		before := accepted.Load()
+		expired := open()
+		defer expired.Close()
+		_, _ = expired.Write([]byte("b"))
+		if n, err := expired.Read(make([]byte, 1)); n != 0 || err == nil {
+			t.Fatal("an inbound flow reached the expired LAN destination")
+		} else if e, ok := err.(net.Error); ok && e.Timeout() {
+			t.Fatal("the expired inbound flow was not refused")
+		}
+		if accepted.Load() != before {
+			t.Fatal("the expired flow opened a connection to the game port")
+		}
+		worlds, err = discovery.snapshot(lanShareTTL)
+		if err != nil || slices.Contains(worlds, world) {
+			t.Fatal("the first poll after suspend still reported the stale world")
+		}
+	})
 }

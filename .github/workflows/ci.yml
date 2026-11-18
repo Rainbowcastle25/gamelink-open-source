@@ -216,14 +216,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: migrated-tests-windows
-      - name: Run migrated package tests (including Windows DPAPI)
+      - name: Run migrated package tests, Windows DPAPI, and desktop LAN discovery
         shell: pwsh
         env:
           GAMELINK_REQUIRE_PANIC_PROBE: '1'
         run: |
-          Get-ChildItem *.test.exe | ForEach-Object {
-            $test = $_.FullName
-            $package = $_.Name -replace '\.test\.exe$', ''
+          @('rustcore', 'invite', 'desktop') | ForEach-Object {
+            $package = $_
+            $test = (Get-Item -ErrorAction Stop "$package.test.exe").FullName
             Push-Location "shim/$package"
             try {
               & $test '-test.v'

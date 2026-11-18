@@ -45,7 +45,7 @@ var owner struct {
 	private     key.NodePrivate
 	resources   map[resourceID]*resource
 	hosts       map[resourceID]hostedResource
-	lan         *lanListener
+	lan         *lanDiscovery
 }
 var mailbox struct {
 	sync.Mutex
@@ -77,6 +77,7 @@ func dispatch(input []byte) (any, error) {
 		Game            hostedGame
 		Keys            gamehost.Keys
 		Approved        []string
+		Sharing         bool
 	}
 	if json.Unmarshal(input, &r) != nil {
 		return nil, errors.New("invalid desktop request")
@@ -95,6 +96,7 @@ func dispatch(input []byte) (any, error) {
 		}
 		owner.resources = map[resourceID]*resource{}
 		owner.hosts = map[resourceID]hostedResource{}
+		owner.lan = newLANDiscovery()
 		mailbox.events = map[resourceID]map[string]any{}
 		owner.initialized = true
 		return nil, nil
@@ -143,29 +145,15 @@ func dispatch(input []byte) (any, error) {
 		}
 		return snapshots, nil
 	case "lan_scan":
-		if owner.lan == nil {
-			l, err := listenLAN()
-			if err != nil {
-				return nil, err
-			}
-			owner.lan = l
+		ttl := lanPacketTTL
+		if r.Sharing {
+			ttl = lanShareTTL
 		}
-		packets, err := owner.lan.snapshot()
-		if err != nil {
-			owner.lan.close()
-			owner.lan = nil
-		}
-		return packets, err
+		return owner.lan.poll(ttl)
 	case "lan_packets":
-		if owner.lan == nil {
-			return nil, nil
-		}
-		return owner.lan.snapshot()
+		return owner.lan.snapshot(lanPacketTTL)
 	case "lan_close":
-		if owner.lan != nil {
-			owner.lan.close()
-			owner.lan = nil
-		}
+		owner.lan.close()
 		return nil, nil
 	case "generate":
 		private := key.NewNode()

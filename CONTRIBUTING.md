@@ -9,9 +9,11 @@ Thanks for helping. GameLink is small on purpose; please keep it that way.
   remain pinned to the selected interface/subnet and configured BDS endpoint,
   and the receive-only Minecraft Java LAN discovery socket on multicast
   `224.0.2.60:4445`, which may only run while GameLink's **Host** view is open
-  or GameLink is actively sharing a Minecraft Java LAN world. Never open router
-  ports, run remote commands, transfer files, add an admin API or telemetry, or
-  set Tailcat forwarding hooks.
+  or a Minecraft Java LAN world is shared. Discovery stays open while a share
+  is paused, until **Stop sharing** or app exit. An open **Host** view can
+  keep discovery running after **Stop sharing**. Never open router ports, run
+  remote commands, transfer files, add an admin API or telemetry, or set Tailcat
+  forwarding hooks.
 - **No secrets in the repository,** including test fixtures. Tests generate
   fresh keys. Never paste a real invitation or `nodekey` into an issue.
 - **No fake data in the UI.** Demo mode is the only place sample data may

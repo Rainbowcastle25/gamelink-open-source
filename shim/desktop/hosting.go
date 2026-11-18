@@ -16,6 +16,7 @@ type hostedGame struct {
 	Protocol   games.Protocol
 	TunnelPort uint16
 	Dest       string
+	LANName    *string `json:"lanName,omitempty"`
 }
 
 type hostedResource struct {
@@ -59,11 +60,20 @@ func startHost(id resourceID, game hostedGame, keys gamehost.Keys, approved []st
 	if err != nil {
 		return err
 	}
+	var allowTCPDial func() bool
+	if game.LANName != nil {
+		if game.Type != games.MinecraftJava || game.Protocol != games.TCP {
+			return errors.New("desktop LAN sharing requires Minecraft Java TCP")
+		}
+		discovery := owner.lan
+		world := lanWorld{Name: *game.LANName, Port: dest.Port()}
+		allowTCPDial = func() bool { return discovery.live(world) }
+	}
 	activity := transport.NewPeerActivity()
 	server, err := transport.StartGameServer(transport.ServerOptions{
 		ID: id.ID, Game: game.Type, Protocol: game.Protocol, TunnelPort: game.TunnelPort,
 		Dest: dest, Private: private, PSK: psk, Region: keys.Region, Approved: peers, Peers: activity,
-		CollectRequests: true, ExpiresAt: keys.ExpiresAt,
+		CollectRequests: true, ExpiresAt: keys.ExpiresAt, AllowTCPDial: allowTCPDial,
 	})
 	if err != nil {
 		return err

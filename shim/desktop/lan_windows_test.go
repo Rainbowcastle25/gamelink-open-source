@@ -3,40 +3,74 @@
 package main
 
 import (
+	"errors"
 	"net"
 	"slices"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
-// Minecraft sends its announcement from a plain UDP socket on the default
-// multicast interface, not loopback. Discovery must receive that copy.
-func TestWindowsDiscoveryReceivesDefaultInterfaceAnnouncement(t *testing.T) {
-	listener, err := listenLAN()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.close()
-	sender, err := net.ListenUDP("udp4", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sender.Close()
-	const announcement = "[MOTD]Windows LAN World[/MOTD][AD]51001[/AD]"
-	group := net.UDPAddrFromAddrPort(lanGroup)
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := sender.WriteToUDP([]byte(announcement), group); err != nil {
-			t.Skipf("no default IPv4 multicast route on this machine: %v", err)
+// Minecraft sends announcements using the default IPv4 multicast interface.
+func TestWindowsDiscoveryAcceptsDefaultInterfaceMulticastAndRejectsUnicast(t *testing.T) {
+	checkRoute := func(err error) {
+		t.Helper()
+		if errors.Is(err, windows.WSAENETUNREACH) || errors.Is(err, windows.WSAEHOSTUNREACH) ||
+			errors.Is(err, windows.WSAEADDRNOTAVAIL) || errors.Is(err, windows.WSAENETDOWN) {
+			t.Skipf("default IPv4 multicast route unavailable: %v", err)
 		}
-		time.Sleep(50 * time.Millisecond)
-		packets, err := listener.snapshot()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if slices.Contains(packets, announcement) {
-			return
+	}
+
+	sender, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(lanGroup))
+	checkRoute(err)
+	defer sender.Close()
+	ip := sender.LocalAddr().(*net.UDPAddr).IP
+	if ip.IsUnspecified() {
+		t.Fatal("the multicast socket did not select a local IPv4 address")
+	}
+	unicast, err := net.ListenUDP("udp4", &net.UDPAddr{IP: ip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unicast.Close()
+
+	discovery := newLANDiscovery()
+	if _, err := discovery.poll(lanPacketTTL); err != nil {
+		t.Fatal(err)
+	}
+	defer discovery.close()
+
+	rejected := lanWorld{Name: "Windows Unicast", Port: 51002}
+	accepted := lanWorld{Name: "Windows LAN World", Port: 51001}
+	if _, err := unicast.WriteToUDP([]byte("[MOTD]Windows Unicast[/MOTD][AD]51002[/AD]"),
+		&net.UDPAddr{IP: ip, Port: int(lanGroup.Port())}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	var received time.Time
+	for time.Now().Before(deadline) {
+		if received.IsZero() {
+			_, err := sender.Write([]byte("[MOTD]Windows LAN World[/MOTD][AD]51001[/AD]"))
+			checkRoute(err)
+		}
+		time.Sleep(50 * time.Millisecond)
+		worlds, err := discovery.snapshot(lanPacketTTL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(worlds, rejected) {
+			t.Fatal("discovery accepted unicast addressed to the multicast interface")
+		}
+		if received.IsZero() && slices.Contains(worlds, accepted) {
+			received = time.Now()
+			deadline = received.Add(250 * time.Millisecond)
 		}
 	}
-	t.Fatal("did not receive an announcement sent on the default interface")
+	if received.IsZero() {
+		t.Fatalf("discovery did not receive multicast sent on the default interface (%v)", ip)
+	}
 }
