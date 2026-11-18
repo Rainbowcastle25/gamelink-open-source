@@ -1,6 +1,8 @@
 //! Serialized host loop. Rust owns observations, effects and publication; Go
 //! receives one generation's validated network parameters and owns its handles.
-use crate::{bridge, config, json, log, now, pure, rows, s, storage, Result};
+use crate::{
+    bridge, config, invitations, json, log, now, pure, requests, rows, s, storage, Result,
+};
 use gamelink_core::supervisor::{self, Effect, Event, State};
 use serde_json::Value;
 use std::{
@@ -17,6 +19,9 @@ pub fn serve(dir: &Path, stopping: &AtomicBool, verbose: bool) -> Result<()> {
         origin: Instant::now(),
         started: now(),
         games: vec![],
+        request_scopes: BTreeMap::new(),
+        running_identities: BTreeMap::new(),
+        request_store_failed: false,
         verbose,
     };
     let result = runtime.run(stopping);
@@ -32,6 +37,9 @@ struct Runtime<'a> {
     origin: Instant,
     started: String,
     games: Vec<Value>,
+    request_scopes: BTreeMap<String, requests::Scope>,
+    running_identities: BTreeMap<String, String>,
+    request_store_failed: bool,
     verbose: bool,
 }
 impl Runtime<'_> {
@@ -60,6 +68,7 @@ impl Runtime<'_> {
             }
             std::thread::sleep(Duration::from_millis(100));
         }
+        self.publish_requests();
         let out = self.reduce(Event::Shutdown)?;
         self.effects(out.effects, &BTreeMap::new())
     }
@@ -69,6 +78,7 @@ impl Runtime<'_> {
             json!({"path":self.dir.join("agent.json")}),
         );
         let mut games = BTreeMap::new();
+        self.request_scopes.clear();
         let event = match cfg {
             Err(cause) => {
                 log("configuration problem; stopping affected game resources");
@@ -78,6 +88,7 @@ impl Runtime<'_> {
                 let mut observed = vec![];
                 for game in rows(&cfg["games"]) {
                     let id = s(game, "id");
+                    let keys = invitations::load_keys(self.dir, id);
                     let mt = std::fs::metadata(self.dir.join("keys").join(format!("{id}.json")))
                         .and_then(|m| m.modified())
                         .ok()
@@ -95,8 +106,27 @@ impl Runtime<'_> {
                             break;
                         }
                     }
-                    observed
-                        .push(json!({"game":game,"keyMtimeNs":mt,"approvedError":approved_error}));
+                    let mut observation =
+                        json!({"game":game,"keyMtimeNs":mt,"approvedError":approved_error});
+                    if let Ok(keys) = keys {
+                        let expired = pure::check_invite_expiry(&keys["expiresAt"]).is_err();
+                        let knock_enabled = game["knockEnabled"] == true;
+                        let scope = requests::Scope::new(game, keys);
+                        observation["keyIdentity"] = json!(format!(
+                            "{}|{}",
+                            scope.identity,
+                            s(&scope.keys, "expiresAt")
+                        ));
+                        observation["knockEnabled"] = json!(knock_enabled);
+                        observation["expired"] = json!(expired);
+                        if !expired
+                            && game["disabled"] != true
+                            && observation["approvedError"].is_null()
+                        {
+                            self.request_scopes.insert(id.to_owned(), scope);
+                        }
+                    }
+                    observed.push(observation);
                     games.insert(id.to_owned(), game.clone());
                 }
                 serde_json::from_value(
@@ -106,6 +136,7 @@ impl Runtime<'_> {
             }
         };
         let out = self.reduce(event)?;
+        self.publish_requests();
         self.effects(out.effects, &games)?;
         let final_state = self.reduce(Event::Commit)?;
         self.games = final_state
@@ -117,6 +148,14 @@ impl Runtime<'_> {
             self.publish()?;
         }
         Ok(())
+    }
+    fn publish_requests(&mut self) {
+        let failed =
+            requests::publish(self.dir, &self.request_scopes, &self.running_identities).is_err();
+        if failed && !self.request_store_failed {
+            log("could not publish join requests");
+        }
+        self.request_store_failed = failed;
     }
     fn effects(&mut self, effects: Vec<Effect>, games: &BTreeMap<String, Value>) -> Result<()> {
         for effect in effects {
@@ -130,6 +169,7 @@ impl Runtime<'_> {
                 }
                 Effect::Stop { id, generation } => {
                     bridge::call(json!({"method":"stop","id":id,"generation":generation}))?;
+                    self.running_identities.remove(&id);
                 }
                 Effect::Start { id, generation } => {
                     let error = self.start(&id, generation, games).err();
@@ -145,18 +185,15 @@ impl Runtime<'_> {
         }
         Ok(())
     }
-    fn start(&self, id: &str, generation: u64, games: &BTreeMap<String, Value>) -> Result<()> {
+    fn start(&mut self, id: &str, generation: u64, games: &BTreeMap<String, Value>) -> Result<()> {
         let mut game = games
             .get(id)
             .ok_or("supervisor requested an unknown game")?
             .clone();
-        let keys = config::dispatch(
-            "config.keys_load",
-            json!({"id":id,"path":self.dir.join("keys").join(format!("{id}.json"))}),
-        )?;
-        if keys["missing"] == true {
-            return Err(format!("keys for {id:?} are missing"));
-        }
+        let keys = match self.request_scopes.get(id) {
+            Some(scope) => scope.keys.clone(),
+            None => invitations::load_keys(self.dir, id)?,
+        };
         game["dest"] = pure::dispatch("security.destination", json!({"text":game["dest"]}))?;
         let approved: Vec<_> = rows(&game["devices"])
             .iter()
@@ -167,8 +204,10 @@ impl Runtime<'_> {
             .ok_or("invalid game")?
             .remove("devices");
         bridge::call(
-            json!({"method":"start","id":id,"generation":generation,"game":game,"keys":keys["keys"],"approved":approved,"verbose":self.verbose}),
+            json!({"method":"start","id":id,"generation":generation,"game":game,"keys":keys,"approved":approved,"verbose":self.verbose}),
         )?;
+        self.running_identities
+            .insert(id.to_owned(), requests::identity(&keys));
         Ok(())
     }
     fn publish(&self) -> Result<()> {
@@ -232,6 +271,7 @@ mod tests {
             match method.as_str() {
                 "start" | "stop" | "shutdown" | "init" => Ok(Value::Null),
                 "stats" => Ok(s.stats.clone()),
+                "requests" => Ok(json!({})),
                 "logs" => {
                     if let Some(f) = s.on_logs.as_mut() {
                         f();
@@ -306,6 +346,9 @@ mod tests {
             origin: Instant::now(),
             started: now(),
             games: vec![],
+            request_scopes: BTreeMap::new(),
+            running_identities: BTreeMap::new(),
+            request_store_failed: false,
             verbose: false,
         }
     }

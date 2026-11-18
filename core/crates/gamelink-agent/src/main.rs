@@ -1,7 +1,9 @@
 mod bridge;
 mod host_admin;
 mod host_setup;
+mod invitations;
 mod pterodactyl;
+mod requests;
 mod runtime;
 use clap::{Arg, ArgAction, Command};
 use gamelink_core::{config, pure, storage};
@@ -57,6 +59,15 @@ impl Cli {
         extra["path"] = json!(self.path());
         extra["action"] = json!(action);
         core("config.agent_mutate", extra)
+    }
+    fn approve_device(
+        &self,
+        game: &str,
+        key: &str,
+        label: &str,
+        expected_keys: &Value,
+    ) -> Result<Value> {
+        self.mutate("approve", json!({"id":game,"publicKey":key,"label":label,"now":now(),"expectedKeys":expected_keys}))
     }
     fn execute(&self, cmd: &str, m: &clap::ArgMatches) -> Result<i32> {
         let get = |k: &str| m.get_one::<String>(k).map(String::as_str).unwrap_or("");
@@ -115,7 +126,7 @@ impl Cli {
                     s(&game, "dest"),
                     s(&region, "RegionName")
                 );
-                println!("Nobody can reach it yet: no devices are approved. Next:\n  gamelink-agent devices approve --game {} --key nodekey:<friend's key> --label <name>\n  gamelink-agent invite --game {}",s(&game,"id"),s(&game,"id"));
+                println!("Nobody can reach it yet: no devices are approved. Share a private invitation with:\n  gamelink-agent invite --game {}",s(&game,"id"));
             }
             "games list" => {
                 let cfg = self.load()?;
@@ -158,14 +169,15 @@ impl Cli {
                 if game.is_empty() || get("key").is_empty() {
                     return Err("--game and --key are required".into());
                 }
-                let d=self.mutate(if cmd.ends_with("approve"){ "approve" }else{"revoke"},json!({"id":game,"publicKey":get("key"),"label":if cmd.ends_with("approve"){get("label")}else{""},"now":now()}))?;
                 if cmd.ends_with("approve") {
+                    let d = self.approve_device(game, get("key"), get("label"), &Value::Null)?;
                     print!("Approved {} for {game:?}", s(&d, "publicKey"));
                     if !s(&d, "label").is_empty() {
                         print!(" ({})", s(&d, "label"));
                     }
                     println!(".\nA running agent picks this up within a few seconds. Share the invitation privately: gamelink-agent invite --game {game}");
                 } else {
+                    self.mutate("revoke", json!({"id":game,"publicKey":get("key")}))?;
                     println!("Revoked. A running agent restarts {game:?} within a few seconds, which ends that device's open sessions and blocks new ones.\nOther approved devices reconnect automatically after the brief restart.");
                 }
             }
@@ -200,37 +212,8 @@ impl Cli {
                     print_table(table);
                 }
             }
-            "invite" => {
-                let id = get("game");
-                if id.is_empty() {
-                    return Err("--game is required".into());
-                }
-                let cfg = self.load()?;
-                let g = rows(&cfg["games"])
-                    .iter()
-                    .find(|g| s(g, "id") == id)
-                    .ok_or_else(|| format!("no game with id {id:?}"))?;
-                let keys = config::dispatch(
-                    "config.keys_load",
-                    json!({"id":id,"path":self.dir.join("keys").join(format!("{id}.json"))}),
-                )?;
-                if keys["missing"] == true {
-                    return Err(format!("keys for {id:?} are missing"));
-                }
-                let addr = bridge::call(
-                    json!({"method":"address","keys":keys["keys"],"allowLocalRelay":flag("allow-local-relay")}),
-                )?;
-                let inv = json!({"v":1,"name":if get("name").is_empty(){s(g,"name")}else{get("name")},"game":g["type"],"proto":g["protocol"],"port":g["tunnelPort"],"addr":addr,"note":get("note"),"consoleBridge":if g["consoleBridge"].is_null(){0}else{1}});
-                core("invite.fields", inv.clone())?;
-                let encoded = core("invite.encode", inv)?;
-                println!("{}", encoded.as_str().ok_or("invalid invitation response")?);
-                eprintln!("\nThis invitation is a SECRET: share it privately (direct message), never publicly.\nIt only works for devices you have approved for this game.");
-                if rows(&g["devices"]).is_empty() {
-                    eprintln!(
-                        "Warning: no devices are approved for {id:?} yet, so nobody can connect."
-                    );
-                }
-            }
+            "invite" | "invite rotate" => self.invite(m, cmd == "invite rotate")?,
+            "requests list" | "requests approve" | "requests dismiss" => self.requests(cmd, m)?,
             "status" => self.status(flag("json"))?,
             "host detect" => {
                 if get("panel-url").is_empty() || get("token-file").is_empty() {
@@ -532,24 +515,22 @@ fn run() -> i32 {
         }
         cmd = format!("host {}", args.remove(0));
     }
-    if cmd == "games" || cmd == "devices" {
+    if cmd == "invite" && args.first().is_some_and(|arg| arg == "rotate") {
+        args.remove(0);
+        cmd = "invite rotate".into();
+    }
+    if matches!(cmd.as_str(), "games" | "devices" | "requests") {
+        let subcommands = match cmd.as_str() {
+            "games" => ["add", "list", "remove"],
+            "devices" => ["approve", "revoke", "list"],
+            _ => ["list", "approve", "dismiss"],
+        };
         if args.is_empty() {
-            eprintln!(
-                "usage: gamelink-agent {cmd} {}",
-                if cmd == "games" {
-                    "add|list|remove"
-                } else {
-                    "approve|revoke|list"
-                }
-            );
+            eprintln!("usage: gamelink-agent {cmd} {}", subcommands.join("|"));
             return 2;
         }
         let sub = args.remove(0);
-        if !(if cmd == "games" {
-            ["add", "list", "remove"].contains(&sub.as_str())
-        } else {
-            ["approve", "revoke", "list"].contains(&sub.as_str())
-        }) {
+        if !subcommands.contains(&sub.as_str()) {
             eprintln!("unknown {cmd} command {sub:?}");
             return 2;
         }
@@ -563,7 +544,11 @@ fn run() -> i32 {
         "devices approve",
         "devices revoke",
         "devices list",
+        "requests list",
+        "requests approve",
+        "requests dismiss",
         "invite",
+        "invite rotate",
         "serve",
         "status",
         "host refresh",
@@ -620,13 +605,14 @@ fn parse(cmd: &str, args: Vec<String>) -> std::result::Result<clap::ArgMatches, 
     let mut normalized = vec!["gamelink-agent".to_owned()];
     let mut i = 0;
     let mut positional = false;
+    let options_after_positionals = cmd.starts_with("requests ");
     while i < args.len() {
         let a = &args[i];
         if positional || a == "-" || !a.starts_with('-') {
-            if !positional {
+            if !positional && !options_after_positionals {
                 normalized.push("--".into());
+                positional = true;
             }
-            positional = true;
             normalized.push(a.clone());
             i += 1;
             continue;
@@ -697,13 +683,14 @@ fn parse(cmd: &str, args: Vec<String>) -> std::result::Result<clap::ArgMatches, 
         eprintln!("{e}");
         2
     })?;
-    if cmd == "games remove"
-        && m.get_many::<String>("positional")
-            .map(|v| v.len())
-            .unwrap_or(0)
-            != 1
-    {
-        eprintln!("usage: gamelink-agent games remove <id>");
+    let count = m.get_many::<String>("positional").map_or(0, |v| v.len());
+    if let Some(operand) = match cmd {
+        "games remove" if count != 1 => Some("<id>"),
+        "requests approve" | "requests dismiss" if count != 1 => Some("<id|key> [options]"),
+        "requests list" | "invite" | "invite rotate" if count != 0 => Some("[options]"),
+        _ => None,
+    } {
+        eprintln!("usage: gamelink-agent {cmd} {operand}");
         return Err(2);
     }
     Ok(m)
@@ -716,7 +703,10 @@ fn specs(cmd: &str) -> Vec<(&'static str, &'static str, bool)> {
  "devices revoke"=>vec![("game","game id (required)",false),("key","public key to revoke, nodekey:... (required)",false)],
  "games list" | "status"=>vec![("json","print machine-readable JSON",true)],
  "devices list"=>vec![("game","only this game",false),("json","print machine-readable JSON",true)],
- "invite"=>vec![("game","game id (required)",false),("name","name shown in the friend's GameLink (default: the game's name)",false),("note","optional short note shown on import",false),("allow-local-relay","allow a relay on a private IP (for LAN-only test setups)",true)],
+ "requests list"=>vec![("game","only this game",false),("json","print machine-readable JSON",true)],
+ "requests approve"=>vec![("game","only this game",false),("label","a name to remember this device by",false)],
+ "requests dismiss"=>vec![("game","only this game",false)],
+ "invite" | "invite rotate"=>vec![("game","game id (required)",false),("name","name shown in the friend's GameLink (default: the game's name)",false),("note","optional short note shown on import",false),("allow-local-relay","allow a relay on a private IP (for LAN-only test setups)",true),("expires","rotate to a new game identity that stops serving after this duration, e.g. 24h",false)],
  "serve"=>vec![("verbose","include Tailcat's own (redacted) network log output",true),("host-config","enable loopback host administration using this private settings file",false),("host-listen","loopback host administration address (default 127.0.0.1:8467)",false)],
  "host refresh"=>vec![("config","private Pterodactyl host settings file (required)",false),("json","print machine-readable JSON",true)],
  "host detect"=>vec![("panel-url","Panel URL (required)",false),("token-file","private Application token file (required)",false),("node-id","select a node ID",false),("out","create private host settings (must not exist)",false),("json","print machine-readable JSON",true)],

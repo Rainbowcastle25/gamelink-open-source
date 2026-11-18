@@ -25,13 +25,14 @@ const (
 
 // Invite is the decoded invitation payload.
 type Invite struct {
-	V     int            `json:"v"`
-	Name  string         `json:"name"`
-	Game  games.Type     `json:"game"`
-	Proto games.Protocol `json:"proto"`
-	Port  uint16         `json:"port"` // port inside the tunnel
-	Addr  string         `json:"addr"` // full Tailcat address: SECRET
-	Note  string         `json:"note,omitempty"`
+	V         int            `json:"v"`
+	Name      string         `json:"name"`
+	Game      games.Type     `json:"game"`
+	Proto     games.Protocol `json:"proto"`
+	Port      uint16         `json:"port"` // port inside the tunnel
+	Addr      string         `json:"addr"` // full Tailcat address: SECRET
+	Note      string         `json:"note,omitempty"`
+	ExpiresAt string         `json:"expiresAt,omitempty"`
 	// ConsoleBridge identifies the optional LAN-to-LAN bridge protocol.
 	// Zero means the invitation is for the original single-protocol forwarder.
 	ConsoleBridge int `json:"consoleBridge,omitempty"`

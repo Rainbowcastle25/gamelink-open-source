@@ -18,8 +18,9 @@ protect, what it assumes, and what it does not defend against.
 | Rule | How it is enforced |
 |---|---|
 | No router port forwarding, no UPnP/NAT-PMP | Nothing opens an inbound port on the router. The port-mapper code is compiled out of production builds (`ts_omit_portmapper`) and CI fails if it comes back |
-| A game with no approved devices is unreachable | Refused at the transport, supervisor and CLI layers (see [architecture](architecture.md)); covered by tests |
+| A game with no approved devices is unreachable | The knock-only mode keeps Tailcat's allowlist restrictive and serves zero TCP or UDP ports (see [architecture](architecture.md)); covered by tests |
 | Per-game identity | Own key + PSK per game; no key is shared across games or with the desktop identity |
+| Rotation and expiry | Rotation replaces the per-game key and PSK. At expiry the host retires the whole identity, including established sessions. Device approvals carry over to the next identity |
 | Revocation works | Closes the game's server and restarts it with the remaining keys; live TCP and UDP sessions end. Tested end to end |
 | Narrow listeners | The desktop tunnel binds `127.0.0.1`. The default host forward goes to `127.0.0.1`; only the explicit Bedrock Console Bridge opens a Wi-Fi LAN discovery/media path, constrained to one configured server IPv4 and media-port range |
 | No SSH, shell, file transfer | No such handler exists in GameLink. Tailcat's SSH/SFTP server is compiled out (`ts_omit_ssh`). Optional host administration is a bearer-authenticated, loopback-only API for explicit Pterodactyl refresh and per-game device approval/import. It is off by default and exposes no shell, console, files, or power controls |
@@ -46,7 +47,12 @@ Invitation holder (not approved) ──X─►   (handshake gets no reply)
   public port) and cannot guess a Tailcat address.
 - **A stranger who obtains the invitation/address but not an approved key**:
   gets no handshake reply at all. This is tested. Note this means a rejected
-  device sees exactly what an offline server looks like.
+  device sees exactly what an offline server looks like. An invitation holder
+  can cause a DERP-authenticated peer key to appear in the host's private
+  request list. This happens before WireGuard checks the PSK, so knowing the
+  server's public key and relay suffices to knock. A request identifies a
+  device key, and the host must separately confirm who controls it before
+  approving.
 - **An approved friend**: can connect to the single game port you exposed, as
   any player. They cannot reach other ports, the LAN, or run commands. If the
   game itself has a vulnerability or an admin console on that port, that is
@@ -73,8 +79,10 @@ Invitation holder (not approved) ──X─►   (handshake gets no reply)
 
 1. **The invitation/address is a bearer secret for the handshake.** Share it only
    privately. Leaking it is not enough to join (the key must be approved), but it
-   removes one layer. To rotate it: `gamelink-agent games remove <id>` and add
-   the game again (new key), then re-approve and re-share.
+   removes one layer. Use `gamelink-agent invite rotate --game <id>` to replace
+   it without losing device approvals. Rotation closes existing sessions on
+   reload. Expiry applies to the entire identity and ends all sessions at the
+   deadline. All copies of that identity's invitation share the deadline.
 2. **"Unauthorized" looks like "offline".** The protocol gives no rejection
    message; this is good against probing and bad for support. GameLink words its
    error as "no response from the server: it may be offline, or this device has
@@ -125,6 +133,12 @@ Invitation holder (not approved) ──X─►   (handshake gets no reply)
     not the shipped app; this is tracked, not hidden.
 14. **Agent status heartbeat.** `gamelink-agent status` reports "running" for up
     to 20 seconds after a hard kill because it reads a heartbeat file.
+15. **Pending requests.** Each game keeps at most 32 pending keys for 24 hours
+    from their first appearance. New keys are rate-limited, but an invitation
+    holder can still fill the list and delay legitimate requests. Dismissal
+    frees a slot. The private `requests.json` file uses mode 0600 and records
+    keys, first and last seen times, and attempt counts. Requests never widen
+    the allowlist without an explicit host command.
 
 ## Reporting vulnerabilities
 
@@ -134,8 +148,10 @@ See [SECURITY.md](../SECURITY.md).
 
 - No client other than an approved key can open a session; a stranger who holds
   the exact address gets nothing (hermetic and over the real public relay).
-- A game with an empty allowlist is not served, and removing the last approved
-  device stops it.
+- A game with zero approved devices serves no game ports even while accepting
+  knocks. The host can approve a recorded key and that device can then join.
+- Rotation rejects the old address and keeps approvals. An expired address
+  rejects an approved device even when it bypasses invitation parsing.
 - Revoking a key ends its open TCP and UDP sessions and blocks new ones, while
   other approved keys keep working.
 - Invitation parsing rejects oversize, malformed, private-IP and unexpected-port

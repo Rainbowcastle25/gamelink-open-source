@@ -24,6 +24,8 @@ coverage/
 /GameLink/
 /keys/
 runtime.json
+requests.json
+requests.lock
 gamelink.log
 
 # Editors and OS

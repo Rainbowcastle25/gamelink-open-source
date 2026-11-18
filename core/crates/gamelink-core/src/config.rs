@@ -147,6 +147,7 @@ fn canonical_fields(kind: &str) -> &'static [&'static str] {
             "created",
             "consoleBridge",
             "bedrock",
+            "knockEnabled",
             "disabled",
             "origin",
         ],
@@ -160,6 +161,7 @@ fn canonical_fields(kind: &str) -> &'static [&'static str] {
             "localPort",
             "addr",
             "addedAt",
+            "expiresAt",
         ],
         "device" => &["publicKey", "label", "approvedAt"],
         "bridge" => &[
@@ -296,7 +298,9 @@ fn schema(v: &Value, kind: &str) -> Result<(), String> {
             | ("server", "port" | "localPort")
             | ("bridge", "discoveryPort" | "mediaPortFirst" | "mediaPortLast") => "port",
             ("bedrock", "mediaPortFirst" | "mediaPortLast") => "port",
-            ("game", "created") | ("server", "addedAt") | ("device", "approvedAt") => "time",
+            ("game", "created")
+            | ("server", "addedAt" | "expiresAt")
+            | ("device", "approvedAt") => "time",
             ("game", "devices") => "devices",
             ("game", "consoleBridge") => "bridge",
             ("game", "bedrock") => "bedrock",
@@ -305,7 +309,7 @@ fn schema(v: &Value, kind: &str) -> Result<(), String> {
                 "demoMode" | "autoReconnect" | "checkOnStartup" | "verboseLogging"
                 | "allowLocalRelay",
             )
-            | ("game", "disabled") => "bool",
+            | ("game", "disabled" | "knockEnabled") => "bool",
             ("settings", "gameExecutables" | "gameLaunchArgs") => "map",
             _ => continue,
         };
@@ -535,6 +539,9 @@ fn sync_managed(dir: &Path, cfg: &mut Value, input: &Value) -> Result<Value, Str
             game["created"] = old["created"].clone();
             game["devices"] = old["devices"].clone();
             game["consoleBridge"] = old["consoleBridge"].clone();
+            if old["knockEnabled"] == true {
+                game["knockEnabled"] = json!(true);
+            }
             if game["bedrock"].is_null() {
                 game["bedrock"] = old["bedrock"].clone();
             }
@@ -644,10 +651,12 @@ pub fn dispatch(method: &str, input: Value) -> Result<Value, String> {
             let v: Value = serde_json::from_slice(&data)
                 .map_err(|_| format!("keys for {id:?} are corrupt: invalid JSON"))?;
             if !v.is_object()
-                || (!v["created"].is_null()
-                    && !v["created"]
-                        .as_str()
-                        .is_some_and(|s| chrono::DateTime::parse_from_rfc3339(s).is_ok()))
+                || ["created", "expiresAt"].iter().any(|k| {
+                    !v[*k].is_null()
+                        && !v[*k]
+                            .as_str()
+                            .is_some_and(|s| chrono::DateTime::parse_from_rfc3339(s).is_ok())
+                })
                 || ["privateKey", "presharedKey"]
                     .iter()
                     .any(|k| !v[*k].is_null() && !v[*k].is_string())
@@ -844,6 +853,32 @@ pub fn dispatch(method: &str, input: Value) -> Result<Value, String> {
                         Err(e) => return Err(e.to_string()),
                     }
                 }
+                "invite" => {
+                    let g = array(&mut cfg["games"])
+                        .iter_mut()
+                        .find(|g| g["id"] == id)
+                        .ok_or_else(|| format!("no game with id {id:?}"))?;
+                    if ["name", "type", "protocol", "tunnelPort", "consoleBridge"]
+                        .iter()
+                        .any(|k| g[*k] != input["expectedGame"][*k])
+                    {
+                        return Err("game settings changed; try again".into());
+                    }
+                    let key_path = dir.join("keys").join(format!("{id}.json"));
+                    let keys = checked_current_keys(&key_path, &id, &input["expectedKeys"])?;
+                    let replacement = &input["keys"];
+                    pure::check_invite_expiry(&replacement["expiresAt"])?;
+                    if g["knockEnabled"] != true {
+                        // Enabling knocks first leaves the current identity
+                        // intact if a following rotation cannot be saved.
+                        g["knockEnabled"] = json!(true);
+                        save(&path, &cfg)?;
+                    }
+                    if replacement != &keys {
+                        save(key_path.to_str().ok_or("invalid path")?, replacement)?;
+                    }
+                    saved = true;
+                }
                 "approve" | "revoke" => {
                     let public = check("identity.public_key", json!({"text":input["publicKey"]}))?;
                     if action == "approve" {
@@ -854,6 +889,17 @@ pub fn dispatch(method: &str, input: Value) -> Result<Value, String> {
                         .iter_mut()
                         .find(|g| g["id"] == id)
                         .ok_or_else(|| format!("no game with id {id:?}"))?;
+                    if action == "approve" && !input["expectedKeys"].is_null() {
+                        if g["disabled"] == true {
+                            return Err(format!("game {id:?} is disabled"));
+                        }
+                        let keys = checked_current_keys(
+                            &dir.join("keys").join(format!("{id}.json")),
+                            &id,
+                            &input["expectedKeys"],
+                        )?;
+                        pure::check_invite_expiry(&keys["expiresAt"])?;
+                    }
                     let ds = array(&mut g["devices"]);
                     let i = ds.iter().position(|d| d["publicKey"] == public);
                     if action == "revoke" {
@@ -894,6 +940,14 @@ pub fn dispatch(method: &str, input: Value) -> Result<Value, String> {
         }
         _ => Err("unknown config method".into()),
     }
+}
+fn checked_current_keys(path: &Path, id: &str, expected: &Value) -> Result<Value, String> {
+    check("security.slug", json!({"text":id}))?;
+    let loaded = dispatch("config.keys_load", json!({"id":id,"path":path}))?;
+    if loaded["missing"] == true || &loaded["keys"] != expected {
+        return Err("game identity changed; try again".into());
+    }
+    Ok(loaded["keys"].clone())
 }
 fn slugify(name: &str) -> String {
     let mut out = String::new();
