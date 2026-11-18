@@ -20,9 +20,9 @@ protect, what it assumes, and what it does not defend against.
 | No router port forwarding, no UPnP/NAT-PMP | Nothing opens an inbound port on the router. The port-mapper code is compiled out of production builds (`ts_omit_portmapper`) and CI fails if it comes back |
 | A game with no approved devices is unreachable | The knock-only mode keeps Tailcat's allowlist restrictive and serves zero TCP or UDP ports (see [architecture](architecture.md)); covered by tests |
 | Per-game identity | Own key + PSK per game; no key is shared across games or with the desktop identity |
-| Rotation and expiry | Rotation replaces the per-game key and PSK. At expiry the host retires the whole identity, including established sessions. Device approvals carry over to the next identity |
+| Agent invitation rotation and expiry | Rotation replaces the per-game key and PSK. At expiry the host retires the whole identity, including established sessions. Device approvals carry over to the next identity |
 | Revocation works | Closes the game's server and restarts it with the remaining keys; live TCP and UDP sessions end. Tested end to end |
-| Narrow listeners | The desktop tunnel binds `127.0.0.1`. The default host forward goes to `127.0.0.1`; only the explicit Bedrock Console Bridge opens a Wi-Fi LAN discovery/media path, constrained to one configured server IPv4 and media-port range |
+| Narrow listeners | Desktop client game sockets and desktop host destinations use `127.0.0.1`. Minecraft Java discovery receives only multicast announcements, with a loopback bind on Windows. The Linux agent defaults to a loopback destination. The explicit Bedrock Console Bridge uses a Wi-Fi discovery/media path scoped to one configured server IPv4 and media-port range |
 | No SSH, shell, file transfer | No such handler exists in GameLink. Tailcat's SSH/SFTP server is compiled out (`ts_omit_ssh`). Optional host administration is a bearer-authenticated, loopback-only API for explicit Pterodactyl refresh and per-game device approval/import. It is off by default and exposes no shell, console, files, or power controls |
 | No general LAN access or exit node | No route forwarding is enabled. The optional Console Bridge only accepts traffic for the selected Bedrock server and configured media range; it does not expose other host or LAN ports |
 | Secrets are not logged | A redactor scrubs private keys, PSKs, Tailcat addresses and invitations from logs and diagnostics. Verbose Tailcat output is off by default and redacted when on |
@@ -75,6 +75,27 @@ Invitation holder (not approved) ──X─►   (handshake gets no reply)
 - **An attacker on the server**: has the game keys and can impersonate the
   server. Treat the server as the root of trust.
 
+## Desktop hosting
+
+- The desktop hosts one loopback destination per game and uses the same
+  Tailcat server, per-game identity, supervisor, and approval policy as the
+  Linux agent. Windows protects the hosted private key and pre-shared key with
+  DPAPI. The desktop writes invitation text directly to the native clipboard.
+- While **Host** is open, Minecraft Java discovery joins IPv4 multicast
+  `224.0.2.60:4445` on local interfaces. The socket is receive-only and uses
+  a loopback bind with destination filtering on Windows and a group-address
+  bind on Linux. GameLink sends no discovery packets and forwards no discovery
+  traffic. It filters announcements by this PC's interface addresses and bounds
+  the datagram size, cache and lifetime.
+- An announcement is an unauthenticated hint. Sharing or updating a LAN
+  world's port requires a click by the host. The destination is always
+  `127.0.0.1` on the host PC. The desktop requires re-detection of LAN worlds
+  after the app restarts because a previous port may now belong to a different
+  local application. Stop sharing a world when closing it.
+- **People** displays pending requests from the shared Tailcat refusal
+  mechanism. The app records the time of the last authorized game connection
+  locally for approved devices.
+
 ## Known limitations and risks (read these)
 
 1. **The invitation/address is a bearer secret for the handshake.** Share it only
@@ -83,6 +104,8 @@ Invitation holder (not approved) ──X─►   (handshake gets no reply)
    it without losing device approvals. Rotation closes existing sessions on
    reload. Expiry applies to the entire identity and ends all sessions at the
    deadline. All copies of that identity's invitation share the deadline.
+   On desktop, remove and recreate the game in **Host** to replace its
+   identity, then approve devices for the new game.
 2. **"Unauthorized" looks like "offline".** The protocol gives no rejection
    message; this is good against probing and bad for support. GameLink words its
    error as "no response from the server: it may be offline, or this device has
@@ -141,9 +164,11 @@ Invitation holder (not approved) ──X─►   (handshake gets no reply)
 15. **Pending requests.** Each game keeps at most 32 pending keys for 24 hours
     from their first appearance. New keys are rate-limited, but an invitation
     holder can still fill the list and delay legitimate requests. Dismissal
-    frees a slot. The private `requests.json` file uses mode 0600 and records
-    keys, first and last seen times, and attempt counts. Requests never widen
-    the allowlist without an explicit host command.
+    frees a slot and a fresh knock can appear again. Both hosts track the
+    key, first and last seen times, and attempt count. The Linux agent uses
+    a private 0600 `requests.json` file. The desktop keeps pending requests in
+    memory until the app exits. Approval always requires an explicit host
+    action.
 
 ## Reporting vulnerabilities
 

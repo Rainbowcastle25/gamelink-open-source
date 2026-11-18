@@ -36,12 +36,12 @@ Other games come later; see the [roadmap](docs/roadmap.md).
 ## How it works
 
 ```
- Friend's PC / Android phone                            Your server (Linux)
+ Friend's PC / Android phone                            Your hosting machine
 ┌────────────────────┐                                  ┌──────────────────────┐
 │ Minecraft          │                                  │  game server         │
 │  ↓ 127.0.0.1:25565 │                                  │  127.0.0.1:25565     │
 │ GameLink (Windows) │  ── encrypted WireGuard (Tailcat) │        ↑             │
-│ Android bridge    │ ═══════════════════════════════► │  gamelink-agent      │
+│ Android bridge    │ ═══════════════════════════════► │  GameLink host       │
 └────────────────────┘   direct, or via a relay if the   └──────────────────────┘
                          NAT cannot be crossed
 ```
@@ -50,12 +50,16 @@ Other games come later; see the [roadmap](docs/roadmap.md).
   game it creates its own [Tailcat](https://github.com/tailscale/tailcat)
   identity and forwards one tunnel port to the game. Only devices **you have
   approved** can reach it.
-- **GameLink** (desktop app: Tauri, Rust, React, TypeScript) is what your
-  friends run. It has its own device key, imports an invitation, and offers a
+- **GameLink** (desktop app: Tauri, Rust, React, TypeScript) hosts games on
+  the same PC and joins games hosted elsewhere. It uses its own device key
+  to connect with an invitation, then offers a
   local `127.0.0.1` address that the game connects to. The Join button opens
   the tunnel; Disconnect closes it. With the game's program set in Settings,
   **Play** does both in one click: it connects, then starts the game pointed at
   the server (Factorio and Minecraft Bedrock join by themselves; see below).
+  The **Host** tab can detect a Minecraft Java world opened to LAN on this PC,
+  or share a local server by port. Use **People** to copy private invitations,
+  approve or dismiss join requests, and manage approved devices.
 - **Tailcat** provides the encrypted transport: WireGuard, direct UDP
   hole-punching, and a DERP relay fallback when a direct path is impossible.
 - **Android Console Bridge** is an explicit LAN-to-LAN extension for Bedrock
@@ -74,10 +78,10 @@ approved.
 | | |
 |---|---|
 | Transport | Real Tailcat: WireGuard, hole-punching, relay fallback, no port forwarding |
-| Access control | Per-game allowlist. **Only approved devices can reach game ports.** The agent can record knocks before the first approval. Revocation drops live sessions |
+| Access control | Per-game allowlist. **Only approved devices can reach game ports.** Both hosts can record join requests before the first approval. Revocation drops live sessions |
 | Protocols | TCP (Minecraft Java), UDP (Factorio, legacy Bedrock), desktop Bedrock NetherNet signaling/media, and optional Console Bridge for Bedrock consoles |
-| Identity | Windows device key sealed with DPAPI; Android bridge key protected by Android Keystore; separate key per hosted game |
-| Desktop app | Dashboard, Servers, Requests, Friends, Settings; connection status with the real network path (direct or relay) and latency |
+| Identity | Windows device and hosted-game keys sealed with DPAPI; Android bridge key protected by Android Keystore; separate key per hosted game |
+| Desktop app | Dashboard, Servers, Host, People, Host admin, Settings; connection status with the real network path (direct or relay) and latency |
 | Resilience | Auto-reconnect with backoff, local port fallback if the preferred port is busy, diagnostics report with secrets redacted |
 | Agent CLI | `init`, `games add/list/remove`, `requests list/approve/dismiss`, `devices approve/revoke/list`, `invite`, `invite rotate`, `serve`, `status`, `update check` |
 | Multiple servers | Import several invitations; connect to several games at once |
@@ -101,7 +105,15 @@ release host. You download and install updates yourself. See the
 
 ## Quick start
 
-On the Linux machine that runs your game server (Minecraft Java as the example):
+On your Windows PC, open a Minecraft Java world to LAN and choose **Host** →
+**Share world** in GameLink, or enter the local port under **Host a server on
+this PC**. Choose **Copy invitation** and send it privately. Your friend
+imports it in **Servers** and clicks **Join**. In **People**, review the join
+request, verify the public key with your friend, and approve it. Your friend
+can retry **Join** and use the local game address GameLink shows.
+See [Host from your Windows PC](docs/getting-started.md#host-from-your-windows-pc).
+
+On a Linux host running Minecraft Java, run these commands.
 
 ```sh
 gamelink-agent init
@@ -112,7 +124,7 @@ gamelink-agent serve                            # or run it as a service (see do
 
 On your friend's Windows PC, open GameLink → **Servers** → **Add server**,
 paste the invitation, and click **Join**. The first attempt requests access.
-On the host, find the request and approve its listed ID, for example:
+On the host, verify your friend’s key and approve the listed request ID.
 
 ```sh
 gamelink-agent requests list --game our-minecraft
@@ -205,7 +217,8 @@ diagnostics. GameLink is **not** "100% secure"; read the
   Tailcat relay. **Not verified with the real game clients** (Minecraft Java,
   Factorio, Minecraft Bedrock). See the [real-game validation matrix and test
   procedure](docs/validation.md).
-- The Windows desktop and Linux host agent are for PC play. The Android app is
+- The Windows desktop and Linux host agent are for PC play. Desktop hosting
+  has automated tunnel and announcement coverage. The Android app is
   an experimental Bedrock console bridge; direct Xbox/PlayStation hardware,
   screen-off operation, revocation while consoles are active, Wi-Fi-loss
   recovery, battery use, and thermal behavior still need validation. No iOS

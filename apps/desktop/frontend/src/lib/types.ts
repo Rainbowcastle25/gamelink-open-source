@@ -1,4 +1,4 @@
-// Desktop JSON DTO contract, matching internal/client/views.go. No runtime bindings.
+// JSON views and inputs for the Rust desktop host. No runtime bindings.
 /**
  * CheckView is the result of the most recent reachability check.
  */
@@ -115,10 +115,6 @@ export interface Overview {
     "connected": number;
     "online": number;
 
-    /**
-     * this device only, in this alpha
-     */
-    "devices": number;
     "publicKeyShort": string;
 
     /**
@@ -232,7 +228,42 @@ export interface HostSnapshot {
   refreshedAt: string;
 }
 
-export type Screen = "dashboard" | "servers" | "requests" | "friends" | "host" | "settings";
+export type DesktopGameType = Exclude<GameId, "custom">;
+
+export interface HostedGameForm {
+  name: string;
+  game: DesktopGameType;
+  port: number;
+}
+
+export interface LanWorld {
+  name: string;
+  port: number;
+}
+
+export interface HostedDevice {
+  publicKey: string;
+  label: string;
+  lastConnected: string | null;
+}
+
+export interface PendingDevice {
+  id: number;
+  publicKey: string;
+  lastSeen: string;
+}
+
+export interface HostedGame extends HostedGameForm {
+  id: string;
+  lan: boolean;
+  enabled: boolean;
+  state: "inactive" | "serving" | "error";
+  detail: string;
+  approved: HostedDevice[];
+  pending: PendingDevice[];
+}
+
+export type Screen = "dashboard" | "servers" | "people" | "host" | "host-admin" | "settings";
 
 export type UpdateTopic = "servers" | "activity" | "settings";
 

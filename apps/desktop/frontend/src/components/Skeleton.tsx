@@ -24,8 +24,8 @@ export function ServerListSkeleton({ rows = 3 }: { rows?: number }) {
 
 export function SummarySkeleton() {
   return (
-    <div role="status" aria-label="Loading summary" className="grid grid-cols-3 gap-4">
-      {[0, 1, 2].map((i) => (
+    <div role="status" aria-label="Loading summary" className="grid grid-cols-2 gap-4">
+      {[0, 1].map((i) => (
         <div key={i} className="rounded-xl border border-line bg-surface p-5">
           <Skeleton className="h-3 w-16" />
           <Skeleton className="mt-4 h-8 w-12" />

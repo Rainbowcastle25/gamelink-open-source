@@ -5,7 +5,7 @@ import { SettingsPanel } from "../components/SettingsPanel";
 import { createMockBackend } from "../lib/mockBackend";
 import { renderApp } from "../test/utils";
 import { DashboardScreen } from "./DashboardScreen";
-import { RequestsScreen } from "./RequestsScreen";
+import { PeopleScreen } from "./PeopleScreen";
 import { ServersScreen } from "./ServersScreen";
 
 const KEY = "nodekey:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -120,17 +120,17 @@ describe("Servers screen", () => {
   });
 });
 
-describe("Requests screen", () => {
+describe("People screen", () => {
   it("shows the full public key and the approve command with it filled in", async () => {
-    renderApp(<RequestsScreen />);
+    renderApp(<PeopleScreen />);
     expect(await screen.findByLabelText("Public key")).toHaveTextContent(KEY);
     const command = screen.getByLabelText("Approve command");
     expect(command).toHaveTextContent(`gamelink-agent devices approve --game <game-id> --key ${KEY}`);
-    expect(screen.getByText(/does not send or sync requests through any cloud service/)).toBeInTheDocument();
+    expect(screen.getByText(/Contact the host directly to ask for access/)).toBeInTheDocument();
   });
 
   it("Copy Public Key writes the key to the clipboard", async () => {
-    const { user } = renderApp(<RequestsScreen />);
+    const { user } = renderApp(<PeopleScreen />);
     await screen.findByLabelText("Public key");
     const write = vi.spyOn(navigator.clipboard, "writeText");
     await user.click(screen.getByRole("button", { name: "Copy Public Key" }));
@@ -140,7 +140,7 @@ describe("Requests screen", () => {
   it("falls back to the backend clipboard when the browser one fails", async () => {
     const backend = createMockBackend({ delayMs: 0, joinMs: 0 });
     const copy = vi.spyOn(backend, "copyText");
-    const { user } = renderApp(<RequestsScreen />, { backend });
+    const { user } = renderApp(<PeopleScreen />, { backend });
     await screen.findByLabelText("Public key");
     vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("denied"));
     await user.click(screen.getByRole("button", { name: "Copy Public Key" }));

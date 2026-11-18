@@ -13,20 +13,16 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-
 	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/gamelink-project/gamelink/shim/consolebridge"
+	"github.com/gamelink-project/gamelink/shim/gamehost"
 	"github.com/gamelink-project/gamelink/shim/games"
 	"github.com/gamelink-project/gamelink/shim/hosthttp"
-	"github.com/gamelink-project/gamelink/shim/invite"
 	"github.com/gamelink-project/gamelink/shim/security"
 	"github.com/gamelink-project/gamelink/shim/transport"
-	"github.com/tailscale/tailcat"
-	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
 )
 
 const maxInput = 32 * 1024
@@ -53,12 +49,6 @@ func record(red *security.Redactor, format string, args ...any) {
 	logs.lines = append(logs.lines, line)
 }
 
-type keySpec struct {
-	PrivateKey   string
-	PresharedKey string
-	Region       *tailcfg.DERPRegion
-	ExpiresAt    time.Time
-}
 type bridgeSpec struct {
 	ServerIP       string
 	BindIP         string
@@ -94,7 +84,7 @@ func dispatch(data []byte) (any, error) {
 		AllowLocalRelay bool
 		Generation      uint64
 		Game            gameSpec
-		Keys            keySpec
+		Keys            gamehost.Keys
 		Approved        []string
 	}
 	if json.Unmarshal(data, &r) != nil {
@@ -127,27 +117,13 @@ func dispatch(data []byte) (any, error) {
 	}
 	switch r.Method {
 	case "generate":
-		k := tailcat.NewPrivateKey()
-		p, _ := k.Private.MarshalText()
-		s, _ := k.Public.PresharedKey.MarshalText()
-		return map[string]any{"privateKey": string(p), "presharedKey": string(s)}, nil
+		return gamehost.Generate(), nil
 	case "resolve":
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		return transport.ResolveRegion(ctx, transport.RegionSpec{Host: r.Host, RegionID: r.RegionID})
 	case "address":
-		var private key.NodePrivate
-		var psk tailcat.PresharedKey
-		if private.UnmarshalText([]byte(r.Keys.PrivateKey)) != nil || private.IsZero() {
-			return nil, errors.New("invalid private key")
-		}
-		if psk.UnmarshalText([]byte(r.Keys.PresharedKey)) != nil || psk.IsZero() {
-			return nil, errors.New("invalid pre-shared key")
-		}
-		info := tailcat.ConnInfo{ServerPublic: tailcat.NodePublic{NodePublic: private.Public()}, ServerDiscoPublic: tailcat.DiscoPublicForNode(private), PresharedKey: psk, Region: []*tailcfg.DERPRegion{r.Keys.Region}}
-		addr := string(info.Addr())
-		_, err := invite.ValidateAddr(addr, invite.Options{AllowLocalRelay: r.AllowLocalRelay})
-		return addr, err
+		return r.Keys.Address(r.AllowLocalRelay)
 	case "start":
 		id := resourceID{r.ID, r.Generation}
 		if r.Generation == 0 || r.ID == "" {
@@ -158,21 +134,13 @@ func dispatch(data []byte) (any, error) {
 				return nil, errors.New("game resource already exists")
 			}
 		}
-		var private key.NodePrivate
-		var psk tailcat.PresharedKey
-		if private.UnmarshalText([]byte(r.Keys.PrivateKey)) != nil || private.IsZero() {
-			return nil, errors.New("invalid private key")
+		private, psk, err := r.Keys.Parse()
+		if err != nil {
+			return nil, err
 		}
-		if psk.UnmarshalText([]byte(r.Keys.PresharedKey)) != nil || psk.IsZero() {
-			return nil, errors.New("invalid pre-shared key")
-		}
-		approved := make([]key.NodePublic, 0, len(r.Approved))
-		for _, text := range r.Approved {
-			var k key.NodePublic
-			if k.UnmarshalText([]byte(text)) != nil || k.IsZero() {
-				return nil, errors.New("invalid approved key")
-			}
-			approved = append(approved, k)
+		approved, err := gamehost.ParseApproved(r.Approved)
+		if err != nil {
+			return nil, err
 		}
 		dest, err := netip.ParseAddrPort(r.Game.Dest)
 		if err != nil {

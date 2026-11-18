@@ -13,15 +13,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
+	"unsafe"
+
+	"github.com/gamelink-project/gamelink/shim/gamehost"
 	"github.com/gamelink-project/gamelink/shim/hosthttp"
 	"github.com/gamelink-project/gamelink/shim/invite"
 	"github.com/gamelink-project/gamelink/shim/security"
 	"github.com/gamelink-project/gamelink/shim/transport"
 	"github.com/tailscale/tailcat"
-	"sync"
 	"tailscale.com/types/key"
-	"time"
-	"unsafe"
 )
 
 const maxInput = 32 * 1024
@@ -42,6 +44,8 @@ var owner struct {
 	initialized bool
 	private     key.NodePrivate
 	resources   map[resourceID]*resource
+	hosts       map[resourceID]hostedResource
+	lan         *lanListener
 }
 var mailbox struct {
 	sync.Mutex
@@ -70,12 +74,18 @@ func dispatch(input []byte) (any, error) {
 		Address         string
 		AllowLocalRelay bool
 		Options         transport.TunnelOptions
+		Game            hostedGame
+		Keys            gamehost.Keys
+		Approved        []string
 	}
 	if json.Unmarshal(input, &r) != nil {
 		return nil, errors.New("invalid desktop request")
 	}
 	if r.Method == "http" {
 		return hosthttp.Do(input)
+	}
+	if r.Method == "host_resolve" {
+		return resolveHostRelay() // network I/O must not block stop or revocation
 	}
 	owner.Lock()
 	defer owner.Unlock()
@@ -84,11 +94,19 @@ func dispatch(input []byte) (any, error) {
 			return nil, errors.New("desktop is already initialized")
 		}
 		owner.resources = map[resourceID]*resource{}
+		owner.hosts = map[resourceID]hostedResource{}
 		mailbox.events = map[resourceID]map[string]any{}
 		owner.initialized = true
 		return nil, nil
 	}
 	if r.Method == "shutdown" {
+		if owner.lan != nil {
+			owner.lan.close()
+			owner.lan = nil
+		}
+		for id := range owner.hosts {
+			stopHost(id)
+		}
 		for id, res := range owner.resources {
 			res.cancel()
 			<-res.done
@@ -108,6 +126,45 @@ func dispatch(input []byte) (any, error) {
 		return nil, errors.New("desktop is not initialized")
 	}
 	switch r.Method {
+	case "host_generate":
+		return gamehost.Generate(), nil
+	case "host_address":
+		return r.Keys.Address(false)
+	case "host_start":
+		return nil, startHost(resourceID{r.ID, r.Generation}, r.Game, r.Keys, r.Approved)
+	case "host_stop":
+		return stopHost(resourceID{r.ID, r.Generation})
+	case "host_peers":
+		snapshots := make(map[string]hostSnapshot, len(owner.hosts))
+		for id, host := range owner.hosts {
+			snapshots[id.ID] = hostSnapshot{Connected: host.peers.Snapshot(), Requests: host.server.TakeRequests()}
+		}
+		return snapshots, nil
+	case "lan_scan":
+		if owner.lan == nil {
+			l, err := listenLAN()
+			if err != nil {
+				return nil, err
+			}
+			owner.lan = l
+		}
+		packets, err := owner.lan.snapshot()
+		if err != nil {
+			owner.lan.close()
+			owner.lan = nil
+		}
+		return packets, err
+	case "lan_packets":
+		if owner.lan == nil {
+			return nil, nil
+		}
+		return owner.lan.snapshot()
+	case "lan_close":
+		if owner.lan != nil {
+			owner.lan.close()
+			owner.lan = nil
+		}
+		return nil, nil
 	case "generate":
 		private := key.NewNode()
 		text, _ := private.MarshalText()
