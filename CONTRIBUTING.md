@@ -4,9 +4,12 @@ Thanks for helping. GameLink is small on purpose; please keep it that way.
 
 ## Ground rules
 
-- **Security first.** Do not add a non-loopback listener except the explicit
-  Bedrock Console Bridge LAN discovery/media path, which must remain pinned to
-  the selected interface/subnet and configured BDS endpoint. Never open router
+- **Security first.** Do not add a non-loopback listener except these two:
+  the explicit Bedrock Console Bridge LAN discovery/media path, which must
+  remain pinned to the selected interface/subnet and configured BDS endpoint,
+  and the receive-only Minecraft Java LAN discovery socket on multicast
+  `224.0.2.60:4445`, which may only run while GameLink's **Host** view is open
+  or GameLink is actively sharing a Minecraft Java LAN world. Never open router
   ports, run remote commands, transfer files, add an admin API or telemetry, or
   set Tailcat forwarding hooks.
 - **No secrets in the repository,** including test fixtures. Tests generate
