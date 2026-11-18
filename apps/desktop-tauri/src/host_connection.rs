@@ -50,13 +50,21 @@ pub fn call(request: Value) -> Result<Value> {
             }))
         }
         "hostStatus" => {
-            let saved = read_configured(&config_dir()?)?;
-            host_request(&saved, "GET", "/v1/host/status", Value::Null, 15)
+            let dir = config_dir()?;
+            if !file_path(&dir).try_exists().map_err(|_| "could not read host connection")? {
+                return Ok(json!({"games":[],"refreshedAt":""}));
+            }
+            let saved = read_configured(&dir)?;
+            host_request(&saved, "GET", "/v1/host/status", Value::Null, 5)
         }
         "refreshHost" => {
             let saved = read_configured(&config_dir()?)?;
             host_request(&saved, "POST", "/v1/host/refresh", json!({}), 95)
         }
+        "approveLinkedRequest" => game_request("/v1/host/requests/approve", json!({
+            "gameId":request["id"],"serverPublicKey":request["serverPublicKey"],
+            "requestId":request["requestId"],"publicKey":request["publicKey"],"label":request["label"]
+        })).map(|_| Value::Null),
         "importHostGame" => import_game(request["gameID"].as_str().unwrap_or("")),
         _ => Err("unknown host command".into()),
     }
@@ -170,28 +178,42 @@ fn host_request(
     }))
 }
 
+fn game_request(path: &str, body: Value) -> Result<Value> {
+    let saved = read_configured(&config_dir()?)?;
+    host_request(&saved, "POST", path, body, 15)
+}
+
+pub fn invitation(request: &Value) -> Result<String> {
+    let result = game_request(
+        "/v1/host/invitation",
+        json!({
+            "gameId":request["id"],"serverPublicKey":request["serverPublicKey"]
+        }),
+    )?;
+    Ok(invitation_text(&result)?.to_owned())
+}
+
+fn invitation_text(result: &Value) -> Result<&str> {
+    result["invitation"]
+        .as_str()
+        .filter(|s| !s.is_empty() && s.len() <= MAX_RESPONSE_BYTES)
+        .ok_or_else(|| "host returned an invalid invitation".into())
+}
+
 fn import_game(game_id: &str) -> Result<Value> {
     if game_id.is_empty() || game_id.len() > 128 {
         return Err("select a game to import".into());
     }
-    let dir = config_dir()?;
-    let saved = read_configured(&dir)?;
     let identity = host::call(json!({"method":"identity"}))?;
     let public_key = identity["publicKey"]
         .as_str()
         .filter(|key| !key.is_empty())
         .ok_or("could not read this device's public key")?;
-    let result = host_request(
-        &saved,
-        "POST",
+    let result = game_request(
         "/v1/host/import",
         json!({"gameId":game_id,"publicKey":public_key}),
-        15,
     )?;
-    let invitation = result["invitation"]
-        .as_str()
-        .filter(|s| !s.is_empty() && s.len() <= MAX_RESPONSE_BYTES)
-        .ok_or("host returned an invalid invitation")?;
+    let invitation = invitation_text(&result)?;
     // Keep the invitation inside the Rust native host. Only the imported
     // ServerView crosses the UI boundary.
     host::call(json!({"method":"importInvite","text":invitation,"localPort":0}))

@@ -189,7 +189,7 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
   let saved: ServerView[] = seed ? seedServers() : [];
   const world = { name: "Demo: LAN Cabin", port: 51734 };
   let hosted: HostedGame[] = seed ? [{
-    id: "demo-hosted-factory", game: Type.Factorio, name: "Demo: Factory", port: 34197,
+    id: "demo-hosted-factory", serverPublicKey: "nodekey:" + "f".repeat(64), game: Type.Factorio, name: "Demo: Factory", port: 34197,
     enabled: true, lan: false, state: "serving", detail: "",
     approved: [{ publicKey: "nodekey:" + "a".repeat(64), label: "Demo: Alex", lastConnected: iso(80000) }],
     pending: [{ id: 1, publicKey: "nodekey:" + "b".repeat(64), lastSeen: iso(10000) }],
@@ -225,7 +225,7 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
 
   function createHosted(form: HostedGameForm, lan: boolean) {
     const game: HostedGame = {
-      ...form, id: `demo-hosted-${nextHosted++}`, enabled: true, lan,
+      ...form, id: `demo-hosted-${nextHosted}`, serverPublicKey: "nodekey:" + (nextHosted++).toString(16).padStart(64, "0"), enabled: true, lan,
       state: "inactive", detail: "", approved: [], pending: [],
     };
     updateHosting(game);
@@ -421,6 +421,7 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
     localPort: number;
     relayHosts?: string[];
     defaultRelay?: boolean;
+    serverPublicKey?: string | null;
   }): ServerView {
     const s = makeServer({
       id: `mock-new-${nextId++}`,
@@ -432,6 +433,7 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
       localPort: p.localPort,
       relayHosts: p.relayHosts ?? PUBLIC_RELAY,
       defaultRelay: p.defaultRelay ?? true,
+      serverPublicKey: p.serverPublicKey,
       addedAt: iso(),
       hasExecutable: !!settings.gameExecutables?.[p.game] || p.game === Type.MinecraftBedrock,
     });
@@ -670,8 +672,8 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
       hostSnapshot = {
         refreshedAt: iso(),
         games: [
-          { id: "mock-host-minecraft", name: "Friends Minecraft", type: "minecraft-java", disabled: false, approvedDevices: 2, state: "running", detail: "Panel reported running" },
-          { id: "mock-host-factorio", name: "Weekend Factorio", type: "factorio", disabled: false, approvedDevices: 1, state: "unknown", detail: "Status not available" },
+          { id: "mock-host-minecraft", name: "Friends Minecraft", type: "minecraft-java", proto: Protocol.TCP, port: 25565, disabled: false, approvedDevices: 2, state: "running", detail: "Panel reported running", serverPublicKey: "nodekey:" + "c".repeat(64), canCopyInvitation: true, pending: [] },
+          { id: "mock-host-factorio", name: "Weekend Factorio", type: "factorio", proto: Protocol.UDP, port: 34197, disabled: false, approvedDevices: 1, state: "unknown", detail: "Status not available", serverPublicKey: "nodekey:" + "d".repeat(64), canCopyInvitation: true, pending: [] },
         ],
       };
       return clone(hostSnapshot);
@@ -681,7 +683,23 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
       const game = hostSnapshot.games.find((g) => g.id === gameID);
       if (!game) throw new Error("refresh host games first");
       const gameType = game.type === "factorio" ? Type.Factorio : game.type === "minecraft-bedrock" ? Type.MinecraftBedrock : Type.MinecraftJava;
-      return clone(addFrom({ name: game.name, description: "Added from your host", game: gameType, proto: GAME_INFO[gameType]?.proto ?? Protocol.TCP, port: GAME_INFO[gameType]?.port ?? 25565, localPort: 0 }));
+      return clone(addFrom({ name: game.name, description: "Added from your host", game: gameType, proto: GAME_INFO[gameType]?.proto ?? Protocol.TCP, port: GAME_INFO[gameType]?.port ?? 25565, localPort: 0, serverPublicKey: game.serverPublicKey }));
+    },
+
+    async copyLinkedInvitation(id, serverPublicKey) {
+      await wait();
+      const game = hostSnapshot.games.find((g) => g.id === id && g.serverPublicKey === serverPublicKey && g.canCopyInvitation);
+      if (!game) throw new Error("The selected linked game is unavailable");
+      await navigator.clipboard.writeText(`GameLink demo invitation for ${game.name} (example only)`);
+    },
+    async approveLinkedRequest(id, serverPublicKey, request) {
+      await wait();
+      const game = hostSnapshot.games.find((g) => g.id === id && g.serverPublicKey === serverPublicKey && !g.disabled);
+      if (!game?.pending?.some((p) => p.id === request.id && p.publicKey === request.publicKey)) {
+        throw new Error("That join request is no longer pending");
+      }
+      game.approvedDevices++;
+      game.pending = game.pending.filter((p) => p.id !== request.id);
     },
 
     async hostedGames() {

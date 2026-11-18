@@ -623,8 +623,12 @@ impl Hosting {
             } else {
                 text(status, "detail")
             };
+            let public_key = self
+                .keys(id)
+                .and_then(|keys| bridge::call(json!({"method":"host_public_key","keys":keys})))
+                .unwrap_or(Value::Null);
             result.push(json!({
-                "id":id,"name":game["name"],"game":game["type"],"port":port,"lan":is_lan(game),
+                "serverPublicKey":public_key,"id":id,"name":game["name"],"game":game["type"],"port":port,"lan":is_lan(game),
                 "enabled":enabled,"state":status["state"],"detail":detail,"approved":approved,"pending":pending
             }));
         }

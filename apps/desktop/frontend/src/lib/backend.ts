@@ -11,6 +11,7 @@ import type {
   LaunchResult,
   NewServerForm,
   Overview,
+  PendingDevice,
   Paths,
   ReleaseNotice,
   ServerView,
@@ -57,6 +58,8 @@ export interface Backend {
   hostStatus(): Promise<HostSnapshot>;
   refreshHost(): Promise<HostSnapshot>;
   importHostGame(gameID: string): Promise<ServerView>;
+  copyLinkedInvitation(id: string, serverPublicKey: string): Promise<void>;
+  approveLinkedRequest(id: string, serverPublicKey: string, request: PendingDevice, label: string): Promise<void>;
 
   hostedGames(): Promise<HostedGame[]>;
   createHostedGame(form: HostedGameForm): Promise<{ id: string }>;
@@ -140,6 +143,8 @@ export const backend: Backend = {
   hostStatus: lazy((b) => b.hostStatus.bind(b)),
   refreshHost: lazy((b) => b.refreshHost.bind(b)),
   importHostGame: lazy((b) => b.importHostGame.bind(b)),
+  copyLinkedInvitation: lazy((b) => b.copyLinkedInvitation.bind(b)),
+  approveLinkedRequest: lazy((b) => b.approveLinkedRequest.bind(b)),
   hostedGames: lazy((b) => b.hostedGames.bind(b)),
   createHostedGame: lazy((b) => b.createHostedGame.bind(b)),
   shareLanWorld: lazy((b) => b.shareLanWorld.bind(b)),

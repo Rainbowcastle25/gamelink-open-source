@@ -36,7 +36,8 @@ with the same `GAMELINK_HOME` while that folder still exists.
    the game and enter its port. The server must accept traffic on
    `127.0.0.1` on that PC. Desktop hosting uses the single-port forwarding
    path and does not enable the Android Console Bridge.
-3. Choose **Copy invitation** and send it privately. Your friend opens
+3. Open **Dashboard** → **Your Servers** or **Servers**. Choose **Copy
+   invitation** on the game's card and send it privately. Your friend opens
    **Servers** → **Add server** → **Import invitation**, then chooses **Join**.
    Their first attempt may show **no response** while you review the request.
 4. In **People**, choose **Review request** for the game. Verify the full key

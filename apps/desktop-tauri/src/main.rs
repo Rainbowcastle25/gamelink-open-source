@@ -64,6 +64,8 @@ fn public_method(method: &str) -> bool {
             | "setHostingEnabled"
             | "removeHostedGame"
             | "copyHostedInvitation"
+            | "copyLinkedInvitation"
+            | "approveLinkedRequest"
             | "copyText"
             | "pickExecutable"
             | "openConfigFolder"
@@ -94,7 +96,12 @@ async fn desktop(app: tauri::AppHandle, request: Value) -> Result<Value, String>
 fn native_or_manager(app: &tauri::AppHandle, request: Value) -> Result<Value, String> {
     if matches!(
         request["method"].as_str().unwrap_or(""),
-        "hostConnection" | "configureHost" | "hostStatus" | "refreshHost" | "importHostGame"
+        "hostConnection"
+            | "configureHost"
+            | "hostStatus"
+            | "refreshHost"
+            | "importHostGame"
+            | "approveLinkedRequest"
     ) {
         return host_connection::call(request);
     }
@@ -128,10 +135,17 @@ fn native_or_manager(app: &tauri::AppHandle, request: Value) -> Result<Value, St
             }
             Ok(Value::Null)
         }
-        "copyHostedInvitation" => {
-            let invite = host::call(json!({"method":"hostedInvitation","id":request["id"]}))?;
+        "copyHostedInvitation" | "copyLinkedInvitation" => {
+            let invite = if request["method"] == "copyLinkedInvitation" {
+                host_connection::invitation(&request)?
+            } else {
+                host::call(json!({"method":"hostedInvitation","id":request["id"]}))?
+                    .as_str()
+                    .ok_or("could not create the invitation")?
+                    .to_owned()
+            };
             app.clipboard()
-                .write_text(invite.as_str().ok_or("could not create the invitation")?)
+                .write_text(invite)
                 .map_err(|_| "could not access the clipboard")?;
             Ok(Value::Null)
         }

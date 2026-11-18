@@ -141,7 +141,7 @@ example with OpenSSH already configured for the node:
 ssh -N -L 8467:127.0.0.1:8467 your-admin-user@your-wings-node
 ```
 
-In GameLink, open **Host**, set the endpoint to `http://127.0.0.1:8467`, enter
+In GameLink, open **Host admin**, set the endpoint to `http://127.0.0.1:8467`, enter
 the separate admin token, and save. The desktop protects the token with Windows
 DPAPI. GameLink does not implement SSH or open a forwarding session itself.
 HTTPS endpoints are accepted by the desktop for an independently configured
@@ -150,10 +150,13 @@ public endpoint is deployed by this change.
 
 Click **Refresh** to register servers and fetch current status. Click **Add to
 GameLink** for a game to explicitly approve this desktop's device key and
-privately import its invitation. Neither invitations nor saved tokens are
-returned to the frontend. Friends still need their own per-game approval and
-private invitation. The initial screen manages one connected node at a time;
-change the endpoint and token to administer another node.
+privately import its invitation for your own use. To invite a friend, open
+**Dashboard** or **Servers** and select **Copy invitation** on that game's
+card. Copying and reviewing join requests require the updated desktop and
+Linux agent. Your friend imports the invitation and clicks **Join** to request access.
+In **People**, review the request for that game, confirm the device's public
+key, and approve it. The desktop manages one connected node at a time. Change
+the endpoint and token in **Host admin** to administer another node.
 
 Suspended, missing, and newly unmapped servers are disabled on the next
 successful Refresh, retaining their keys for later recovery. Failures preserve
@@ -163,8 +166,9 @@ access immediately between refreshes, use the existing local device-revocation
 commands or stop the agent. Rotating the host admin token requires restarting
 the agent and updating the desktop connection.
 
-The authenticated interface permits only cached status, explicit Refresh, and
-explicit approval/import for an enabled managed game. It exposes no shell,
+The authenticated interface provides cached status, pending join requests,
+explicit Refresh, invitation copying, and device approval for enabled managed
+games. Copying an invitation enables join requests without granting access. It exposes no shell,
 console commands, files, arbitrary destinations, game power controls, or Panel
 credentials. Protect the admin token: it authorizes device approval for this
 node's registered games.

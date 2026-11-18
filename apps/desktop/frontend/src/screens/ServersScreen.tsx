@@ -90,7 +90,7 @@ export function ServersScreen() {
 
   return (
     <>
-      <Header title="Servers" subtitle="Servers you can join. Each one needs an invitation from its owner.">
+      <Header title="Servers" subtitle="Games you host and servers you can join.">
         <AddMenu onImport={() => setModal({ kind: "import" })} onAdd={() => setModal({ kind: "add" })} />
       </Header>
 
