@@ -75,7 +75,8 @@ required command if absent). Check shipped binaries with `file` and `readelf`:
 there must be no `INTERP` header or `NEEDED` library. CI runs CLI flows on both
 architectures (`qemu-aarch64` for ARM), and runs the actual Rust agent against a
 hermetic local DERP to verify echo, revocation, fail-closed config and SIGTERM.
-See [phase 7 design](rust-phase7.md) for the final resource boundary.
+See [phase 7 design](history/rust-phase7.md) for the final resource boundary.
+The [migration history](history/README.md) indexes the earlier phases.
 
 ## Desktop app (Tauri, Windows and Linux)
 

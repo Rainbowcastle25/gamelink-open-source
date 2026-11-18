@@ -187,7 +187,8 @@ diagnostics. GameLink is **not** "100% secure"; read the
 
 - Verified with automated TCP and UDP echo/protocol tests through a real
   Tailcat relay. **Not verified with the real game clients** (Minecraft Java,
-  Factorio, Minecraft Bedrock).
+  Factorio, Minecraft Bedrock). See the [real-game validation matrix and test
+  procedure](docs/validation.md).
 - The Windows desktop and Linux host agent are for PC play. The Android app is
   an experimental Bedrock console bridge; direct Xbox/PlayStation hardware,
   screen-off operation, revocation while consoles are active, Wi-Fi-loss

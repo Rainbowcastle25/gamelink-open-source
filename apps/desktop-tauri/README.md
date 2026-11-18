@@ -10,4 +10,4 @@ Requests and responses use bounded, copied, explicitly freed C buffers.
 Build with `scripts/build-desktop.sh`; pass `--archives-only` before the target
 for Cargo development checks. Linux uses GTK/WebKitGTK; Windows GNU uses
 MinGW resources and WebView2. See [building](../../docs/building.md) and
-[the phase 7 boundary](../../docs/rust-phase7.md).
+[the phase 7 boundary](../../docs/history/rust-phase7.md).

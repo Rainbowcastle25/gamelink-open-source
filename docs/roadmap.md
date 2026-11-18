@@ -1,7 +1,23 @@
 # Roadmap
 
-Priorities, not promises. A checked implementation item does not mean it has
-been exercised with a real game or console.
+The roadmap lists priorities. Checked implementation items track code delivery.
+Game and console validation have their own checklists.
+
+## First priority: PC real-game validation
+
+Run the [real-game validation procedure](validation.md) for Minecraft Java,
+Minecraft Bedrock on Windows, and Factorio. Record gameplay, revocation,
+reconnect after a host restart, and local-port fallback on both direct and
+forced DERP paths. Every matrix row is currently **not yet verified**.
+
+## Near-term work in progress
+
+- Knock-to-join requests
+- Rotatable and expiring invitations
+- Desktop hosting of LAN worlds with a People screen
+- Stable local ports and Minecraft server-list integration
+- Opt-in presence notifications
+- Signed update notifications (notifications only, never auto-install)
 
 ## 0.2 alpha implementation
 
@@ -15,7 +31,12 @@ been exercised with a real game or console.
   binding and stop on selected-network change
 - [x] CI and local Go, frontend and Android build/test paths
 
-## Validation required before claiming console support
+## Android Console Bridge freeze
+
+The bridge is frozen for maintenance only. New bridge features are on hold
+until the PC path has been validated with real games using the
+[validation procedure](validation.md). The checks below track the evidence
+needed to claim console support.
 
 - [x] Android API 37 16 KiB emulator suite for Keystore storage, JNI reducer,
   Go identity/error redaction, DNS/TLS and Tailcat fixture discovery/cleanup

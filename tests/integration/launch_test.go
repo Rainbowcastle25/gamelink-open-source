@@ -14,7 +14,7 @@ import (
 // the status the desktop reads must name the real port, never the server's.
 // With the game's standard UDP port taken, the join must fall back to another
 // port, say so, and carry traffic there. (How that port is turned into game
-// launch arguments is Rust-owned; see docs/test-migration-map.md.)
+// launch arguments is Rust-owned; see docs/history/test-migration-map.md.)
 func TestJoinReportsActualLocalPortWhenStandardPortIsBusy(t *testing.T) {
 	busy, err := net.ListenPacket("udp", "127.0.0.1:34197")
 	if err != nil {

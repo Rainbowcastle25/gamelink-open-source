@@ -1,5 +1,9 @@
 # Android Console Bridge
 
+**Frozen for maintenance only.** New bridge features are on hold until the PC
+path has been validated with real games using the
+[validation procedure](validation.md).
+
 The Android app is an experimental LAN-to-LAN bridge for Bedrock consoles. It
 lets an Xbox or PlayStation discover a Bedrock Dedicated Server (BDS) on the
 host's LAN while the phone carries discovery, signaling and encrypted game
