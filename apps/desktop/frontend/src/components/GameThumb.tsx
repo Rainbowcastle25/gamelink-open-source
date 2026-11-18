@@ -8,6 +8,7 @@ interface Look {
   label: string;
 }
 
+// Original abstract tiles, not game artwork.
 const LOOKS: Record<string, Look> = {
   "minecraft-java": { icon: Box, gradient: "from-[#5b9a3a] to-[#7a5230]", label: "Minecraft Java" },
   "minecraft-bedrock": { icon: Cuboid, gradient: "from-[#14b8a6] to-[#2563eb]", label: "Minecraft Bedrock" },

@@ -1,11 +1,58 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{Map, Value};
+use std::sync::Mutex;
 
 const ICON_SIZE: i32 = 48;
 const GAMES: [&str; 3] = ["factorio", "minecraft-java", "minecraft-bedrock"];
 
 pub fn load(app: &tauri::AppHandle, executables: &Value) -> Value {
     platform::load(app, executables)
+}
+
+#[derive(Default)]
+pub struct Cache(Mutex<Option<(Value, Value)>>);
+
+impl Cache {
+    pub fn get_or_load(&self, executables: &Value, loader: impl FnOnce() -> Value) -> Value {
+        let mut cached = self.0.lock().unwrap();
+        if let Some((key, icons)) = cached.as_ref() {
+            if key == executables {
+                return icons.clone();
+            }
+        }
+        let icons = loader();
+        *cached = Some((executables.clone(), icons.clone()));
+        icons
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cache;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn reuses_icons_for_the_same_executables() {
+        let cache = Cache::default();
+        let calls = AtomicUsize::new(0);
+        let executables = json!({"factorio":"/games/factorio"});
+        let first = cache.get_or_load(&executables, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            json!({"factorio":"data:image/png;base64,AA=="})
+        });
+        let second = cache.get_or_load(&executables, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            json!({})
+        });
+        assert_eq!(first, second);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        cache.get_or_load(&json!({"factorio":"/other/factorio"}), || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            json!({})
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
 }
 
 fn icons(executables: &Value, find: impl Fn(&str, Option<&str>) -> Option<Vec<u8>>) -> Value {
@@ -38,22 +85,20 @@ mod platform {
     };
 
     pub fn load(app: &tauri::AppHandle, executables: &Value) -> Value {
-        let (send, recv) = mpsc::channel();
         let use_prism = executables["minecraft-java"]
             .as_str()
             .and_then(|path| Path::new(path).file_stem())
             .is_some_and(|name| name == "prismlauncher");
         // GTK's icon theme belongs to the UI thread. Decode files on the worker.
-        let _ = app.run_on_main_thread(move || {
-            let paths = IconTheme::default().map(|theme| {
-                GAMES
-                    .into_iter()
-                    .map(|game| (game, desktop_icon_paths(&theme, game, use_prism)))
-                    .collect::<HashMap<_, _>>()
+        let paths = if gtk::is_initialized_main_thread() {
+            theme_icon_paths(use_prism)
+        } else {
+            let (send, recv) = mpsc::channel();
+            let _ = app.run_on_main_thread(move || {
+                let _ = send.send(theme_icon_paths(use_prism));
             });
-            let _ = send.send(paths.unwrap_or_default());
-        });
-        let paths = recv.recv().unwrap_or_default();
+            recv.recv().unwrap_or_default()
+        };
         icons(executables, |game, executable| {
             let configured = (game == "factorio")
                 .then_some(executable)
@@ -62,13 +107,26 @@ mod platform {
                 .flat_map(factorio_icon_paths);
             configured
                 .chain(paths.get(game).into_iter().flatten().cloned())
-                .find_map(|path| {
-                    Pixbuf::from_file_at_scale(path, ICON_SIZE, ICON_SIZE, true)
-                        .ok()?
-                        .save_to_bufferv("png", &[])
-                        .ok()
-                })
+                .find_map(|path| encode_icon(&path))
         })
+    }
+
+    fn theme_icon_paths(use_prism: bool) -> HashMap<&'static str, Vec<PathBuf>> {
+        IconTheme::default()
+            .map(|theme| {
+                GAMES
+                    .into_iter()
+                    .map(|game| (game, desktop_icon_paths(&theme, game, use_prism)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn encode_icon(path: &Path) -> Option<Vec<u8>> {
+        Pixbuf::from_file_at_scale(path, ICON_SIZE, ICON_SIZE, true)
+            .ok()?
+            .save_to_bufferv("png", &[])
+            .ok()
     }
 
     fn desktop_icon_paths(theme: &IconTheme, game: &str, use_prism: bool) -> Vec<PathBuf> {
@@ -321,8 +379,8 @@ mod platform {
         }
         // Shell bitmaps use premultiplied BGRA. An unused alpha channel
         // (older opaque icons) is returned as all zeroes.
-        let has_alpha = pixels.chunks_exact(4).any(|pixel| pixel[3] != 0);
-        for pixel in pixels.chunks_exact_mut(4) {
+        let has_alpha = pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] != 0);
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
             if !has_alpha {
                 pixel[3] = 255;

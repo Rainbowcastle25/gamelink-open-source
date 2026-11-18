@@ -210,7 +210,10 @@ fn native_or_manager(app: &tauri::AppHandle, request: Value) -> Result<Value, St
         }
         "gameIcons" => {
             let settings = host::call(json!({"method":"settings"}))?;
-            Ok(game_icons::load(app, &settings["gameExecutables"]))
+            let executables = &settings["gameExecutables"];
+            Ok(app
+                .state::<game_icons::Cache>()
+                .get_or_load(executables, || game_icons::load(app, executables)))
         }
         _ => host::call(request),
     }
@@ -263,6 +266,7 @@ fn main() {
         .setup(move |app| {
             let session = bridge::Session::open().map_err(std::io::Error::other)?;
             app.manage(session);
+            app.manage(game_icons::Cache::default());
             let handle = app.handle().clone();
             let worker = std::thread::spawn(move || {
                 while active.load(Ordering::Acquire) {

@@ -26,7 +26,7 @@ base64 = "=0.22.1"
 
 [target.'cfg(not(windows))'.dependencies]
 tauri-plugin-notification = "2"
-gtk = "=0.18.2"
+gtk = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 png = "=0.18.1"
