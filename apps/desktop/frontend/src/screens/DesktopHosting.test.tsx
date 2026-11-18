@@ -5,6 +5,7 @@ import App from "../App";
 import { Toaster } from "../components/Toaster";
 import { Type } from "../lib/types";
 import { createMockBackend } from "../lib/mockBackend";
+import { Type } from "../lib/types";
 import { renderApp } from "../test/utils";
 import { DashboardScreen } from "./DashboardScreen";
 import { ServersScreen } from "./ServersScreen";
@@ -41,6 +42,23 @@ describe("Host on this PC", () => {
       const hosted = (await backend.hostedGames()).filter((game) => game.lan);
       expect(hosted).toMatchObject([{ id: before.id, port: 51734 }]);
     });
+  });
+
+  it("shows a closed shared LAN world as paused on Host and People", async () => {
+    const backend = createMockBackend({ delayMs: 0, seed: false });
+    const detail = "World closed or not announced; sharing resumes if it reopens on the same port";
+    vi.spyOn(backend, "hostedGames").mockResolvedValue([{
+      id: "demo-hosted-lan", game: Type.MinecraftJava, name: "Demo: Closed Cabin", port: 51000,
+      lan: true, enabled: true, paused: true, state: "inactive", detail, approved: [], pending: [],
+    }]);
+    const host = renderApp(<LocalHostScreen />, { backend });
+    const card = (await screen.findByRole("heading", { name: "Demo: Closed Cabin" })).closest("li")!;
+    expect(card).toHaveTextContent("Sharing paused");
+    expect(card).toHaveTextContent(detail);
+    expect(within(card).getByRole("button", { name: "Stop sharing" })).toBeInTheDocument();
+    host.unmount();
+    renderApp(<PeopleScreen />, { backend });
+    expect(await screen.findByRole("article", { name: "Demo: Closed Cabin" })).toHaveTextContent("Sharing paused");
   });
 
   it("creates a manual server when multicast is unavailable", async () => {

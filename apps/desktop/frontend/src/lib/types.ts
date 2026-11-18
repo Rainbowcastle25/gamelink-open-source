@@ -272,6 +272,8 @@ export interface HostedGame extends HostedGameForm {
   serverPublicKey?: string | null;
   lan: boolean;
   enabled: boolean;
+  /** A shared LAN world stopped announcing; the tunnel waits for it on the same port. */
+  paused?: boolean;
   state: "inactive" | "serving" | "error";
   detail: string;
   approved: HostedDevice[];

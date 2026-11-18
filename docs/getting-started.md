@@ -49,8 +49,9 @@ with the same `GAMELINK_HOME` while that folder still exists.
 5. When a Minecraft LAN world reopens on a different port, return to **Host**
    and choose **Update LAN port**. GameLink keeps the same game, approved
    devices and invitation. After restarting GameLink, share the detected
-   LAN world again before friends connect. Use **Stop sharing** when you
-   close the world or server.
+   LAN world again before friends connect. If you close a shared LAN world,
+   GameLink pauses sharing within about 10 seconds and resumes it only if the
+   world reopens on the same port. Use **Stop sharing** when you are done.
 6. To remove someone's access, select **Revoke** for that device in **People**.
    This closes the game's current sessions. Devices that remain approved
    can reconnect.

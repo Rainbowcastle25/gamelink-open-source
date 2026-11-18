@@ -87,17 +87,25 @@ Invitation holder (not approved) ──X─►   (handshake gets no reply)
   Tailcat server, per-game identity, supervisor, and approval policy as the
   Linux agent. Windows protects the hosted private key and pre-shared key with
   DPAPI. The desktop writes invitation text directly to the native clipboard.
-- While **Host** is open, Minecraft Java discovery joins IPv4 multicast
-  `224.0.2.60:4445` on local interfaces. The socket is receive-only and uses
-  a loopback bind with destination filtering on Windows and a group-address
-  bind on Linux. GameLink sends no discovery packets and forwards no discovery
-  traffic. It filters announcements by this PC's interface addresses and bounds
-  the datagram size, cache and lifetime.
+- Minecraft Java discovery joins IPv4 multicast `224.0.2.60:4445` on local
+  interfaces only while **Host** is open or a LAN world is shared (including
+  while that share is paused, below). It stops when Host is closed and no LAN
+  world is shared. The socket is receive-only. Windows binds the wildcard
+  address, because Winsock delivers multicast only to wildcard or
+  receiving-interface binds, and accepts only datagrams whose destination is
+  the group. Linux binds the group address. GameLink sends no discovery
+  packets and forwards no discovery traffic. It filters announcements by this
+  PC's interface addresses and bounds the datagram size, cache and lifetime.
 - An announcement is an unauthenticated hint. Sharing or updating a LAN
   world's port requires a click by the host. The destination is always
-  `127.0.0.1` on the host PC. The desktop requires re-detection of LAN worlds
-  after the app restarts because a previous port may now belong to a different
-  local application. Stop sharing a world when closing it.
+  `127.0.0.1` on the host PC. A shared world's tunnel pauses when no
+  announcement for that world name on its confirmed port has arrived for 10
+  seconds (Minecraft announces about every 1.5 seconds), because a closed
+  world's temporary port may be reused by another local program. It resumes
+  only when the same name reappears on the same port; a new port needs the
+  host's click again. A local program could still announce a matching name and
+  port while the world is closed. **Stop sharing** forgets the port. The
+  desktop requires re-detection of LAN worlds after the app restarts.
 - **People** displays pending requests from the shared Tailcat refusal
   mechanism. The app records the time of the last authorized game connection
   locally for approved devices.
