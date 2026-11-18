@@ -10,6 +10,20 @@ build status and hardware checklist.
 Legend: ✅ covered by automated tests, 🟡 documented but not exercised with the
 real thing.
 
+## Where GameLink saves your servers
+
+GameLink saves your servers as soon as you add or import them. The desktop
+app reloads them from the same profile when you open it again. Open
+**Settings → Storage locations → Open folder** to see the active profile.
+
+Launch the desktop executable with `GAMELINK_HOME` unset for everyday use.
+By default, GameLink uses `%APPDATA%\GameLink` on Windows and
+`~/.config/GameLink` on Linux (`$XDG_CONFIG_HOME/GameLink` if
+`XDG_CONFIG_HOME` is set). If you set `GAMELINK_HOME`, GameLink uses that
+folder instead. If your list appears empty after a relaunch, check which
+folder the app opened. To see servers saved in a custom profile, relaunch
+with the same `GAMELINK_HOME` while that folder still exists.
+
 ## Host from your Windows PC
 
 1. Run GameLink on Windows 10 or 11 with the WebView2 runtime. Keep the

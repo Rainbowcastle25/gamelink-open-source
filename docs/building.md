@@ -110,13 +110,20 @@ Artifacts and notices are staged in `dist/desktop/<triple>/`. On Windows ship
 licenses. The system WebView2 runtime is also required. This is an unsigned
 application, not an installer or public release.
 
+For everyday use, launch the staged desktop executable with `GAMELINK_HOME`
+unset. See [where GameLink saves your servers](getting-started.md#where-gamelink-saves-your-servers).
+
 ```sh
 cargo fmt --manifest-path apps/desktop-tauri/Cargo.toml --check
 cargo clippy --manifest-path apps/desktop-tauri/Cargo.toml --locked --all-targets -- -D warnings
 cargo test --manifest-path apps/desktop-tauri/Cargo.toml --locked
 # Native smoke testing must use private throwaway state:
-GAMELINK_HOME="$(mktemp -d)" apps/desktop-tauri/target/x86_64-unknown-linux-gnu/release/gamelink-desktop
+gamelink_test_profile="$(mktemp -d)"
+GAMELINK_HOME="$gamelink_test_profile" apps/desktop-tauri/target/x86_64-unknown-linux-gnu/release/gamelink-desktop
 ```
+
+To verify that servers persist, close the app and repeat the launch command
+with the same `gamelink_test_profile`.
 
 For browser development use `VITE_MOCK=1 npm run dev` in the frontend; mock
 code is excluded from production builds. A native build uses the real Tauri
