@@ -979,9 +979,16 @@ pub fn dispatch(method: &str, input: Value) -> Result<Value, String> {
                         .iter_mut()
                         .find(|g| g["id"] == id)
                         .ok_or_else(|| format!("no game with id {id:?}"))?;
-                    if ["name", "type", "protocol", "tunnelPort", "consoleBridge"]
-                        .iter()
-                        .any(|k| g[*k] != input["expectedGame"][*k])
+                    if [
+                        "name",
+                        "type",
+                        "protocol",
+                        "tunnelPort",
+                        "consoleBridge",
+                        "disabled",
+                    ]
+                    .iter()
+                    .any(|k| g[*k] != input["expectedGame"][*k])
                     {
                         return Err("game settings changed; try again".into());
                     }

@@ -18,6 +18,7 @@ export interface ManageActions {
 interface Props {
   server: ServerView;
   busy?: BusyKind;
+  hosted?: ReactNode;
   onJoin: () => void;
   /** Join, then start the game once connected. Shown when the game can be launched. */
   onPlay?: () => void;
@@ -61,7 +62,7 @@ function Detail({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-export function ServerCard({ server, busy, onJoin, onPlay, onDisconnect, onCheck, onLaunch, onOpenRequests, manage }: Props) {
+export function ServerCard({ server, busy, hosted, onJoin, onPlay, onDisconnect, onCheck, onLaunch, onOpenRequests, manage }: Props) {
   const [open, setOpen] = useState(false);
   const detailsId = useId();
   const status = serverStatus(server, busy);
@@ -172,6 +173,8 @@ export function ServerCard({ server, busy, onJoin, onPlay, onDisconnect, onCheck
           )}
         </div>
       </div>
+
+      {hosted && <div className="border-t border-line px-4 py-2">{hosted}</div>}
 
       {showPanel && (
         <div className="border-t border-line px-4 py-4">

@@ -15,6 +15,20 @@ pub fn load_keys(dir: &Path, id: &str) -> Result<Value> {
     Ok(loaded["keys"].clone())
 }
 
+pub fn encode(
+    game: &Value,
+    keys: &Value,
+    name: &str,
+    note: &str,
+    allow_local: bool,
+) -> Result<Value> {
+    pure::check_invite_expiry(&keys["expiresAt"])?;
+    let addr = bridge::call(json!({"method":"address","keys":keys,"allowLocalRelay":allow_local}))?;
+    let invitation = json!({"v":1,"name":name,"game":game["type"],"proto":game["protocol"],"port":game["tunnelPort"],"addr":addr,"note":note,"consoleBridge":if game["consoleBridge"].is_null(){0}else{1},"expiresAt":keys["expiresAt"]});
+    core("invite.fields", invitation.clone())?;
+    core("invite.encode", invitation)
+}
+
 fn invite_expiry(duration: &str) -> Result<String> {
     let invalid = || "invalid --expires duration; use a positive number followed by s, m, h or d";
     let (amount, unit) = duration
@@ -69,20 +83,15 @@ impl Cli {
                 "invitation expired; run `gamelink-agent invite rotate --game {id}`"
             ));
         }
-        let addr = bridge::call(
-            json!({"method":"address","keys":keys,"allowLocalRelay":m.get_flag("allow-local-relay")}),
-        )?;
         let name = m
             .get_one::<String>("name")
-            .filter(|n| !n.is_empty())
+            .filter(|name| !name.is_empty())
             .map_or(s(game, "name"), String::as_str);
         let note = m
             .get_one::<String>("note")
             .map(String::as_str)
             .unwrap_or("");
-        let invitation = json!({"v":1,"name":name,"game":game["type"],"proto":game["protocol"],"port":game["tunnelPort"],"addr":addr,"note":note,"consoleBridge":if game["consoleBridge"].is_null(){0}else{1},"expiresAt":keys["expiresAt"]});
-        core("invite.fields", invitation.clone())?;
-        let encoded = core("invite.encode", invitation)?;
+        let encoded = encode(game, &keys, name, note, m.get_flag("allow-local-relay"))?;
         let encoded = encoded.as_str().ok_or("invalid invitation response")?;
         self.mutate(
             "invite",

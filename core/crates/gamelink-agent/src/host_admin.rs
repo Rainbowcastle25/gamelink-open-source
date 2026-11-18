@@ -1,6 +1,9 @@
 //! Opt-in administration inside the existing node agent. Panel requests are
 //! exclusively user-triggered; the socket sleeps in accept between requests.
-use crate::{bridge, config, json, now, pterodactyl, pure, rows, s, Result};
+use crate::{
+    bridge, config, invitations, json, now, pterodactyl, pure, requests, rows, s, Cli, Result,
+};
+use gamelink_core::requests::Scope;
 use serde_json::Value;
 use std::{
     fs,
@@ -257,6 +260,15 @@ fn equal_secret(left: &str, right: &str) -> bool {
     }
     difference == 0
 }
+fn managed(game: &Value) -> bool {
+    !s(game, "origin").is_empty()
+}
+
+fn server_key(keys: &Value) -> Result<Value> {
+    let key = bridge::call(json!({"method":"server_public_key","keys":keys}))?;
+    pure::dispatch("identity.public_key", json!({"text":key}))
+}
+
 impl Host {
     fn handle(&mut self, request: Request) -> ApiResult<(u16, Value)> {
         if request.origin
@@ -271,68 +283,145 @@ impl Host {
                 self.statuses = result["statuses"].clone();
                 self.checked_at = now();
             }
-            ("POST", "/v1/host/import") => {
+            ("POST", "/v1/host/import" | "/v1/host/invitation" | "/v1/host/requests/approve") => {
                 let body: Value = serde_json::from_slice(&request.body)
-                    .map_err(|_| (400, "Invalid import request".into()))?;
-                return self.import(body).map(|value| (200, value)).map_err(|_| {
+                    .map_err(|_| (400, "Invalid game request".into()))?;
+                let result = match request.path.as_str() {
+                    "/v1/host/import" => self.import(&body),
+                    "/v1/host/invitation" => self.invitation(&body),
+                    _ => self.approve_request(&body),
+                };
+                return result.map(|value| (200, value)).map_err(|_| {
                     (
                         400,
-                        "Could not approve/import the selected enabled game".into(),
+                        "Could not complete the action for the selected enabled game".into(),
                     )
                 });
             }
-            (_, "/v1/host/status" | "/v1/host/refresh" | "/v1/host/import") => {
-                return Err((405, "Unsupported host request method".into()))
-            }
+            (
+                _,
+                "/v1/host/status"
+                | "/v1/host/refresh"
+                | "/v1/host/import"
+                | "/v1/host/invitation"
+                | "/v1/host/requests/approve",
+            ) => return Err((405, "Unsupported host request method".into())),
             _ => return Err((404, "Unknown host operation".into())),
         }
         self.snapshot()
             .map(|value| (200, value))
             .map_err(|_| (500, "Could not read host registrations".into()))
     }
+    fn cli(&self) -> Cli {
+        Cli {
+            dir: self.dir.clone(),
+        }
+    }
+
     fn snapshot(&self) -> Result<Value> {
-        let cfg = config::dispatch(
-            "config.agent_load",
-            json!({"path":self.dir.join("agent.json")}),
-        )?;
-        let games:Vec<_>=rows(&cfg["games"]).iter().filter(|g|!s(g,"origin").is_empty()).map(|game|{
-            let status=rows(&self.statuses).iter().find(|v|v["gameId"]==game["id"]);
-            let (state,detail)=if game["disabled"]==true{("disabled","Suspended, removed, or no longer mapped at the last refresh")}else if let Some(status)=status{(s(status,"state"),s(status,"detail"))}else{("unknown","Click Refresh to check the Panel")};
-            json!({"id":game["id"],"name":game["name"],"type":game["type"],"disabled":game["disabled"]==true,"approvedDevices":rows(&game["devices"]).len(),"state":state,"detail":detail})
+        let cfg = self.cli().load()?;
+        let games = || rows(&cfg["games"]).iter().filter(|game| managed(game));
+        let scopes = requests::scopes(&self.dir, games());
+        let pending = requests::load(&self.dir)
+            .map(|store| store.list(&scopes, chrono::Utc::now()))
+            .unwrap_or_default();
+        let games: Vec<_> = games().map(|game| {
+            let id = s(game, "id");
+            let status = rows(&self.statuses).iter().find(|v| v["gameId"] == game["id"]);
+            let (state, detail) = if game["disabled"] == true {
+                ("disabled", "Suspended, removed, or no longer mapped at the last refresh")
+            } else if let Some(status) = status {
+                (s(status, "state"), s(status, "detail"))
+            } else {
+                ("unknown", "Click Refresh to check the Panel")
+            };
+            let key = invitations::load_keys(&self.dir, id)
+                .and_then(|keys| server_key(&keys)).unwrap_or(Value::Null);
+            let pending: Vec<_> = pending.iter().filter(|request| request["game"] == id)
+                .map(|request| json!({"id":request["id"],"publicKey":request["publicKey"],"lastSeen":request["lastSeen"]}))
+                .collect();
+            json!({
+                "id":id,"name":game["name"],"type":game["type"],"proto":game["protocol"],"port":game["tunnelPort"],
+                "disabled":game["disabled"]==true,"approvedDevices":rows(&game["devices"]).len(),
+                "state":state,"detail":detail,"serverPublicKey":key,
+                "canCopyInvitation":scopes.contains_key(id) && !key.is_null(),"pending":pending
+            })
         }).collect();
         Ok(json!({"games":games,"refreshedAt":self.checked_at}))
     }
-    fn import(&self, body: Value) -> Result<Value> {
-        let cfg = config::dispatch(
-            "config.agent_load",
-            json!({"path":self.dir.join("agent.json")}),
-        )?;
+
+    fn selected_game(&self, body: &Value) -> Result<(Value, Value)> {
+        let cfg = self.cli().load()?;
         let game = rows(&cfg["games"])
             .iter()
-            .find(|game| {
-                game["id"] == body["gameId"]
-                    && !s(game, "origin").is_empty()
-                    && game["disabled"] != true
-            })
+            .find(|game| game["id"] == body["gameId"] && managed(game) && game["disabled"] != true)
             .ok_or("unknown or disabled managed game")?;
-        let id = s(game, "id");
-        let keys = config::dispatch(
-            "config.keys_load",
-            json!({"id":id,"path":self.dir.join("keys").join(format!("{id}.json"))}),
-        )?;
-        pure::check_invite_expiry(&keys["keys"]["expiresAt"])?;
-        let address = bridge::call(json!({"method":"address","keys":keys["keys"]}))?;
-        let invitation = pure::dispatch(
-            "invite.encode",
-            json!({"v":1,"name":game["name"],"game":game["type"],"proto":game["protocol"],"port":game["tunnelPort"],"addr":address,"consoleBridge":if game["consoleBridge"].is_null(){0}else{1},"expiresAt":keys["keys"]["expiresAt"]}),
-        )?;
-        config::dispatch(
-            "config.agent_mutate",
-            json!({"path":self.dir.join("agent.json"),"action":"approve","id":id,"publicKey":body["publicKey"],"label":"Host admin device","now":now(),"expectedKeys":keys["keys"]}),
+        let keys = invitations::load_keys(&self.dir, s(game, "id"))?;
+        pure::check_invite_expiry(&keys["expiresAt"])?;
+        Ok((game.clone(), keys))
+    }
+
+    fn check_selection(keys: &Value, body: &Value) -> Result<()> {
+        if server_key(keys)? != body["serverPublicKey"] {
+            return Err("the selected game identity has changed".into());
+        }
+        Ok(())
+    }
+
+    fn import(&self, body: &Value) -> Result<Value> {
+        let (game, keys) = self.selected_game(body)?;
+        let invitation = invitations::encode(&game, &keys, s(&game, "name"), "", false)?;
+        self.cli().approve_device(
+            s(&game, "id"),
+            s(body, "publicKey"),
+            "Host admin device",
+            &keys,
         )?;
         Ok(json!({"invitation":invitation}))
     }
+
+    fn invitation(&self, body: &Value) -> Result<Value> {
+        let (game, keys) = self.selected_game(body)?;
+        Self::check_selection(&keys, body)?;
+        let invitation = invitations::encode(&game, &keys, s(&game, "name"), "", false)?;
+        self.cli().mutate(
+            "invite",
+            json!({"id":game["id"],"expectedGame":game,"expectedKeys":keys,"keys":keys}),
+        )?;
+        Ok(json!({"invitation":invitation}))
+    }
+
+    fn approve_request(&self, body: &Value) -> Result<Value> {
+        let _lock = requests::lock(&self.dir)?;
+        let (game, keys) = self.selected_game(body)?;
+        Self::check_selection(&keys, body)?;
+        let id = s(&game, "id");
+        let scope = Scope::new(&game, keys);
+        let scopes = [(id.to_owned(), scope)].into_iter().collect();
+        let now = chrono::Utc::now();
+        let mut store = requests::load(&self.dir)?;
+        let request = store
+            .list(&scopes, now)
+            .into_iter()
+            .find(|request| {
+                request["id"] == body["requestId"] && request["publicKey"] == body["publicKey"]
+            })
+            .ok_or("request is no longer pending for that device and game")?;
+        self.cli().approve_device(
+            id,
+            s(&request, "publicKey"),
+            s(body, "label"),
+            &scopes[id].keys,
+        )?;
+        let request_id = request["id"].as_u64().ok_or("invalid request ID")?;
+        store.dismiss(id, request_id, now);
+        if requests::save(&store, &self.dir).is_err() {
+            crate::log("The approval was saved, but the request store could not be updated.");
+        }
+        Ok(json!({}))
+    }
 }
+
 fn respond(stream: &mut TcpStream, code: u16, value: &Value) -> std::io::Result<()> {
     let bytes = serde_json::to_vec(value).unwrap_or_default();
     write!(stream,"HTTP/1.1 {code} Result\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",bytes.len())?;

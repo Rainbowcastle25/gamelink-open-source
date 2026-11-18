@@ -48,10 +48,11 @@ type Options struct {
 
 // Details is what the UI can safely show about an address.
 type Details struct {
-	RelayHosts   []string `json:"relayHosts"`
-	RelayRegion  string   `json:"relayRegion"`
-	ServerKey    string   `json:"serverKey"` // short fingerprint of the server's public key
-	DefaultRelay bool     `json:"defaultRelay"`
+	RelayHosts      []string `json:"relayHosts"`
+	RelayRegion     string   `json:"relayRegion"`
+	ServerKey       string   `json:"serverKey"` // short fingerprint of the server's public key
+	ServerPublicKey string   `json:"-"`
+	DefaultRelay    bool     `json:"defaultRelay"`
 }
 
 // Encode serialises and validates an invitation.
@@ -100,5 +101,8 @@ func ValidateAddr(addr string, opts Options) (Details, error) {
 		"serverKeyPresent": !ci.ServerPublic.IsZero(), "presharedKeyPresent": !ci.PresharedKey.IsZero(),
 		"serverKey": ci.ServerPublic.String(), "regions": ci.Region, "allowLocalRelay": opts.AllowLocalRelay,
 	}, &det)
+	if err == nil {
+		det.ServerPublicKey = ci.ServerPublic.String()
+	}
 	return det, err
 }

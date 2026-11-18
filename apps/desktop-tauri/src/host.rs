@@ -63,6 +63,7 @@ struct Request {
     port: i64,
     game: String,
     public_key: String,
+    request_id: Option<u64>,
     label: String,
     enabled: Option<bool>,
     limit: i64,
@@ -679,13 +680,12 @@ impl App {
         let id = text(&server, "id");
         let info = info(&server["game"]);
         let connection = self.step(id, json!({"type":"view"}))?;
-        let details = self
-            .address(id)
+        let details = storage::unseal(text(&server, "addr"))
             .ok()
             .and_then(|addr| self.validate(&addr, true).ok())
             .unwrap_or(Value::Null);
         Ok(
-            json!({"id":server["id"],"name":server["name"],"description":text(&server,"description"),"game":server["game"],"gameName":info["name"],"proto":server["proto"],"port":server["port"],"localPort":server["localPort"],"stablePort":server["stablePort"],"minecraftListed":server["game"]=="minecraft-java"&&self.minecraft_listed(),"launchConnects":desktop::launch_connects(&server["game"],&self.cfg["settings"],cfg!(windows)),"defaultPort":info["defaultPort"],"addedAt":server["addedAt"],"hint":info["hint"],"hasExecutable":!text(&self.cfg["settings"]["gameExecutables"],text(&server,"game")).is_empty() || (cfg!(windows)&&!text(&info,"launchUri").is_empty()),"relayHosts":details["relayHosts"],"defaultRelay":details["defaultRelay"]==true,"serverKey":text(&details,"serverKey"),"demo":false,"connection":connection["connection"],"check":connection["check"]}),
+            json!({"id":server["id"],"name":server["name"],"description":text(&server,"description"),"game":server["game"],"gameName":info["name"],"proto":server["proto"],"port":server["port"],"localPort":server["localPort"],"stablePort":server["stablePort"],"minecraftListed":server["game"]=="minecraft-java"&&self.minecraft_listed(),"launchConnects":desktop::launch_connects(&server["game"],&self.cfg["settings"],cfg!(windows)),"defaultPort":info["defaultPort"],"addedAt":server["addedAt"],"hint":info["hint"],"hasExecutable":!text(&self.cfg["settings"]["gameExecutables"],text(&server,"game")).is_empty() || (cfg!(windows)&&!text(&info,"launchUri").is_empty()),"relayHosts":details["relayHosts"],"defaultRelay":details["defaultRelay"]==true,"serverKey":text(&details,"serverKey"),"serverPublicKey":details["serverPublicKey"],"demo":false,"connection":connection["connection"],"check":connection["check"]}),
         )
     }
     fn servers(&mut self) -> Result<Value> {
@@ -2310,6 +2310,19 @@ mod tests {
         );
         assert_eq!(App::generation(&json!({}), "a"), None);
         assert!(now().ends_with('Z'));
+    }
+
+    #[test]
+    fn request_struct_preserves_hosted_join_request_ids() {
+        for method in ["approveHostedRequest", "dismissHostedRequest"] {
+            let request: Request = serde_json::from_value(
+                json!({"method":method,"id":"selected-game","requestId":42}),
+            )
+            .unwrap();
+            let forwarded = serde_json::to_value(request).unwrap();
+            assert_eq!(forwarded["id"], "selected-game");
+            assert_eq!(forwarded["requestId"], 42);
+        }
     }
 
     #[test]

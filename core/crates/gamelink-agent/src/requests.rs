@@ -25,7 +25,7 @@ pub fn lock(dir: &Path) -> Result<File> {
     Ok(file)
 }
 
-fn load(dir: &Path) -> Result<Store> {
+pub(crate) fn load(dir: &Path) -> Result<Store> {
     match storage::read_bounded(&dir.join("requests.json")) {
         Ok(data) => serde_json::from_slice(&data).map_err(|_| "invalid request store".into()),
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(Store::default()),
@@ -33,7 +33,7 @@ fn load(dir: &Path) -> Result<Store> {
     }
 }
 
-fn save(store: &Store, dir: &Path) -> Result<()> {
+pub(crate) fn save(store: &Store, dir: &Path) -> Result<()> {
     let bytes = serde_json::to_vec(store).map_err(|_| "cannot encode request store")?;
     storage::write_atomic(&dir.join("requests.json"), &bytes)
 }
@@ -59,31 +59,41 @@ pub fn publish(
     Ok(())
 }
 
+pub(crate) fn scopes<'a>(
+    dir: &Path,
+    games: impl IntoIterator<Item = &'a Value>,
+) -> BTreeMap<String, Scope> {
+    games
+        .into_iter()
+        .filter_map(|game| {
+            if game["disabled"] == true {
+                return None;
+            }
+            let id = s(game, "id");
+            let keys = load_keys(dir, id).ok()?;
+            pure::check_invite_expiry(&keys["expiresAt"]).ok()?;
+            Some((id.to_owned(), Scope::new(game, keys)))
+        })
+        .collect()
+}
+
 impl Cli {
     pub fn requests(&self, cmd: &str, m: &clap::ArgMatches) -> Result<()> {
         let list = cmd == "requests list";
         let _lock = if list { None } else { Some(lock(&self.dir)?) };
         let cfg = self.load()?;
         let filter = m.get_one::<String>("game").map(String::as_str);
-        let mut scopes = BTreeMap::new();
-        let mut found_game = false;
-        for game in rows(&cfg["games"]) {
-            let id = s(game, "id");
-            if filter.is_some_and(|filter| filter != id) {
-                continue;
-            }
-            found_game = true;
-            if game["disabled"] != true {
-                if let Ok(keys) = load_keys(&self.dir, id) {
-                    if pure::check_invite_expiry(&keys["expiresAt"]).is_ok() {
-                        scopes.insert(id.to_owned(), Scope::new(game, keys));
-                    }
-                }
-            }
+        if let Some(id) =
+            filter.filter(|id| !rows(&cfg["games"]).iter().any(|game| game["id"] == *id))
+        {
+            return Err(format!("no game with id {id:?}"));
         }
-        if let Some(game) = filter.filter(|_| !found_game) {
-            return Err(format!("no game with id {game:?}"));
-        }
+        let scopes = scopes(
+            &self.dir,
+            rows(&cfg["games"])
+                .iter()
+                .filter(|game| filter.is_none_or(|id| game["id"] == id)),
+        );
         let mut store = load(&self.dir)?;
         let pending = store.list(&scopes, chrono::Utc::now());
         if list {

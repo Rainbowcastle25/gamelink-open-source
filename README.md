@@ -107,10 +107,11 @@ release host. You download and install updates yourself. See the
 
 On your Windows PC, open a Minecraft Java world to LAN and choose **Host** →
 **Share world** in GameLink, or enter the local port under **Host a server on
-this PC**. Choose **Copy invitation** and send it privately. Your friend
-imports it in **Servers** and clicks **Join**. In **People**, review the join
-request, verify the public key with your friend, and approve it. Your friend
-can retry **Join** and use the local game address GameLink shows.
+this PC**. In **Dashboard** or **Servers**, choose **Copy invitation** on
+the game's card and send it privately. Your friend imports it in **Servers**
+and clicks **Join**. In **People**, review the join request, verify the public
+key with your friend, and approve it. Your friend can retry **Join** and use
+the local game address GameLink shows.
 See [Host from your Windows PC](docs/getting-started.md#host-from-your-windows-pc).
 
 On a Linux host running Minecraft Java, run these commands.

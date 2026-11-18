@@ -128,6 +128,8 @@ func dispatch(input []byte) (any, error) {
 	switch r.Method {
 	case "host_generate":
 		return gamehost.Generate(), nil
+	case "host_public_key":
+		return r.Keys.PublicKey()
 	case "host_address":
 		return r.Keys.Address(false)
 	case "host_start":
@@ -175,7 +177,14 @@ func dispatch(input []byte) (any, error) {
 		}
 		return owner.private.Public().String(), nil
 	case "validate":
-		return invite.ValidateAddr(r.Address, invite.Options{AllowLocalRelay: r.AllowLocalRelay})
+		details, err := invite.ValidateAddr(r.Address, invite.Options{AllowLocalRelay: r.AllowLocalRelay})
+		if err != nil {
+			return nil, err
+		}
+		return struct {
+			invite.Details
+			PublicKey string `json:"serverPublicKey"`
+		}{details, details.ServerPublicKey}, nil
 	case "events":
 		mailbox.Lock()
 		defer mailbox.Unlock()

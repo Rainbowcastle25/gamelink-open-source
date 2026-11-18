@@ -149,6 +149,7 @@ export interface ServerView {
     "launchConnects"?: boolean;
     "id": string;
     "name": string;
+    "serverPublicKey"?: string | null;
     "description": string;
     "game": GameId | "";
     "gameName": string;
@@ -227,6 +228,11 @@ export interface HostGame {
   type: string;
   disabled: boolean;
   approvedDevices: number;
+  proto?: Proto;
+  port?: number;
+  serverPublicKey?: string | null;
+  canCopyInvitation?: boolean;
+  pending?: PendingDevice[];
   state: string;
   detail: string;
 }
@@ -263,6 +269,7 @@ export interface PendingDevice {
 
 export interface HostedGame extends HostedGameForm {
   id: string;
+  serverPublicKey?: string | null;
   lan: boolean;
   enabled: boolean;
   state: "inactive" | "serving" | "error";

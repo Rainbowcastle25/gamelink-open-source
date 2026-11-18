@@ -45,6 +45,9 @@ export const realBackend: Backend = {
   hostStatus: async () => call("hostStatus"),
   refreshHost: async () => call("refreshHost"),
   importHostGame: async (gameID) => call("importHostGame", { gameID }),
+  copyLinkedInvitation: async (id, serverPublicKey) => call("copyLinkedInvitation", { id, serverPublicKey }),
+  approveLinkedRequest: async (id, serverPublicKey, request, label) =>
+    call("approveLinkedRequest", { id, serverPublicKey, requestId: request.id, publicKey: request.publicKey, label }),
 
   hostedGames: async () => call("hostedGames"),
   createHostedGame: async (form) => call("createHostedGame", { ...form }),

@@ -122,6 +122,8 @@ func dispatch(data []byte) (any, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		return transport.ResolveRegion(ctx, transport.RegionSpec{Host: r.Host, RegionID: r.RegionID})
+	case "server_public_key":
+		return r.Keys.PublicKey()
 	case "address":
 		return r.Keys.Address(r.AllowLocalRelay)
 	case "start":

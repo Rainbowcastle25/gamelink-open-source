@@ -34,6 +34,14 @@ func (k Keys) Parse() (private key.NodePrivate, psk tailcat.PresharedKey, err er
 	return
 }
 
+func (k Keys) PublicKey() (string, error) {
+	private, _, err := k.Parse()
+	if err != nil {
+		return "", err
+	}
+	return private.Public().String(), nil
+}
+
 func (k Keys) Address(allowLocalRelay bool) (string, error) {
 	private, psk, err := k.Parse()
 	if err != nil {
