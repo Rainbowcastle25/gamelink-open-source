@@ -188,9 +188,16 @@ describe("ConnectionPanel", () => {
   });
 
   it("explains a port fallback", () => {
-    renderApp(<ConnectionPanel server={{ ...connected({ portFallback: true, localPort: 34198, localAddr: "127.0.0.1:34198" }), stablePort: 25565, minecraftListed: true }} />);
-    expect(screen.getByText(/Stable port 25565 was unavailable. Using temporary port 34198/)).toHaveTextContent("The Minecraft list entry still points to the stable port.");
+    renderApp(<ConnectionPanel server={{ ...connected({ portFallback: true, localPort: 34198, localAddr: "127.0.0.1:34198" }), stablePort: 25565 }} />);
+    expect(screen.getByText(/Stable port 25565 was unavailable. Using temporary port 34198/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Copy Address" })).toBeVisible();
+  });
+
+  it("keeps the synced Minecraft entry during a port fallback", () => {
+    const server = { ...connected({ portFallback: true, localPort: 34198, localAddr: "127.0.0.1:34198" }), stablePort: 25565, minecraftListed: true };
+    renderApp(<ConnectionPanel server={server} />);
+    expect(screen.getByText(/Using temporary port 34198/)).not.toHaveTextContent("still points to the stable port");
+    expect(screen.getByText(`In Minecraft Multiplayer, select “${server.name} (GameLink)”.`)).toBeVisible();
   });
 
   it("guides Minecraft players to the saved entry with the address collapsed", () => {
