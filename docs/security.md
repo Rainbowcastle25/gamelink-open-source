@@ -106,10 +106,13 @@ Invitation holder (not approved) ──X─►   (handshake gets no reply)
   host's click again. A local program could still announce a matching name and
   port while the world is closed. **Stop sharing** forgets the port. The
   desktop requires re-detection of LAN worlds after the app restarts.
-  A dial that passed the expiry check before suspend or an announcement
-  already queued at suspend can leave a closed world's port reachable to
-  approved devices for at most about 10 seconds after resume.
-  Established streams close when sharing pauses.
+  Two narrow cases can keep a closed world's port reachable to approved
+  devices briefly after the PC resumes from sleep. An announcement queued
+  before suspend is treated as new when GameLink reads it after resume, so
+  it renews the share for about 10 seconds. A connection that passed the
+  expiry check just before suspend can finish opening after resume, and
+  stays open until that share pauses. Established streams close when sharing
+  pauses.
 - **People** displays pending requests from the shared Tailcat refusal
   mechanism. The app records the time of the last authorized game connection
   locally for approved devices.
