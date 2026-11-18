@@ -5,7 +5,6 @@ import App from "../App";
 import { Toaster } from "../components/Toaster";
 import { Type } from "../lib/types";
 import { createMockBackend } from "../lib/mockBackend";
-import { Type } from "../lib/types";
 import { renderApp } from "../test/utils";
 import { DashboardScreen } from "./DashboardScreen";
 import { ServersScreen } from "./ServersScreen";
