@@ -159,6 +159,7 @@ fn canonical_fields(kind: &str) -> &'static [&'static str] {
             "proto",
             "port",
             "localPort",
+            "stablePort",
             "addr",
             "addedAt",
             "expiresAt",
@@ -181,6 +182,9 @@ fn canonical_fields(kind: &str) -> &'static [&'static str] {
             "allowLocalRelay",
             "gameExecutables",
             "gameLaunchArgs",
+            "minecraftServerList",
+            "prismInstancesDir",
+            "presenceNotifications",
         ],
         _ => &[],
     }
@@ -296,7 +300,7 @@ fn schema(v: &Value, kind: &str) -> Result<(), String> {
             | ("device", "publicKey" | "label")
             | ("bridge", "serverIp" | "bindIp") => "string",
             ("game", "tunnelPort")
-            | ("server", "port" | "localPort")
+            | ("server", "port" | "localPort" | "stablePort")
             | ("bridge", "discoveryPort" | "mediaPortFirst" | "mediaPortLast") => "port",
             ("bedrock", "mediaPortFirst" | "mediaPortLast") => "port",
             ("game", "created")
@@ -307,11 +311,18 @@ fn schema(v: &Value, kind: &str) -> Result<(), String> {
             ("game", "bedrock") => "bedrock",
             (
                 "settings",
-                "demoMode" | "autoReconnect" | "checkOnStartup" | "checkForUpdates"
-                | "verboseLogging" | "allowLocalRelay",
+                "demoMode"
+                | "autoReconnect"
+                | "checkOnStartup"
+                | "checkForUpdates"
+                | "verboseLogging"
+                | "allowLocalRelay"
+                | "minecraftServerList"
+                | "presenceNotifications",
             )
             | ("game", "disabled" | "knockEnabled") => "bool",
             ("settings", "gameExecutables" | "gameLaunchArgs") => "map",
+            ("settings", "prismInstancesDir") => "string",
             _ => continue,
         };
         let valid = match ty {
@@ -389,6 +400,75 @@ fn save(path: &str, v: &Value) -> Result<(), String> {
         Path::new(path),
         &serde_json::to_vec_pretty(v).map_err(|e| e.to_string())?,
     )
+}
+
+fn local_port(server: &Value, field: &str) -> Option<u16> {
+    server[field]
+        .as_u64()
+        .and_then(|n| u16::try_from(n).ok())
+        .filter(|&n| n != 0)
+}
+
+fn allocate_port(server: &Value, used: &std::collections::BTreeSet<u16>) -> Result<u16, String> {
+    let preferred = crate::desktop::default_local_port(server);
+    std::iter::once(preferred)
+        .chain(20000..=29999)
+        .find(|&port| port >= 1024 && !used.contains(&port))
+        .ok_or("no local port is available for this server".into())
+}
+
+/// Upgrade older desktop configs before their servers can be joined or exported.
+pub fn assign_client_ports(path: &str, mut cfg: Value) -> Result<Value, String> {
+    let Some(servers) = cfg["servers"].as_array_mut() else {
+        return Ok(cfg);
+    };
+    let mut used = std::collections::BTreeSet::new();
+    let mut missing = Vec::new();
+    for (index, server) in servers.iter_mut().enumerate() {
+        if !local_port(server, "stablePort").is_some_and(|port| used.insert(port)) {
+            missing.push(index);
+        }
+    }
+    // Keep legacy explicit choices ahead of automatically allocated ports.
+    for &index in &missing {
+        let server = &mut servers[index];
+        server["stablePort"] = local_port(server, "localPort")
+            .filter(|&port| used.insert(port))
+            .map_or(Value::Null, |port| json!(port));
+    }
+    for &index in &missing {
+        let server = &mut servers[index];
+        if server["stablePort"].is_null() {
+            let port = allocate_port(server, &used)?;
+            used.insert(port);
+            server["localPort"] = json!(0);
+            server["stablePort"] = json!(port);
+        }
+    }
+    if !missing.is_empty() {
+        save(path, &cfg)?;
+    }
+    Ok(cfg)
+}
+
+fn set_stable_port(server: &mut Value, others: impl Iterator<Item = u16>) -> Result<(), String> {
+    let used = others.collect::<std::collections::BTreeSet<_>>();
+    let port = if let Some(exact) = local_port(server, "localPort") {
+        if used.contains(&exact) {
+            return Err(format!(
+                "local port {exact} is already assigned to another saved server"
+            ));
+        }
+        exact
+    } else if let Some(stable) =
+        local_port(server, "stablePort").filter(|port| !used.contains(port))
+    {
+        stable
+    } else {
+        allocate_port(server, &used)?
+    };
+    server["stablePort"] = json!(port);
+    Ok(())
 }
 
 fn valid_managed_game(game: &Value) -> Result<Value, String> {
@@ -728,8 +808,14 @@ pub fn dispatch(method: &str, input: Value) -> Result<Value, String> {
                     if servers.len() >= 64 {
                         return Err("too many saved servers (limit 64)".into());
                     }
-                    servers.push(v.clone());
-                    result = v.clone()
+                    let mut server = v.clone();
+                    server["stablePort"] = Value::Null;
+                    set_stable_port(
+                        &mut server,
+                        servers.iter().filter_map(|s| local_port(s, "stablePort")),
+                    )?;
+                    servers.push(server.clone());
+                    result = server;
                 }
                 "update" | "remove" => {
                     let servers = array(&mut cfg["servers"]);
@@ -746,6 +832,14 @@ pub fn dispatch(method: &str, input: Value) -> Result<Value, String> {
                             sv[k] = v[k].clone()
                         }
                         fields(&sv)?;
+                        set_stable_port(
+                            &mut sv,
+                            servers
+                                .iter()
+                                .enumerate()
+                                .filter(|(other, _)| *other != index)
+                                .filter_map(|(_, s)| local_port(s, "stablePort")),
+                        )?;
                         servers[index] = sv.clone();
                         result = sv
                     }
@@ -1427,6 +1521,49 @@ mod behaviour {
             json!([]),
             "removed server came back"
         );
+    }
+
+    #[test]
+    fn assigns_unique_stable_ports_and_persists_migration_and_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = client_path(dir.path());
+        let mut legacy = default_client();
+        let first = server_value();
+        let mut pinned = first.clone();
+        pinned["id"] = json!("s2");
+        pinned["localPort"] = json!(25565);
+        legacy["servers"] = json!([first, pinned]);
+        save(path.to_str().unwrap(), &legacy).unwrap();
+
+        let migrated =
+            assign_client_ports(path.to_str().unwrap(), open_client(dir.path()).unwrap()).unwrap();
+        assert_eq!(migrated["servers"][0]["stablePort"], 20000);
+        assert_eq!(migrated["servers"][1]["stablePort"], 25565);
+        assert_eq!(open_client(dir.path()).unwrap(), migrated);
+
+        let mut added = server_value();
+        added["id"] = json!("s3");
+        let added = client_mutate(dir.path(), &migrated, "add", "", added).unwrap();
+        assert_eq!(added["result"]["stablePort"], 20001);
+        let renamed = client_mutate(
+            dir.path(),
+            &added["config"],
+            "update",
+            "s3",
+            json!({"name":"Renamed", "description":"", "localPort":0}),
+        )
+        .unwrap();
+        assert_eq!(renamed["result"]["stablePort"], 20001);
+        let reopened = open_client(dir.path()).unwrap();
+        assert_eq!(renamed["config"], reopened);
+        let duplicate = client_mutate(
+            dir.path(),
+            &reopened,
+            "update",
+            "s3",
+            json!({"name":"Renamed", "description":"", "localPort":25565}),
+        );
+        assert!(duplicate.unwrap_err().contains("already assigned"));
     }
 
     // TestClientStoreRejectsInvalid

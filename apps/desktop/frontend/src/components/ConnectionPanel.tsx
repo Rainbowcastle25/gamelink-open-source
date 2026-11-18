@@ -35,6 +35,18 @@ function Note({ children }: { children: ReactNode }) {
 export function ConnectionPanel({ server, joining, onDisconnect, onRetry, onLaunch, onOpenRequests }: Props) {
   const c = server.connection;
   const state = joining && c.state === "disconnected" ? "connecting" : c.state;
+  const listed = server.minecraftListed && !c.portFallback;
+  const hint = listed
+    ? `In Minecraft Multiplayer, select “${server.name} (GameLink)”.`
+    : server.launchConnects ? "Launch the game from GameLink to join automatically." : server.hint;
+  const address = (
+    <div className="flex items-stretch gap-2.5">
+      <code className="min-w-0 flex-1 truncate rounded-lg border border-line-strong bg-black/30 px-4 py-2.5 font-mono text-lg tracking-tight select-all" aria-label="Local address">
+        {c.localAddr}
+      </code>
+      <CopyButton text={c.localAddr} label="Copy Address" variant="primary" />
+    </div>
+  );
 
   if (state === "connecting") {
     return (
@@ -77,17 +89,23 @@ export function ConnectionPanel({ server, joining, onDisconnect, onRetry, onLaun
         </div>
       )}
 
-      {c.localAddr && (
+      {c.portFallback && (
+        <Note>
+          {server.stablePort ? `Stable port ${server.stablePort}` : "Stable port"} was unavailable. Using temporary port {c.localPort}.
+          {server.minecraftListed && " The Minecraft list entry still points to the stable port."}
+        </Note>
+      )}
+      {c.localAddr && (listed || (server.launchConnects && !c.portFallback) ? (
+        <details>
+          <summary className="cursor-pointer text-xs font-medium text-muted">Show local address</summary>
+          <div className="mt-2">{address}</div>
+        </details>
+      ) : (
         <div>
           <p className="mb-1.5 text-xs font-medium tracking-wide text-muted uppercase">Local address</p>
-          <div className="flex items-stretch gap-2.5">
-            <code className="min-w-0 flex-1 truncate rounded-lg border border-line-strong bg-black/30 px-4 py-2.5 font-mono text-lg tracking-tight select-all" aria-label="Local address">
-              {c.localAddr}
-            </code>
-            <CopyButton text={c.localAddr} label="Copy Address" variant="primary" />
-          </div>
+          {address}
         </div>
-      )}
+      ))}
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px] text-muted">
         <span className="inline-flex items-center gap-1.5">
@@ -105,7 +123,6 @@ export function ConnectionPanel({ server, joining, onDisconnect, onRetry, onLaun
         </div>
       )}
 
-      {c.portFallback && <Note>Standard port was busy - using {c.localPort}.</Note>}
       {c.gameReachable === "no" && <Note>Connected to the server, but the game server is not accepting connections - is it running?</Note>}
       {c.gameReachable !== "yes" && c.gameReachable !== "no" && !c.simulated && !server.demo && <Note>GameLink is connected, but the game server status is unknown. The game endpoint has not responded to a check yet.</Note>}
       {c.oversizeDrops > 0 && (
@@ -115,10 +132,10 @@ export function ConnectionPanel({ server, joining, onDisconnect, onRetry, onLaun
         </Note>
       )}
 
-      {server.hint && (
+      {hint && (
         <div>
           <p className="mb-1 text-xs font-medium tracking-wide text-muted uppercase">How to connect</p>
-          <p className="text-[13px] leading-relaxed text-fg/85">{server.hint}</p>
+          <p className="text-[13px] leading-relaxed text-fg/85">{hint}</p>
         </div>
       )}
 

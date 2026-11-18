@@ -3,6 +3,7 @@
 //! FFI lives in gamelink-ffi; unsafe DPAPI calls are isolated in storage.
 
 pub mod launch;
+pub mod minecraft;
 pub mod pure;
 
 use std::net::Ipv4Addr;

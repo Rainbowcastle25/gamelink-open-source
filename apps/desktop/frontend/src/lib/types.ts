@@ -84,9 +84,10 @@ export interface InvitePreview {
 export interface LaunchResult {
     /**
      * AutoConnect is true when the game was told to join the server itself.
-     * When false the player still has to enter Address in the game.
+     * When false the player chooses a saved entry or enters the address.
      */
     "autoConnect": boolean;
+    "minecraftEntry"?: string;
 
     /**
      * Address is the local address the game connects to (127.0.0.1:port).
@@ -143,6 +144,9 @@ export interface Paths {
  * ServerView is one saved server as shown in the UI.
  */
 export interface ServerView {
+    "stablePort"?: number;
+    "minecraftListed"?: boolean;
+    "launchConnects"?: boolean;
     "id": string;
     "name": string;
     "description": string;
@@ -173,6 +177,10 @@ export interface SettingsView {
     "checkForUpdates": boolean;
     "verboseLogging": boolean;
     "allowLocalRelay": boolean;
+    "minecraftServerList": boolean;
+    "prismInstancesDir": string;
+    "presenceNotifications": boolean;
+    "minecraftSyncError": string;
     "gameExecutables": { [_ in string]?: string } | null;
 
     /**

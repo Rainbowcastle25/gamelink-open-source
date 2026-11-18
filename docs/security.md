@@ -29,6 +29,12 @@ protect, what it assumes, and what it does not defend against.
 | Secrets are not committed | `.gitignore` excludes key material; `config/examples` contain placeholders only; CI scans for key-shaped strings |
 | No telemetry | The apps make no analytics calls. Release checks are off by default on desktop and are manual on the Linux agent. The HTTPS GETs carry a generic User-Agent and no cookies, credentials, installed version or device identifiers |
 
+Desktop presence notifications are off by default. With the setting enabled,
+checks go through the same Tailcat probe as **Check** and reveal to the host's
+agent that your device is online. Observations and notification limits are kept
+in memory on the player’s device. The optional Minecraft list stores server
+display names with loopback addresses.
+
 ## Trust boundaries
 
 ```

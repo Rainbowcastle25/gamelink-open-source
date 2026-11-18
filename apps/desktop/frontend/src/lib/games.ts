@@ -26,7 +26,7 @@ export const EXECUTABLE_GAMES: Array<{ id: GameId; label: string; noProgram?: st
     id: "minecraft-java",
     label: "Minecraft Java",
     argsHint:
-      "Minecraft's own launcher cannot be told which server to join, so Play copies the address for you to paste. Prism Launcher can: pick prismlauncher.exe and use -l <instance> -s {address}.",
+      "With the multiplayer list enabled, choose your GameLink entry in Minecraft. Otherwise Play copies the address. Prism can join directly with -l <instance> -s {address}.",
   },
   {
     id: "minecraft-bedrock",

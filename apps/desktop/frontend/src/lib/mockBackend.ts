@@ -240,6 +240,10 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
     checkForUpdates: false,
     verboseLogging: false,
     allowLocalRelay: false,
+    minecraftServerList: false,
+    prismInstancesDir: "",
+    presenceNotifications: false,
+    minecraftSyncError: "",
     gameExecutables: seed ? { "minecraft-java": "C:\\Games\\Minecraft\\Minecraft Launcher.exe" } : {},
     gameLaunchArgs: { ...DEFAULT_LAUNCH_ARGS },
   };

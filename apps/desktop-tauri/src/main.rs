@@ -4,6 +4,10 @@ mod host;
 mod host_connection;
 mod hosting;
 mod lan;
+mod minecraft_lists;
+mod presence;
+#[cfg(windows)]
+mod windows_notice;
 
 use gamelink_core::update;
 use serde_json::{json, Value};
@@ -14,6 +18,8 @@ use std::sync::{
 use tauri::{Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::DialogExt;
+#[cfg(not(windows))]
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -196,7 +202,7 @@ fn main() {
     let running = Arc::new(AtomicBool::new(true));
     let active = running.clone();
     let for_setup = running.clone();
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // This plugin must be first: a second process never opens private state.
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("main") {
@@ -204,7 +210,16 @@ fn main() {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
-        }))
+        }));
+    #[cfg(not(windows))]
+    let builder = builder.plugin(tauri_plugin_notification::init());
+    #[cfg(windows)]
+    let builder = builder.on_window_event(|window, event| {
+        if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+            windows_notice::remove(window.app_handle());
+        }
+    });
+    let app = builder
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -221,6 +236,21 @@ fn main() {
                             if bits & bit != 0 {
                                 let _ = handle.emit("gamelink:update", topic);
                             }
+                        }
+                        #[cfg(windows)]
+                        if bits & 8 != 0 {
+                            let app = handle.clone();
+                            let _ = handle.run_on_main_thread(move || windows_notice::remove(&app));
+                        }
+                    }
+                    if let Some(message) = host::take_online_notification() {
+                        #[cfg(not(windows))]
+                        let _ = handle.notification().builder().title(message).show();
+                        #[cfg(windows)]
+                        {
+                            let app = handle.clone();
+                            let _ = handle
+                                .run_on_main_thread(move || windows_notice::show(&app, &message));
                         }
                     }
                     std::thread::sleep(std::time::Duration::from_millis(100));

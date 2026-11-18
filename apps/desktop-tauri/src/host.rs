@@ -1,6 +1,7 @@
 //! Rust desktop application host. One lock serializes policy and ordered effects.
 //! Go callbacks only enqueue snapshots, so closure barriers cannot reenter it.
 use crate::{bridge, hosting::Hosting};
+use crate::{minecraft_lists::MinecraftLists, presence::Presence};
 use gamelink_core::{client_lifecycle, config, desktop, launch, pure, storage};
 use serde_json::{json, Value};
 use std::{
@@ -33,6 +34,9 @@ struct SettingsInput {
     check_for_updates: Option<bool>,
     verbose_logging: bool,
     allow_local_relay: bool,
+    minecraft_server_list: bool,
+    prism_instances_dir: String,
+    presence_notifications: bool,
     game_executables: Option<BTreeMap<String, String>>,
     game_launch_args: Option<BTreeMap<String, String>>,
 }
@@ -156,6 +160,15 @@ fn call_with_region(request: Value, region: Option<&Value>) -> Result<Value> {
     }
     result
 }
+
+pub fn take_online_notification() -> Option<String> {
+    let mut lock = APP.get()?.lock().ok()?;
+    let app = lock.as_mut()?;
+    let id = app.presence.take_notice(Instant::now())?;
+    let server = app.server(&id).ok()?;
+    Some(format!("{} is online", text(&server, "name")))
+}
+
 struct App {
     dir: PathBuf,
     cfg: Value,
@@ -168,6 +181,8 @@ struct App {
     startup: Option<Instant>,
     checks: Vec<String>,
     hosting: Hosting,
+    minecraft: MinecraftLists,
+    presence: Presence,
 }
 impl App {
     fn open() -> Result<Self> {
@@ -214,10 +229,12 @@ impl App {
             .as_object_mut()
             .ok_or("invalid identity")?
             .remove("privateKey");
-        let cfg = config::dispatch(
-            "config.client_open",
-            json!({"path":dir.join("config.json")}),
-        )?;
+        let cfg_path = dir.join("config.json");
+        let config_path = cfg_path
+            .to_str()
+            .ok_or("configuration path is not valid UTF-8")?;
+        let cfg = config::dispatch("config.client_open", json!({"path":config_path}))?;
+        let cfg = config::assign_client_ports(config_path, cfg)?;
         let activity = storage::read_bounded(&dir.join("activity.json"))
             .ok()
             .and_then(|b| serde_json::from_slice::<Vec<Value>>(&b).ok())
@@ -248,7 +265,14 @@ impl App {
             startup,
             checks: vec![],
             hosting,
+            minecraft: MinecraftLists::default(),
+            presence: Presence::default(),
         };
+        app.minecraft.refresh(&app.dir, &app.cfg);
+        app.presence.set_enabled(
+            app.cfg["settings"]["presenceNotifications"] == true,
+            Instant::now(),
+        );
         if created {
             app.add_log("info", "", "Created this device's identity");
         }
@@ -320,6 +344,24 @@ impl App {
         self.cfg = result["config"].clone();
         Ok(result["result"].clone())
     }
+    fn refresh_minecraft_lists(&mut self) {
+        self.minecraft.refresh(&self.dir, &self.cfg);
+        self.updates |= 5;
+    }
+    fn minecraft_listed(&self) -> bool {
+        self.minecraft.listed(text(
+            &self.cfg["settings"]["gameExecutables"],
+            "minecraft-java",
+        ))
+    }
+    fn settings_view(&self) -> Result<Value> {
+        let mut settings = policy(
+            "desktop.settings_view",
+            json!({"settings":self.cfg["settings"]}),
+        )?;
+        settings["minecraftSyncError"] = json!(self.minecraft.error);
+        Ok(settings)
+    }
     fn address(&self, id: &str) -> Result<String> {
         let server = self.server(id)?;
         pure::check_invite_expiry(&server["expiresAt"])?;
@@ -350,6 +392,14 @@ impl App {
                     bridge::call(json!({"method":"stop","id":id,"generation":generation}))?;
                     if self.resources.get(id) == Some(&generation) {
                         self.resources.remove(id);
+                    }
+                    if self
+                        .presence
+                        .active
+                        .as_ref()
+                        .is_some_and(|(server, current)| server == id && *current == generation)
+                    {
+                        self.presence.active = None;
                     }
                     if self.timers.get(id).is_some_and(|t| t.0 == generation) {
                         self.timers.remove(id);
@@ -401,8 +451,18 @@ impl App {
         let result = self.step(id, json!({"type":"join","name":server["name"]}))?;
         self.stop_retiring(id)?;
         if let Some(generation) = Self::generation(&result, "start_join") {
+            if server["game"] == "minecraft-java"
+                && self.cfg["settings"]["minecraftServerList"] == true
+            {
+                self.refresh_minecraft_lists();
+            }
             let params = policy("desktop.join_parameters", json!({"server":server}))?;
-            let options = json!({"Name":server["name"],"Game":server["game"],"Proto":server["proto"],"TunnelPort":server["port"],"LocalPort":server["localPort"],"PreferPort":params["preferPort"],"AutoReconnect":self.cfg["settings"]["autoReconnect"]});
+            let reserved = rows(&self.cfg["servers"])
+                .iter()
+                .filter(|row| row["id"] != id)
+                .filter_map(|row| row["stablePort"].as_u64())
+                .collect::<Vec<_>>();
+            let options = json!({"Name":server["name"],"Game":server["game"],"Proto":server["proto"],"TunnelPort":server["port"],"PreferPort":params["preferPort"],"ReservedPorts":reserved,"AutoReconnect":self.cfg["settings"]["autoReconnect"]});
             let started = bridge::call(
                 json!({"method":"join","id":id,"generation":generation,"address":address,"verbose":self.cfg["settings"]["verboseLogging"],"allowLocalRelay":self.cfg["settings"]["allowLocalRelay"],"options":options}),
             );
@@ -425,25 +485,46 @@ impl App {
             Ok(s) => s,
             Err(_) => return Ok(json!({"state":"unknown"})),
         };
+        let checked_at = now();
         let result = self.step(
             id,
-            json!({"type":"check","name":server["name"],"now":now()}),
+            json!({"type":"check","name":server["name"],"now":checked_at}),
         )?;
         if let Some(generation) = Self::generation(&result, "start_probe") {
             self.stop_retiring(id)?;
             match self.address(id) {
                 Ok(address) => {
-                    bridge::call(
+                    if let Err(error) = bridge::call(
                         json!({"method":"check","id":id,"generation":generation,"address":address,"options":{"Game":server["game"],"Proto":server["proto"],"TunnelPort":server["port"]},"allowLocalRelay":self.cfg["settings"]["allowLocalRelay"]}),
-                    )?;
+                    ) {
+                        self.step(id, json!({"type":"check_end","generation":generation,"outcome":"start_error","now":checked_at}))?;
+                        return Err(error);
+                    }
                     self.resources.insert(id.into(), generation);
                 }
                 Err(_) => {
                     return Ok(self.step(id,json!({"type":"check_end","generation":generation,"outcome":"address_error","now":now()}))?["result"].clone());
                 }
             }
+        } else if result["connection"]["state"] == "connected" {
+            self.observe_presence(id, &result["result"], true);
         }
         Ok(result["result"].clone())
+    }
+    fn observe_presence(&mut self, id: &str, check: &Value, agent_answered: bool) {
+        match text(check, "state") {
+            "online" => self.presence.observe(id, true, Instant::now()),
+            "offline" | "unreachable" => self.presence.observe(id, false, Instant::now()),
+            "unknown"
+                if agent_answered
+                    && self
+                        .server(id)
+                        .is_ok_and(|s| s["proto"] == "udp" && s["game"] != "minecraft-bedrock") =>
+            {
+                self.presence.observe(id, true, Instant::now());
+            }
+            _ => (),
+        }
     }
     fn pump(&mut self) -> Result<()> {
         let events = bridge::call(json!({"method":"events"}))?;
@@ -471,13 +552,34 @@ impl App {
                 event["type"] = json!(kind);
                 event["generation"] = generation.clone();
                 event["now"] = json!(now());
-                self.step(id, event)?;
+                let observed = kind == "check_end"
+                    && matches!(text(&event, "outcome"), "online" | "error")
+                    && generation.is_u64()
+                    && self
+                        .states
+                        .get(id)
+                        .is_some_and(|state| state["probe"]["generation"] == generation);
+                let agent_answered = event["outcome"] == "online";
+                let result = self.step(id, event)?;
+                if observed {
+                    self.observe_presence(id, &result["check"], agent_answered);
+                }
                 if kind == "check_end"
                     || (kind == "join_end" && callback["value"]["failed"] == true)
                 {
                     bridge::call(json!({"method":"stop","id":id,"generation":generation}))?;
                     if self.resources.get(id).copied() == generation.as_u64() {
                         self.resources.remove(id);
+                    }
+                    if self
+                        .presence
+                        .active
+                        .as_ref()
+                        .is_some_and(|(server, active)| {
+                            server == id && Some(*active) == generation.as_u64()
+                        })
+                    {
+                        self.presence.active = None;
                     }
                 }
             }
@@ -495,6 +597,11 @@ impl App {
             self.startup = None;
             self.schedule_checks();
         }
+        let instant = Instant::now();
+        self.presence.schedule(
+            instant,
+            rows(&self.cfg["servers"]).iter().map(|s| text(s, "id")),
+        );
         if !self.resources.keys().any(|id| {
             self.states
                 .get(id)
@@ -502,6 +609,15 @@ impl App {
         }) {
             if let Some(id) = self.checks.pop() {
                 self.check(&id)?;
+            } else if let Some(id) = self.presence.next_probe(instant) {
+                self.check(&id)?;
+                if let Some(generation) = self
+                    .states
+                    .get(&id)
+                    .and_then(|s| s["probe"]["generation"].as_u64())
+                {
+                    self.presence.active = Some((id, generation));
+                }
             }
         }
         Ok(())
@@ -525,7 +641,7 @@ impl App {
             .and_then(|addr| self.validate(&addr, true).ok())
             .unwrap_or(Value::Null);
         Ok(
-            json!({"id":server["id"],"name":server["name"],"description":text(&server,"description"),"game":server["game"],"gameName":info["name"],"proto":server["proto"],"port":server["port"],"localPort":server["localPort"],"defaultPort":info["defaultPort"],"addedAt":server["addedAt"],"hint":info["hint"],"hasExecutable":!text(&self.cfg["settings"]["gameExecutables"],text(&server,"game")).is_empty() || (cfg!(windows)&&!text(&info,"launchUri").is_empty()),"relayHosts":details["relayHosts"],"defaultRelay":details["defaultRelay"]==true,"serverKey":text(&details,"serverKey"),"demo":false,"connection":connection["connection"],"check":connection["check"]}),
+            json!({"id":server["id"],"name":server["name"],"description":text(&server,"description"),"game":server["game"],"gameName":info["name"],"proto":server["proto"],"port":server["port"],"localPort":server["localPort"],"stablePort":server["stablePort"],"minecraftListed":server["game"]=="minecraft-java"&&self.minecraft_listed(),"launchConnects":desktop::launch_connects(&server["game"],&self.cfg["settings"],cfg!(windows)),"defaultPort":info["defaultPort"],"addedAt":server["addedAt"],"hint":info["hint"],"hasExecutable":!text(&self.cfg["settings"]["gameExecutables"],text(&server,"game")).is_empty() || (cfg!(windows)&&!text(&info,"launchUri").is_empty()),"relayHosts":details["relayHosts"],"defaultRelay":details["defaultRelay"]==true,"serverKey":text(&details,"serverKey"),"demo":false,"connection":connection["connection"],"check":connection["check"]}),
         )
     }
     fn servers(&mut self) -> Result<Value> {
@@ -586,21 +702,35 @@ impl App {
             "paths" => Ok(
                 json!({"configDir":self.dir,"configFile":self.dir.join("config.json"),"identityFile":self.dir.join("identity.json"),"activityFile":self.dir.join("activity.json"),"logFile":self.dir.join("gamelink.log")}),
             ),
-            "settings" => policy(
-                "desktop.settings_view",
-                json!({"settings":self.cfg["settings"]}),
-            ),
+            "settings" => self.settings_view(),
             "updateSettings" => {
                 let settings = policy(
                     "desktop.settings_prepare",
                     json!({"settings":r["settings"],"saved":self.cfg["settings"]}),
                 )?;
+                let old = &self.cfg["settings"];
+                let list_changed = ["minecraftServerList", "prismInstancesDir"]
+                    .iter()
+                    .any(|&key| old[key] != settings[key]);
+                #[cfg(windows)]
+                let remove_notice = old["presenceNotifications"] == true
+                    && settings["presenceNotifications"] != true;
                 self.mutate("settings", "", settings)?;
+                if list_changed {
+                    self.refresh_minecraft_lists();
+                }
+                if let Some((id, generation)) = self.presence.set_enabled(
+                    self.cfg["settings"]["presenceNotifications"] == true,
+                    Instant::now(),
+                ) {
+                    self.step(&id, json!({"type":"cancel_check","generation":generation}))?;
+                }
+                #[cfg(windows)]
+                if remove_notice {
+                    self.updates |= 8;
+                }
                 self.updates |= 5;
-                policy(
-                    "desktop.settings_view",
-                    json!({"settings":self.cfg["settings"]}),
-                )
+                self.settings_view()
             }
             "servers" => self.servers(),
             "overview" => {
@@ -659,6 +789,11 @@ impl App {
                     json!({"type":"edit_port","changed":old["localPort"]!=r["localPort"]}),
                 )?;
                 let server=self.mutate("update",id,json!({"name":text(&r,"name").trim(),"description":text(&r,"description").trim(),"localPort":r["localPort"]}))?;
+                if server["game"] == "minecraft-java"
+                    && self.cfg["settings"]["minecraftServerList"] == true
+                {
+                    self.refresh_minecraft_lists();
+                }
                 self.updates |= 1;
                 self.view(server)
             }
@@ -668,6 +803,10 @@ impl App {
                 if let Err(error) = self.mutate("remove", id, Value::Null) {
                     self.step(id, json!({"type":"restore"}))?;
                     return Err(error);
+                }
+                self.presence.remove(id);
+                if server["game"] == "minecraft-java" {
+                    self.refresh_minecraft_lists();
                 }
                 self.add_log(
                     "info",
@@ -693,10 +832,22 @@ impl App {
             "launchGame" => {
                 let server = self.server(id)?;
                 let connection = self.step(id, json!({"type":"view"}))?["connection"].clone();
-                let plan = policy(
+                let java_list = server["game"] == "minecraft-java"
+                    && self.cfg["settings"]["minecraftServerList"] == true;
+                if java_list {
+                    self.refresh_minecraft_lists();
+                }
+                let mut plan = policy(
                     "desktop.launch_plan",
                     json!({"server":server,"connection":connection,"settings":self.cfg["settings"],"canOpenURI":cfg!(windows)}),
                 )?;
+                if java_list
+                    && self.minecraft_listed()
+                    && connection["localPort"] == server["stablePort"]
+                {
+                    plan["result"]["minecraftEntry"] =
+                        json!(format!("{} (GameLink)", text(&server, "name")));
+                }
                 launch::dispatch(
                     if plan["kind"] == "uri" {
                         "launch.uri"
@@ -722,6 +873,10 @@ impl App {
         input["id"] = config::dispatch("config.new_id", json!({}))?;
         input["addedAt"] = json!(now());
         let server = self.mutate("add", "", input)?;
+        if server["game"] == "minecraft-java" && self.cfg["settings"]["minecraftServerList"] == true
+        {
+            self.refresh_minecraft_lists();
+        }
         let id = text(&server, "id");
         self.add_log(
             "info",
@@ -755,7 +910,7 @@ fn diagnostics(v: &Value, key: &str) -> String {
         .filter_map(Value::as_str)
         .collect::<Vec<_>>()
         .join(", ");
-    let mut out=format!("GameLink {} diagnostics\nServer: {} ({})\nProtocol: {}, tunnel port {}, requested local port {} (0 = automatic)\nRelay: {} (public relay: {})\nServer key: {}\nThis device: {}\nState: {} - {}\n",crate::VERSION,text(v,"name"),text(v,"gameName"),text(v,"proto"),v["port"],v["localPort"],hosts,v["defaultRelay"],text(v,"serverKey"),key,text(c,"state"),text(c,"message"));
+    let mut out=format!("GameLink {} diagnostics\nServer: {} ({})\nProtocol: {}, tunnel port {}, stable local port {}\nRelay: {} (public relay: {})\nServer key: {}\nThis device: {}\nState: {} - {}\n",crate::VERSION,text(v,"name"),text(v,"gameName"),text(v,"proto"),v["port"],v["stablePort"],hosts,v["defaultRelay"],text(v,"serverKey"),key,text(c,"state"),text(c,"message"));
     if !text(c, "localAddr").is_empty() {
         out += &format!(
             "Local address: {} (preferred port busy: {})\n",
@@ -1033,7 +1188,7 @@ mod tests {
         assert_eq!(request["options"]["Game"], "minecraft-java");
         assert_eq!(request["options"]["Proto"], "tcp");
         assert_eq!(request["options"]["TunnelPort"], 25565);
-        assert_eq!(request["options"]["LocalPort"], 0);
+        assert!(request["options"]["LocalPort"].is_null());
         assert_eq!(request["options"]["PreferPort"], 25565);
         assert_eq!(request["options"]["AutoReconnect"], true);
         assert_eq!(e.app.resources["s1"], 1);
@@ -1069,6 +1224,7 @@ mod tests {
     fn join_prefers_a_pinned_local_port_over_the_game_default() {
         let mut e = env();
         e.mc("s1");
+        e.mc("s2");
         e.app
             .mutate(
                 "update",
@@ -1078,8 +1234,9 @@ mod tests {
             .unwrap();
         e.app.join("s1").unwrap();
         let request = e.calls("join").remove(0);
-        assert_eq!(request["options"]["LocalPort"], 40000);
-        assert_eq!(request["options"]["PreferPort"], 0);
+        assert!(request["options"]["LocalPort"].is_null());
+        assert_eq!(request["options"]["PreferPort"], 40000);
+        assert_eq!(request["options"]["ReservedPorts"], json!([20000]));
     }
 
     #[test]
@@ -1500,6 +1657,54 @@ mod tests {
         );
         e.app.pump().unwrap();
         assert_eq!(e.lifecycle(), ["check:s1:1", "stop:s1:1", "check:s2:1"]);
+    }
+
+    #[test]
+    fn background_checks_use_the_probe_and_ignore_completions_after_opt_out() {
+        let mut e = env();
+        e.mc("s1");
+        e.app.startup = None;
+        e.app.pump().unwrap();
+        assert!(e.calls("check").is_empty());
+        e.app
+            .presence
+            .set_enabled(true, Instant::now() - Duration::from_secs(135));
+        e.app.pump().unwrap();
+        let first = e.app.resources["s1"];
+        assert_eq!(e.app.presence.active.as_ref().unwrap().1, first);
+        e.push("s1", first, "check_end", json!({"outcome":"error"}));
+        e.app.pump().unwrap();
+        assert!(e.app.presence.take_notice(Instant::now()).is_none());
+
+        e.app.check("s1").unwrap();
+        let second = e.app.resources["s1"];
+        e.push(
+            "s1",
+            second,
+            "check_end",
+            json!({"outcome":"online","gameReachable":"yes"}),
+        );
+        e.app.pump().unwrap();
+        assert_eq!(
+            e.app.presence.take_notice(Instant::now()).as_deref(),
+            Some("s1")
+        );
+
+        let mut disabled = e.app.cfg["settings"].clone();
+        disabled["presenceNotifications"] = json!(false);
+        e.app.presence = Presence::default();
+        e.app
+            .presence
+            .set_enabled(true, Instant::now() - Duration::from_secs(135));
+        e.app.pump().unwrap();
+        let pending = e.app.resources["s1"];
+        e.command(json!({"method":"updateSettings","settings":disabled}))
+            .unwrap();
+        assert!(!e.app.resources.contains_key("s1"));
+        e.push("s1", pending, "check_end", json!({"outcome":"error"}));
+        e.app.pump().unwrap();
+        assert_eq!(e.check_view("s1")["state"], "online");
+        assert!(e.app.presence.take_notice(Instant::now()).is_none());
     }
 
     #[test]

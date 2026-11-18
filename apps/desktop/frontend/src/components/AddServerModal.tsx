@@ -125,7 +125,7 @@ export function AddServerModal({ onClose }: { onClose: () => void }) {
           <Field label="Tunnel port" error={show("port")} hint="The port the game server listens on.">
             {({ id, describedBy }) => <input id={id} aria-describedby={describedBy} inputMode="numeric" value={portText} onChange={(e) => setPortText(e.target.value)} className={inputCls} />}
           </Field>
-          <Field label="Local port (optional)" error={show("local")} hint="Leave empty for automatic.">
+          <Field label="Local port (optional)" error={show("local")} hint="Leave empty to let GameLink assign a stable port.">
             {({ id, describedBy }) => (
               <input id={id} aria-describedby={describedBy} inputMode="numeric" value={localText} onChange={(e) => setLocalText(e.target.value)} placeholder="Automatic" className={inputCls} />
             )}

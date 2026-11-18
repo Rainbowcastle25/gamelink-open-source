@@ -149,6 +149,34 @@ describe("People screen", () => {
 });
 
 describe("Settings", () => {
+  it("starts with Minecraft integration off and saves the configured Prism folder", async () => {
+    const backend = createMockBackend({ delayMs: 0 });
+    const update = vi.spyOn(backend, "updateSettings");
+    const { user } = renderApp(<SettingsPanel />, { backend });
+    const toggle = await screen.findByRole("switch", { name: "Add GameLink servers to Minecraft's multiplayer list" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByRole("textbox", { name: "Prism instances folder" })).not.toBeInTheDocument();
+    await user.click(toggle);
+    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.objectContaining({ minecraftServerList: true })));
+    const folder = await screen.findByRole("textbox", { name: "Prism instances folder" });
+    await user.type(folder, "/games/PrismLauncher/instances{Enter}");
+    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.objectContaining({ prismInstancesDir: "/games/PrismLauncher/instances" })));
+    await user.click(toggle);
+    await waitFor(() => expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ minecraftServerList: false })));
+    expect(screen.queryByRole("textbox", { name: "Prism instances folder" })).not.toBeInTheDocument();
+  });
+
+  it("explains the privacy cost and saves opt-in presence notifications", async () => {
+    const backend = createMockBackend({ delayMs: 0 });
+    const update = vi.spyOn(backend, "updateSettings");
+    const { user } = renderApp(<SettingsPanel />, { backend });
+    const toggle = await screen.findByRole("switch", { name: "Notify me when servers come online" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText(/reveals to the host’s agent that you are online/)).toBeInTheDocument();
+    await user.click(toggle);
+    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.objectContaining({ presenceNotifications: true })));
+  });
+
   it("toggling a preference calls updateSettings immediately", async () => {
     const backend = createMockBackend({ delayMs: 0, joinMs: 0 });
     const update = vi.spyOn(backend, "updateSettings");

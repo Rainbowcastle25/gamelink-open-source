@@ -258,6 +258,10 @@ export class GameLinkStore {
         toast.success("Starting the game. It will join the server by itself.");
         return;
       }
+      if (r.minecraftEntry) {
+        toast.info(`Starting Minecraft. In Multiplayer, select “${r.minecraftEntry}”.`);
+        return;
+      }
       // The game cannot be told where to go (e.g. Minecraft's own launcher):
       // put the address on the clipboard so it is one paste away.
       let copied = false;
