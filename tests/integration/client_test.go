@@ -23,7 +23,7 @@ import (
 // (see desktopOpts), against the shipped Rust agent, using the invitation the
 // shipped agent CLI prints. Lifecycle/state-machine policy, persistence and
 // settings are Rust-owned and covered by Rust tests; see
-// docs/test-migration-map.md.
+// docs/history/test-migration-map.md.
 
 func waitTunnel(t *testing.T, tun *transport.Tunnel, state transport.State, d time.Duration) transport.Status {
 	t.Helper()

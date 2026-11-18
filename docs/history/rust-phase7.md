@@ -18,8 +18,8 @@ media traffic never crosses the language boundary per packet.
 permissions, service and Keystore ownership. The legacy Go application/store
 hosts that once lived under `tests/testsupport/` have been removed: the
 integration tests now run the shipped Rust agent binary as a subprocess and the
-transport shim directly (see `docs/test-migration-map.md`). Production
-dependency checks still reject any dependency on `tests/`.
+transport shim directly (see the [test migration map](test-migration-map.md)).
+Production dependency checks still reject any dependency on `tests/`.
 
 ## Verification
 
