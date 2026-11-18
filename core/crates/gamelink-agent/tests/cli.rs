@@ -22,7 +22,7 @@ fn ok(dir: &Path, args: &[&str]) -> Output {
 }
 fn legacy_help(text: &str) -> String {
     // Keep the frozen Go oracle for existing text; only the explicitly added
-    // host, request and invitation features are outside that contract.
+    // host, request, invitation and update features are outside that contract.
     text.replace(
         "  host refresh                  discover/register Pterodactyl games once (no background scan)\n",
         "",
@@ -33,6 +33,10 @@ fn legacy_help(text: &str) -> String {
     )
     .replace(
         "  host check                    diagnose host settings, Panel access, registration and loopback API\n",
+        "",
+    )
+    .replace(
+        "  update check [--json]         verify release metadata and report available updates\n",
         "",
     )
     .replace(
@@ -74,7 +78,14 @@ fn frozen_go_cli_oracle() {
             "{args:?}"
         );
         let stdout = legacy_help(&String::from_utf8_lossy(&out.stdout));
-        assert_eq!(stdout, f["stdout"].as_str().unwrap(), "{args:?}");
+        if args == ["version"] || args == ["--version"] {
+            assert_eq!(
+                stdout,
+                concat!("gamelink-agent ", env!("CARGO_PKG_VERSION"), "\n")
+            );
+        } else {
+            assert_eq!(stdout, f["stdout"].as_str().unwrap(), "{args:?}");
+        }
         assert_eq!(
             legacy_help(&String::from_utf8_lossy(&out.stderr)),
             f["stderr"].as_str().unwrap(),

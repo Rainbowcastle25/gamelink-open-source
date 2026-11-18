@@ -72,7 +72,7 @@ pub fn bedrock(v: &Value) -> Result<(), String> {
     Ok(())
 }
 fn default_client() -> Value {
-    json!({"version":1,"servers":null,"settings":{"demoMode":false,"autoReconnect":true,"checkOnStartup":true,"verboseLogging":false,"allowLocalRelay":false}})
+    json!({"version":1,"servers":null,"settings":{"demoMode":false,"autoReconnect":true,"checkOnStartup":true,"checkForUpdates":false,"verboseLogging":false,"allowLocalRelay":false}})
 }
 // serde_json::Value sorts object keys and collapses exact duplicates. Retain
 // every member until typed decoding, as encoding/json processes them in wire order.
@@ -176,6 +176,7 @@ fn canonical_fields(kind: &str) -> &'static [&'static str] {
             "demoMode",
             "autoReconnect",
             "checkOnStartup",
+            "checkForUpdates",
             "verboseLogging",
             "allowLocalRelay",
             "gameExecutables",
@@ -306,8 +307,8 @@ fn schema(v: &Value, kind: &str) -> Result<(), String> {
             ("game", "bedrock") => "bedrock",
             (
                 "settings",
-                "demoMode" | "autoReconnect" | "checkOnStartup" | "verboseLogging"
-                | "allowLocalRelay",
+                "demoMode" | "autoReconnect" | "checkOnStartup" | "checkForUpdates"
+                | "verboseLogging" | "allowLocalRelay",
             )
             | ("game", "disabled" | "knockEnabled") => "bool",
             ("settings", "gameExecutables" | "gameLaunchArgs") => "map",
@@ -1130,7 +1131,11 @@ mod tests {
         for f in fixtures.as_array().unwrap() {
             match f["kind"].as_str().unwrap() {
                 "slug" => assert_eq!(json!(slugify(f["input"].as_str().unwrap())), f["output"]),
-                "settings" => assert_eq!(default_client()["settings"], f["output"]),
+                "settings" => {
+                    let mut expected = f["output"].clone();
+                    expected["checkForUpdates"] = json!(false);
+                    assert_eq!(default_client()["settings"], expected);
+                }
                 "unseal" => {
                     #[cfg(not(windows))]
                     {

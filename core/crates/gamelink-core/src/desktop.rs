@@ -41,6 +41,7 @@ pub fn dispatch(method: &str, v: Value) -> Result<Value, String> {
         }
         "desktop.settings_view" => {
             let mut out = v["settings"].clone();
+            out["checkForUpdates"] = json!(out["checkForUpdates"] == true);
             out["gameExecutables"] = out["gameExecutables"]
                 .as_object()
                 .cloned()
@@ -55,6 +56,10 @@ pub fn dispatch(method: &str, v: Value) -> Result<Value, String> {
         }
         "desktop.settings_prepare" => {
             let mut out = v["settings"].clone();
+            out["checkForUpdates"] = json!(out["checkForUpdates"]
+                .as_bool()
+                .or_else(|| v["saved"]["checkForUpdates"].as_bool())
+                .unwrap_or(false));
             let mut exes = json!({});
             if let Some(values) = out["gameExecutables"].as_object() {
                 for (typ, p) in values {
@@ -400,6 +405,7 @@ mod policy_tests {
         .unwrap();
         assert_eq!(out["gameLaunchArgs"]["factorio"], "");
         let out = dispatch("desktop.settings_view", json!({"settings":{}})).unwrap();
+        assert_eq!(out["checkForUpdates"], false);
         assert_eq!(out["gameLaunchArgs"]["factorio"], "--mp-connect {address}");
     }
 

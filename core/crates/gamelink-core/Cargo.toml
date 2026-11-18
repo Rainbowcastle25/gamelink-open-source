@@ -7,6 +7,9 @@ publish.workspace = true
 [lib]
 crate-type = ["rlib"]
 
+[features]
+update-notifications = ["dep:minisign-verify", "dep:semver", "dep:ureq", "dep:url"]
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
@@ -19,6 +22,13 @@ sha2 = "=0.10.9"
 chrono = { version = "=0.4.44", default-features = false, features = ["std"] }
 getrandom = "=0.3.4"
 tempfile = "=3.24.0"
+minisign-verify = { version = "=0.3.0", optional = true }
+semver = { version = "=1.0.28", optional = true }
+ureq = { version = "=3.5.2", default-features = false, features = ["rustls"], optional = true }
+url = { version = "=2.5.8", optional = true }
+
+[dev-dependencies]
+minisign = "=0.10.0"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

@@ -17,13 +17,14 @@ forced DERP paths. Every matrix row is currently **not yet verified**.
 - Desktop hosting of LAN worlds with a People screen
 - Stable local ports and Minecraft server-list integration
 - Opt-in presence notifications
-- Signed update notifications (notifications only, never auto-install)
 
 ## 0.2 alpha implementation
 
 - [x] Tailcat TCP/UDP transport, direct path and DERP fallback
 - [x] Per-game device allowlist, empty-list fail-closed behavior and revocation
 - [x] Windows desktop client and Linux host agent
+- [x] Signed release notifications through an opt-in desktop check and a manual
+  agent command. Users choose when to download and install each release.
 - [x] Android Go/Rust/Kotlin app with Keystore-backed, no-backup storage
 - [x] Explicit LAN-to-LAN Bedrock Console Bridge with source/interface/subnet
   filters, candidate policy, bounded sessions and fragmented media datagrams
@@ -72,6 +73,7 @@ for the ordered procedure and recording template.
 
 ## Explicitly not planned
 
-Hosted accounts, public server discovery, mod installation, automatic updates,
-general-purpose mobile VPN apps, or a public admin API. These add attack
-surface or central trust that cut against the project's purpose.
+Hosted accounts, public server discovery, mod installation, automatic download
+or installation of updates, general-purpose mobile VPN apps, and a public admin
+API. See [signed release manifests](release-manifest.md) for the notification
+flow.

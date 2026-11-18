@@ -29,6 +29,8 @@ struct SettingsInput {
     demo_mode: bool,
     auto_reconnect: bool,
     check_on_startup: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    check_for_updates: Option<bool>,
     verbose_logging: bool,
     allow_local_relay: bool,
     game_executables: Option<BTreeMap<String, String>>,
@@ -57,6 +59,19 @@ struct Request {
     limit: i64,
     form: FormInput,
     settings: SettingsInput,
+}
+pub fn release_check_dir() -> Option<PathBuf> {
+    let lock = APP.get()?.lock().ok()?;
+    let app = lock.as_ref()?;
+    (app.cfg["settings"]["checkForUpdates"] == true).then(|| app.dir.clone())
+}
+pub fn log_release_check_error(error: &'static str) {
+    let Some(lock) = APP.get().and_then(|app| app.lock().ok()) else {
+        return;
+    };
+    if let Some(app) = lock.as_ref() {
+        app.write_log(&format!("[debug] release check: {error}"));
+    }
 }
 pub fn call(request: Value) -> Result<Value> {
     if serde_json::to_vec(&request)
@@ -524,7 +539,7 @@ impl App {
                 Ok(json!(bits))
             }
             "version" => Ok(
-                json!({"app":"GameLink","version":"0.1.0-alpha","transport":"Tailcat (WireGuard, direct with DERP relay fallback)"}),
+                json!({"app":"GameLink","version":crate::VERSION,"transport":"Tailcat (WireGuard, direct with DERP relay fallback)"}),
             ),
             "identity" => Ok(
                 json!({"publicKey":self.identity["publicKey"],"created":self.identity["created"],"configDir":self.dir,"protection":if cfg!(windows){"Windows DPAPI (current user) plus user-profile file permissions"}else{"file permissions (0600)"}}),
@@ -701,7 +716,7 @@ fn diagnostics(v: &Value, key: &str) -> String {
         .filter_map(Value::as_str)
         .collect::<Vec<_>>()
         .join(", ");
-    let mut out=format!("GameLink 0.1.0-alpha diagnostics\nServer: {} ({})\nProtocol: {}, tunnel port {}, requested local port {} (0 = automatic)\nRelay: {} (public relay: {})\nServer key: {}\nThis device: {}\nState: {} - {}\n",text(v,"name"),text(v,"gameName"),text(v,"proto"),v["port"],v["localPort"],hosts,v["defaultRelay"],text(v,"serverKey"),key,text(c,"state"),text(c,"message"));
+    let mut out=format!("GameLink {} diagnostics\nServer: {} ({})\nProtocol: {}, tunnel port {}, requested local port {} (0 = automatic)\nRelay: {} (public relay: {})\nServer key: {}\nThis device: {}\nState: {} - {}\n",crate::VERSION,text(v,"name"),text(v,"gameName"),text(v,"proto"),v["port"],v["localPort"],hosts,v["defaultRelay"],text(v,"serverKey"),key,text(c,"state"),text(c,"message"));
     if !text(c, "localAddr").is_empty() {
         out += &format!(
             "Local address: {} (preferred port busy: {})\n",
@@ -1684,15 +1699,17 @@ mod tests {
         let mut e = env();
         e.command(json!({"method":"updates"})).unwrap();
         let view = e
-            .command(json!({"method":"updateSettings","settings":{"demoMode":true,"autoReconnect":false,"gameLaunchArgs":{"factorio":"--windowed"}}}))
+            .command(json!({"method":"updateSettings","settings":{"demoMode":true,"autoReconnect":false,"checkForUpdates":true,"gameLaunchArgs":{"factorio":"--windowed"}}}))
             .unwrap();
         assert_eq!(view["demoMode"], true);
         assert_eq!(view["autoReconnect"], false);
+        assert_eq!(view["checkForUpdates"], true);
         assert_eq!(view["gameLaunchArgs"]["factorio"], "--windowed");
         assert_eq!(e.command(json!({"method":"updates"})).unwrap(), 5);
         let saved: Value =
             serde_json::from_slice(&fs::read(e.dir.path().join("config.json")).unwrap()).unwrap();
         assert_eq!(saved["settings"]["demoMode"], true);
+        assert_eq!(saved["settings"]["checkForUpdates"], true);
         assert!(e
             .command(json!({"method":"updateSettings","settings":{"gameExecutables":{"factorio":"relative"}}}))
             .is_err());
@@ -1817,9 +1834,11 @@ mod tests {
             .command(json!({"method":"diagnostics","id":"s1"}))
             .unwrap();
         let report = report.as_str().unwrap();
-        assert!(report.starts_with(
-            "GameLink 0.1.0-alpha diagnostics\nServer: Server s1 (Minecraft: Java Edition)"
-        ));
+        assert!(report.starts_with(concat!(
+            "GameLink ",
+            env!("CARGO_PKG_VERSION"),
+            " diagnostics\nServer: Server s1 (Minecraft: Java Edition)"
+        )));
         assert!(report.contains("Local address: 127.0.0.1:25565"));
         assert!(report.contains("Path: direct"));
         assert!(report.contains("latency 3.0 ms"));

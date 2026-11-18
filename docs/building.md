@@ -350,11 +350,13 @@ compatibility from a successful build or echo test.
 
 ## Releasing (manual for now)
 
-1. Update the version in the Rust desktop host / agent, and `CHANGELOG` notes.
+1. Update the package versions in the desktop and agent `Cargo.toml` files
+   and prepare the release notes.
 2. Run everything above on a clean checkout. CI does this on every push.
-3. Build the artefacts with the commands above, compute `sha256sum`, and publish
-   the checksums next to the downloads. Windows binaries are **not signed yet**;
-   say so in the release notes.
+3. Build the artifacts with the release verification keys embedded. Publish
+   checksums and the signed release manifest alongside the downloads using the
+   [release manifest guide](release-manifest.md). Windows binaries are unsigned.
+   Say so in the release notes.
 4. Regenerate [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) if dependencies changed.
 
 ### Console protocol policy

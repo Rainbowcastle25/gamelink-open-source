@@ -79,7 +79,7 @@ approved.
 | Identity | Windows device key sealed with DPAPI; Android bridge key protected by Android Keystore; separate key per hosted game |
 | Desktop app | Dashboard, Servers, Requests, Friends, Settings; connection status with the real network path (direct or relay) and latency |
 | Resilience | Auto-reconnect with backoff, local port fallback if the preferred port is busy, diagnostics report with secrets redacted |
-| Agent CLI | `init`, `games add/list/remove`, `requests list/approve/dismiss`, `devices approve/revoke/list`, `invite`, `invite rotate`, `serve`, `status` |
+| Agent CLI | `init`, `games add/list/remove`, `requests list/approve/dismiss`, `devices approve/revoke/list`, `invite`, `invite rotate`, `serve`, `status`, `update check` |
 | Multiple servers | Import several invitations; connect to several games at once |
 
 See [docs/getting-started.md](docs/getting-started.md) for the full tutorial.
@@ -89,6 +89,15 @@ For the Android LAN bridge, see [docs/android-console-bridge.md](docs/android-co
 For desktop Bedrock, update both app and agent and configure the BDS media range;
 see [desktop NetherNet setup](docs/bedrock-research.md#desktop-manual-server-connections).
 GameLink reports agent connectivity separately from game endpoint availability.
+
+## Release notifications
+
+On desktop, turn on **Check for updates** under **Settings → About** to see
+signed release notices, including security updates. This is off by default.
+The Linux agent checks only when you run `gamelink-agent update check [--json]`.
+Its `status` command can show the last verified check without contacting the
+release host. You download and install updates yourself. See the
+[release manifest guide](docs/release-manifest.md) for feed and signing details.
 
 ## Quick start
 
@@ -213,7 +222,7 @@ diagnostics. GameLink is **not** "100% secure"; read the
   desktop NetherNet frames media over authenticated TCP streams. TCP may add
   head-of-line delay on lossy paths. Desktop NetherNet supports IPv4 candidates
   at the configured BDS address and permitted media range.
-- No auto-update. No installer signing yet. Windows SmartScreen will warn.
+- Windows binaries are unsigned. SmartScreen will warn.
 - The Tailcat wrapper has not been hardened against a hostile approved
   device. Only approve people you trust.
 

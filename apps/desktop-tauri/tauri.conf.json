@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "GameLink",
-  "version": "0.1.0",
   "identifier": "dev.gamelink.desktop",
   "build": { "frontendDist": "../desktop/frontend/dist" },
   "app": {

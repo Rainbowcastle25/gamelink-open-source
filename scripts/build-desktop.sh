@@ -24,7 +24,7 @@ if [[ "$target" == x86_64-pc-windows-gnu ]]; then
     # The Go archive continues using the proven Zig cgo toolchain.
     command -v x86_64-w64-mingw32-gcc >/dev/null || { echo "install MinGW-w64 gcc and binutils for the desktop Rust host" >&2; exit 2; }
     export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER="${CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER:-x86_64-w64-mingw32-gcc}"
-    export CC_x86_64_pc_windows_gnu="$cc"
+    export CC_x86_64_pc_windows_gnu="${CC_x86_64_pc_windows_gnu:-x86_64-w64-mingw32-gcc}"
     export RUSTFLAGS="${RUSTFLAGS:-} -C dlltool=$PWD/scripts/zig-dlltool.sh"
 fi
 (cd apps/desktop/frontend && npm ci && npm run build && touch dist/.gitkeep)

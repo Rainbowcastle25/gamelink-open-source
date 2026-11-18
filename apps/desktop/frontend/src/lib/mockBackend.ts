@@ -190,6 +190,7 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
     demoMode: opts.demoMode ?? false,
     autoReconnect: true,
     checkOnStartup: true,
+    checkForUpdates: false,
     verboseLogging: false,
     allowLocalRelay: false,
     gameExecutables: seed ? { "minecraft-java": "C:\\Games\\Minecraft\\Minecraft Launcher.exe" } : {},
@@ -437,6 +438,10 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
       await wait();
       return clone(settings);
     },
+    async checkRelease() {
+      return null;
+    },
+    async openReleaseNotes() {},
     async activity(limit) {
       await wait();
       return clone(activity.slice(0, limit));

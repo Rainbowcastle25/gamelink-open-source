@@ -245,3 +245,9 @@ including build-time and non-Linux dependencies. Existing Go/Tailcat and Rust
 core notices continue to apply. Refresh with `cargo metadata --manifest-path
 core/Cargo.toml --locked --format-version 1` and
 `scripts/collect-agent-licenses.py <metadata.json>`.
+
+The desktop and Linux agent release checks use `minisign-verify` 0.3.0 (MIT),
+`semver` 1.0.28 (MIT OR Apache-2.0), and `ureq` 3.5.2 (MIT OR Apache-2.0)
+with Rustls and Web PKI roots. The resolved inventories above list the
+transitive crates and link to their license texts. The core verification
+tests use `minisign` 0.10.0 (MIT) to generate ephemeral keys and signatures.

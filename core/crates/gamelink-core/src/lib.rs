@@ -466,3 +466,6 @@ pub mod discovery;
 pub mod supervisor;
 
 pub mod desktop;
+
+#[cfg(feature = "update-notifications")]
+pub mod update;

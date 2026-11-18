@@ -3,6 +3,7 @@ mod bridge;
 mod host;
 mod host_connection;
 
+use gamelink_core::update;
 use serde_json::{json, Value};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -12,6 +13,8 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn public_method(method: &str) -> bool {
     matches!(
@@ -44,6 +47,8 @@ fn public_method(method: &str) -> bool {
             | "copyText"
             | "pickExecutable"
             | "openConfigFolder"
+            | "checkRelease"
+            | "openReleaseNotes"
     )
 }
 
@@ -74,6 +79,35 @@ fn native_or_manager(app: &tauri::AppHandle, request: Value) -> Result<Value, St
         return host_connection::call(request);
     }
     match request["method"].as_str().unwrap_or("") {
+        "checkRelease" => {
+            let Some(dir) = host::release_check_dir() else {
+                return Ok(Value::Null);
+            };
+            match update::check_daily(&dir, VERSION) {
+                Ok(Some(checked)) if checked.available && host::release_check_dir().is_some() => {
+                    Ok(json!({
+                        "version":checked.release.version,
+                        "severity":checked.release.severity,
+                        "releaseNotesUrl":checked.release.release_notes_url,
+                    }))
+                }
+                Ok(_) => Ok(Value::Null),
+                Err(error) => {
+                    host::log_release_check_error(error);
+                    Ok(Value::Null)
+                }
+            }
+        }
+        "openReleaseNotes" => {
+            if let Some(notice) =
+                host::release_check_dir().and_then(|dir| update::cached_notice(&dir, VERSION))
+            {
+                app.opener()
+                    .open_url(notice.release.release_notes_url, None::<&str>)
+                    .map_err(|_| "could not open release notes")?;
+            }
+            Ok(Value::Null)
+        }
         "copyText" => {
             let text = request["text"].as_str().ok_or("invalid clipboard text")?;
             if text.len() > 4096 {
