@@ -76,7 +76,8 @@ bash scripts/build-desktop.sh x86_64-pc-windows-gnu
 
 The build environment accepts whitespace-separated public keys for planned
 rotation. The verifier accepts a signature under any embedded pin. Builds
-with no pins make no release requests. Keep the private signing key offline.
+with no pins make no release requests: the desktop shows **Check for updates**
+as unavailable, and `gamelink-agent update check` exits nonzero. Keep the private signing key offline.
 The feed URL override changes where the app fetches metadata. Trust still
 comes from the keys in the binary.
 
@@ -93,10 +94,15 @@ the incident and distribute replacement builds with the compromised pin removed.
 Desktop **Settings → About → Check for updates** is off by default because the
 release host can see the IP address of a request. Opting in permits a check
 when GameLink is open, at most once in each 24-hour interval.
-Failures count toward the interval. An unavailable or unverified result
-produces no banner and a local debug log entry for failures. A verified newer
-release appears with a link to its notes, with stronger styling for security
-releases.
+Failures count toward the interval. If the system clock moved back, so the
+last attempt looks like it is in the future, the next check runs right away.
+An unavailable or unverified result produces no banner and a local debug log
+entry for failures. A verified newer release appears with a link to its notes,
+with stronger styling for security releases. A failed check does not hide a
+notice that was already verified. An unreadable or invalid local cache is
+treated as empty, logged at debug level and replaced by the next successful
+check. A manifest for the same version as the last verified one is rejected if
+its signed bytes differ.
 
 The Linux agent sends release requests only on `gamelink-agent update check`.
 Add `--json` for an object containing `installedVersion`, `checkedAt`,

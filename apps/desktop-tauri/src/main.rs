@@ -109,7 +109,7 @@ fn native_or_manager(app: &tauri::AppHandle, request: Value) -> Result<Value, St
             let Some(dir) = host::release_check_dir() else {
                 return Ok(Value::Null);
             };
-            match update::check_daily(&dir, VERSION) {
+            match update::check_daily(&dir, VERSION, host::log_release_check_error) {
                 Ok(Some(checked)) if checked.available && host::release_check_dir().is_some() => {
                     Ok(json!({
                         "version":checked.release.version,

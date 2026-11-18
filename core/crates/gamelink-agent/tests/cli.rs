@@ -94,6 +94,24 @@ fn frozen_go_cli_oracle() {
     }
 }
 #[test]
+fn update_check_without_a_verification_key_fails_clearly() {
+    if gamelink_core::update::can_check() {
+        return; // This build embeds a release key.
+    }
+    let temp = tempfile::tempdir().unwrap();
+    for args in [&["update", "check"][..], &["update", "check", "--json"]] {
+        let out = run(temp.path(), args);
+        assert_eq!(out.status.code(), Some(1), "{args:?}");
+        assert!(out.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            "error: this build can't check for updates: it has no release verification key\n"
+        );
+    }
+    assert!(!temp.path().join("release-check.json").exists());
+}
+
+#[test]
 fn migrated_admin_flow_and_private_storage() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path().join("agent");

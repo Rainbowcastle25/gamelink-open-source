@@ -149,6 +149,17 @@ describe("People screen", () => {
 });
 
 describe("Settings", () => {
+  it("disables update checks when this build has no verification key", async () => {
+    const backend = createMockBackend({ delayMs: 0 });
+    const initial = await backend.settings();
+    vi.spyOn(backend, "settings").mockResolvedValue({ ...initial, checkForUpdates: true, canCheckForUpdates: false });
+    renderApp(<SettingsPanel />, { backend });
+    const toggle = await screen.findByRole("switch", { name: "Check for updates" });
+    expect(toggle).toBeDisabled();
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText(/This build can't check for updates/)).toBeInTheDocument();
+  });
+
   it("starts with Minecraft integration off and saves the configured Prism folder", async () => {
     const backend = createMockBackend({ delayMs: 0 });
     const update = vi.spyOn(backend, "updateSettings");

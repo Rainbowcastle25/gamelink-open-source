@@ -395,6 +395,7 @@ impl App {
             json!({"settings":self.cfg["settings"]}),
         )?;
         settings["minecraftSyncError"] = json!(self.minecraft.error);
+        settings["canCheckForUpdates"] = json!(gamelink_core::update::can_check());
         Ok(settings)
     }
     fn address(&self, id: &str) -> Result<String> {
@@ -2030,6 +2031,18 @@ mod tests {
             e.app.add_log("info", "", "x");
         }
         assert_eq!(e.app.activity.len(), 200);
+    }
+
+    #[test]
+    fn settings_report_whether_this_build_can_check_for_updates() {
+        let mut e = env();
+        let expected = json!(gamelink_core::update::can_check());
+        let view = e.command(json!({"method":"settings"})).unwrap();
+        assert_eq!(view["canCheckForUpdates"], expected);
+        let view = e
+            .command(json!({"method":"updateSettings","settings":{"checkForUpdates":true}}))
+            .unwrap();
+        assert_eq!(view["canCheckForUpdates"], expected);
     }
 
     #[test]

@@ -208,12 +208,19 @@ fn download(now: u64) -> Result<SignedRelease> {
     })
 }
 
-fn load_cache(dir: &Path) -> Result<Cache> {
-    match storage::read_bounded(&dir.join(CACHE)) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| "invalid release check cache"),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(Cache::default()),
-        Err(_) => Err("could not read release check cache"),
-    }
+/// Reads the cache, treating an unreadable or invalid file as empty so the
+/// next successful check rewrites it. `debug` receives the reason.
+fn load_cache(dir: &Path, debug: fn(&'static str)) -> Cache {
+    let problem = match storage::read_bounded(&dir.join(CACHE)) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(cache) => return cache,
+            Err(_) => "ignoring invalid release check cache",
+        },
+        Err(e) if e.kind() == ErrorKind::NotFound => return Cache::default(),
+        Err(_) => "ignoring unreadable release check cache",
+    };
+    debug(problem);
+    Cache::default()
 }
 
 fn save_cache(dir: &Path, cache: &Cache) -> Result<()> {
@@ -226,7 +233,7 @@ fn keys() -> Result<Vec<PublicKey>> {
     // A release builder can embed overlapping pins during planned rotation.
     let pins = option_env!("GAMELINK_UPDATE_PUBLIC_KEYS")
         .filter(|value| !value.trim().is_empty())
-        .ok_or("this build has no release signing key")?;
+        .ok_or("this build can't check for updates: it has no release verification key")?;
     pins.split_whitespace()
         .map(|pin| PublicKey::from_base64(pin).map_err(|_| "invalid embedded release signing key"))
         .collect()
@@ -256,7 +263,8 @@ fn checked_result(
 }
 
 fn due(last_attempt: Option<u64>, now: u64) -> bool {
-    last_attempt.is_none_or(|last| now.saturating_sub(last) >= DAY)
+    // A last attempt in the future came from a bad clock; do not wait for it.
+    last_attempt.is_none_or(|last| last > now || now - last >= DAY)
 }
 
 fn check_at(
@@ -265,6 +273,7 @@ fn check_at(
     keys: &[PublicKey],
     daily: bool,
     now: u64,
+    debug: fn(&'static str),
     fetch: impl FnOnce(u64) -> Result<SignedRelease>,
 ) -> Result<Option<CheckResult>> {
     storage::ensure_dir(dir).map_err(|_| "could not create release check directory")?;
@@ -277,17 +286,14 @@ fn check_at(
         .map_err(|_| "could not open release check lock")?;
     lock.lock()
         .map_err(|_| "could not lock release check cache")?;
-    let mut cache = load_cache(dir)?;
+    let mut cache = load_cache(dir, debug);
     if daily && !due(cache.last_attempt, now) {
-        return if cache.last_attempt_succeeded {
-            cache
-                .signed
-                .as_ref()
-                .map(|signed| result(installed, signed, keys))
-                .transpose()
-        } else {
-            Ok(None)
-        };
+        // A verified notice stays valid whatever the latest attempt did.
+        return cache
+            .signed
+            .as_ref()
+            .map(|signed| result(installed, signed, keys))
+            .transpose();
     }
     // Record attempts before touching the network so failures and restarts
     // count toward the same 24-hour limit.
@@ -298,8 +304,23 @@ fn check_at(
     let signed = fetch(now)?;
     let (release, version) = verify(&signed, keys)?;
     let previous = cache.signed.as_ref().and_then(|old| verify(old, keys).ok());
-    if previous.is_some_and(|(_, previous)| version.cmp_precedence(&previous).is_lt()) {
-        return Err("release manifest is older than the last verified release");
+    if let Some((_, previous)) = previous {
+        match version.cmp_precedence(&previous) {
+            std::cmp::Ordering::Less => {
+                return Err("release manifest is older than the last verified release")
+            }
+            // Published manifests are immutable: the same version must keep
+            // the same signed bytes.
+            std::cmp::Ordering::Equal
+                if cache
+                    .signed
+                    .as_ref()
+                    .is_some_and(|old| old.manifest != signed.manifest) =>
+            {
+                return Err("release manifest changed after publication")
+            }
+            _ => {}
+        }
     }
     let checked = checked_result(installed, release, version, signed.checked_at)?;
     cache.signed = Some(signed);
@@ -308,37 +329,50 @@ fn check_at(
     Ok(Some(checked))
 }
 
+/// Whether this build embeds a release verification key. Builds without one
+/// cannot check for updates.
+pub fn can_check() -> bool {
+    keys().is_ok()
+}
+
 /// Desktop-only network entry point. Call after checking the user's setting.
-pub fn check_daily(dir: &Path, installed: &str) -> Result<Option<CheckResult>> {
-    check(dir, installed, true)
+/// `debug` receives non-fatal problems, such as an ignored corrupt cache.
+pub fn check_daily(
+    dir: &Path,
+    installed: &str,
+    debug: fn(&'static str),
+) -> Result<Option<CheckResult>> {
+    check(dir, installed, true, debug)
 }
 
 /// Explicit agent network entry point.
 pub fn check_now(dir: &Path, installed: &str) -> Result<CheckResult> {
-    check(dir, installed, false)?.ok_or("release check did not run")
+    check(dir, installed, false, |_| {})?.ok_or("release check did not run")
 }
 
-fn check(dir: &Path, installed: &str, daily: bool) -> Result<Option<CheckResult>> {
+fn check(
+    dir: &Path,
+    installed: &str,
+    daily: bool,
+    debug: fn(&'static str),
+) -> Result<Option<CheckResult>> {
     let installed = Version::parse(installed).map_err(|_| "invalid installed version")?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "invalid system clock")?
         .as_secs();
-    check_at(dir, &installed, &keys()?, daily, now, download)
+    check_at(dir, &installed, &keys()?, daily, now, debug, download)
 }
 
 /// The agent's last verified check. Reads local state only.
 pub fn cached(dir: &Path, installed: &str) -> Option<CheckResult> {
-    let signed = load_cache(dir).ok()?.signed?;
+    let signed = load_cache(dir, |_| {}).signed?;
     result(&Version::parse(installed).ok()?, &signed, &keys().ok()?).ok()
 }
 
 /// The desktop may open notes only for the currently verified notification.
 pub fn cached_notice(dir: &Path, installed: &str) -> Option<CheckResult> {
-    let cache = load_cache(dir).ok()?;
-    if !cache.last_attempt_succeeded {
-        return None;
-    }
+    let cache = load_cache(dir, |_| {});
     let notice = result(
         &Version::parse(installed).ok()?,
         cache.signed.as_ref()?,
