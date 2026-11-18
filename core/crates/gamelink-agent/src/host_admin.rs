@@ -320,14 +320,15 @@ impl Host {
             "config.keys_load",
             json!({"id":id,"path":self.dir.join("keys").join(format!("{id}.json"))}),
         )?;
+        pure::check_invite_expiry(&keys["keys"]["expiresAt"])?;
         let address = bridge::call(json!({"method":"address","keys":keys["keys"]}))?;
         let invitation = pure::dispatch(
             "invite.encode",
-            json!({"v":1,"name":game["name"],"game":game["type"],"proto":game["protocol"],"port":game["tunnelPort"],"addr":address,"consoleBridge":if game["consoleBridge"].is_null(){0}else{1}}),
+            json!({"v":1,"name":game["name"],"game":game["type"],"proto":game["protocol"],"port":game["tunnelPort"],"addr":address,"consoleBridge":if game["consoleBridge"].is_null(){0}else{1},"expiresAt":keys["keys"]["expiresAt"]}),
         )?;
         config::dispatch(
             "config.agent_mutate",
-            json!({"path":self.dir.join("agent.json"),"action":"approve","id":id,"publicKey":body["publicKey"],"label":"Host admin device","now":now()}),
+            json!({"path":self.dir.join("agent.json"),"action":"approve","id":id,"publicKey":body["publicKey"],"label":"Host admin device","now":now(),"expectedKeys":keys["keys"]}),
         )?;
         Ok(json!({"invitation":invitation}))
     }

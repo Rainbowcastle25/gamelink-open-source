@@ -74,12 +74,12 @@ approved.
 | | |
 |---|---|
 | Transport | Real Tailcat: WireGuard, hole-punching, relay fallback, no port forwarding |
-| Access control | Per-game allowlist. **A game with no approved devices is never served.** Revocation restarts the game's listener and drops live sessions |
+| Access control | Per-game allowlist. **Only approved devices can reach game ports.** The agent can record knocks before the first approval. Revocation drops live sessions |
 | Protocols | TCP (Minecraft Java), UDP (Factorio, legacy Bedrock), desktop Bedrock NetherNet signaling/media, and optional Console Bridge for Bedrock consoles |
 | Identity | Windows device key sealed with DPAPI; Android bridge key protected by Android Keystore; separate key per hosted game |
 | Desktop app | Dashboard, Servers, Requests, Friends, Settings; connection status with the real network path (direct or relay) and latency |
 | Resilience | Auto-reconnect with backoff, local port fallback if the preferred port is busy, diagnostics report with secrets redacted |
-| Agent CLI | `init`, `games add/list/remove`, `devices approve/revoke/list`, `invite`, `serve`, `status` |
+| Agent CLI | `init`, `games add/list/remove`, `requests list/approve/dismiss`, `devices approve/revoke/list`, `invite`, `invite rotate`, `serve`, `status` |
 | Multiple servers | Import several invitations; connect to several games at once |
 
 See [docs/getting-started.md](docs/getting-started.md) for the full tutorial.
@@ -97,15 +97,22 @@ On the Linux machine that runs your game server (Minecraft Java as the example):
 ```sh
 gamelink-agent init
 gamelink-agent games add --type minecraft-java --name "Our Minecraft"
-# your friend opens GameLink, copies their public key from Settings and sends it to you
-gamelink-agent devices approve --game our-minecraft --key nodekey:<friend's key> --label "Sam's PC"
 gamelink-agent invite --game our-minecraft      # prints a SECRET invitation; send it privately
 gamelink-agent serve                            # or run it as a service (see docs)
 ```
 
-On your friend's Windows PC: GameLink, **Servers**, **Add server**, paste the
-invitation, **Join**, then in Minecraft add the server at the address GameLink
-shows (normally `127.0.0.1:25565`).
+On your friend's Windows PC, open GameLink → **Servers** → **Add server**,
+paste the invitation, and click **Join**. The first attempt requests access.
+On the host, find the request and approve its listed ID, for example:
+
+```sh
+gamelink-agent requests list --game our-minecraft
+gamelink-agent requests approve 1 --label "Sam's PC"
+```
+
+If the first attempt timed out, your friend clicks **Join** again. Once
+connected, they add the server in Minecraft at the address GameLink shows
+(normally `127.0.0.1:25565`).
 
 **One-click Play.** In Settings, under *Local game executables*, pick the
 game's program. The server card then shows **Play**. It joins, waits until the

@@ -177,13 +177,15 @@ appears in `gl status --json`.
 Every game starts with no approved devices, so nothing is reachable yet.
 Offer the owner both routes:
 
-- **From the command line, through you.** A friend opens GameLink →
-  *Settings* → *Copy Public Key* and sends the `nodekey:…` to the owner. With
-  the owner's confirmation, run
-  `gl devices approve --game <id> --key nodekey:… --label "<who>"`. Then
-  `gl invite --game <id>` prints the invitation, which is a secret. Write it
-  to a 0600 file and give the owner the path, or let the owner run the
-  command themselves. The friend imports it in GameLink.
+- **From the command line, through you.** Run `gl invite --game <id>`. Write the
+  invitation to a 0600 file and give the owner the path, or let them run the
+  command themselves. The owner shares it privately. With the agent running,
+  the friend imports the invite and clicks **Join**. Run
+  `gl requests list --game <id>` after the attempt. With the owner's
+  confirmation, run `gl requests approve <request-id> --label "<who>"`. If the
+  first attempt timed out, ask the friend to click **Join** again. If the owner cannot identify a request,
+  compare its key with the friend's **Settings → Copy Public Key**. The owner
+  can use `gl requests dismiss <request-id>` to clear an unwanted request.
 - **From the GameLink desktop Host screen** (Pterodactyl only). The owner
   opens a tunnel, `ssh -N -L 8467:127.0.0.1:8467 <user>@<node>`, sets the
   endpoint to `http://127.0.0.1:8467`, and enters the admin token. Give the
@@ -195,6 +197,13 @@ Offer the owner both routes:
 
 **Done when** the owner knows how to approve devices and send invitations,
 and has approved any devices they asked for.
+
+Use `gl invite rotate --game <id>` to replace a shared invitation. The agent
+ends sessions on the old address when it reloads, and approved devices keep
+their approval when they import the new invitation. Use
+`gl invite --game <id> --expires 24h` to rotate to a time-limited identity.
+At its deadline the agent ends that game's sessions and stops accepting joins
+until the owner rotates again.
 
 ## Step 6: Report
 
@@ -227,4 +236,4 @@ Give the owner:
 | "wildcard allocation requires a configured node address" | Set `nodeAddress` in `host.json` to the node's IP. |
 | `host check` admin_api warns "not listening" | `ExecStart` lacks `--host-config`. |
 | The service starts but the game never comes up | `AF_NETLINK` was removed from `RestrictAddressFamilies`. |
-| A friend's GameLink shows "no response" | The agent is stopped, or the friend's key is not approved for that game. |
+| A friend's GameLink shows "no response" | Check that the agent is running, the invitation is current, and the friend's request appears in `gl requests list --game <id>`. |

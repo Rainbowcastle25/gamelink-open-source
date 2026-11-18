@@ -48,6 +48,12 @@ pub struct ObservedGame {
     game: Game,
     key_mtime_ns: i64,
     #[serde(default)]
+    key_identity: String,
+    #[serde(default)]
+    knock_enabled: bool,
+    #[serde(default)]
+    expired: bool,
+    #[serde(default)]
     approved_error: Option<String>,
 }
 
@@ -208,7 +214,11 @@ pub fn reduce(mut state: State, event: Event) -> Result<Reduction, String> {
                     stop(&mut state, &g.id, &mut effects);
                     st.state = "inactive".into();
                     st.detail = "managed game is disabled".into();
-                } else if g.devices.is_empty() {
+                } else if observed.expired {
+                    stop(&mut state, &g.id, &mut effects);
+                    st.state = "inactive".into();
+                    st.detail = "invitation expired; rotate it to resume access".into();
+                } else if g.devices.is_empty() && !observed.knock_enabled {
                     if state.active.contains_key(&g.id) {
                         log(
                             &mut effects,
@@ -219,14 +229,18 @@ pub fn reduce(mut state: State, event: Event) -> Result<Reduction, String> {
                     st.state = "inactive".into();
                     st.detail = "no approved devices; the game is not reachable".into();
                 } else {
-                    let fingerprint = fingerprint(g, observed.key_mtime_ns)?;
+                    let fingerprint = format!(
+                        "{}|{}",
+                        fingerprint(g, observed.key_mtime_ns)?,
+                        observed.key_identity
+                    );
                     if let Some(active) = state.active.get(&g.id) {
                         if active.fingerprint == fingerprint {
-                            st.state = "serving".into();
+                            set_running_state(&mut st);
                             state.states.insert(g.id.clone(), st);
                             continue;
                         }
-                        log(&mut effects, format!("game {:?}: approved devices or settings changed; restarting its Tailcat server and ending existing sessions", g.id));
+                        log(&mut effects, format!("game {:?}: identity, approved devices or settings changed; restarting its Tailcat server and ending existing sessions", g.id));
                         stop(&mut state, &g.id, &mut effects);
                     }
                     if state
@@ -315,15 +329,21 @@ pub fn reduce(mut state: State, event: Event) -> Result<Reduction, String> {
                 } else {
                     state.retry_at.remove(&id);
                     state.active.insert(id.clone(), pending);
-                    st.state = "serving".into();
-                    st.detail.clear();
-                    log(
-                        &mut effects,
-                        format!(
-                            "serving {id:?} ({} {} -> {}) for {} approved device(s)",
-                            st.protocol, st.tunnel_port, st.dest, st.approved
-                        ),
-                    );
+                    set_running_state(st);
+                    if st.approved == 0 {
+                        log(
+                            &mut effects,
+                            format!("waiting for join requests for {id:?}"),
+                        );
+                    } else {
+                        log(
+                            &mut effects,
+                            format!(
+                                "serving {id:?} ({} {} -> {}) for {} approved device(s)",
+                                st.protocol, st.tunnel_port, st.dest, st.approved
+                            ),
+                        );
+                    }
                 }
             } else if error.is_none() {
                 // Host must dispose of resources returned by obsolete starts.
@@ -351,6 +371,16 @@ pub fn reduce(mut state: State, event: Event) -> Result<Reduction, String> {
         changed,
         games,
     })
+}
+
+fn set_running_state(st: &mut GameState) {
+    if st.approved == 0 {
+        st.state = "inactive".into();
+        st.detail = "waiting for join requests; no approved devices".into();
+    } else {
+        st.state = "serving".into();
+        st.detail.clear();
+    }
 }
 
 fn fingerprint(game: &Game, key_mtime_ns: i64) -> Result<String, String> {

@@ -289,7 +289,9 @@ impl App {
         Ok(result["result"].clone())
     }
     fn address(&self, id: &str) -> Result<String> {
-        storage::unseal(text(&self.server(id)?, "addr"))
+        let server = self.server(id)?;
+        pure::check_invite_expiry(&server["expiresAt"])?;
+        storage::unseal(text(&server, "addr"))
     }
     fn validate(&self, address: &str, allow: bool) -> Result<Value> {
         bridge::call(json!({"method":"validate","address":address,"allowLocalRelay":allow}))
@@ -1047,6 +1049,26 @@ mod tests {
             !e.app.states.contains_key("s1"),
             "no lifecycle state was created"
         );
+    }
+
+    #[test]
+    fn expired_saved_invitation_cannot_start_a_join() {
+        let mut e = env();
+        let stored = policy(
+            "desktop.server_input",
+            json!({"import":true,"value":{"name":"Expired","game":"minecraft-java","proto":"tcp","port":25565,
+                   "addr":"synthetic-address","expiresAt":"2000-01-01T00:00:00Z"}}),
+        )
+        .unwrap();
+        let view = e.app.save_server(stored, "Imported").unwrap();
+        e.app.cfg = config::dispatch(
+            "config.client_open",
+            json!({"path":e.dir.path().join("config.json")}),
+        )
+        .unwrap();
+        let id = text(&view, "id");
+        assert!(e.app.join(id).unwrap_err().contains("expired"));
+        assert!(e.calls("join").is_empty());
     }
 
     // When the bridge rejects the join outright, no join_end will ever arrive,

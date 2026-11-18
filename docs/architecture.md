@@ -30,9 +30,11 @@ The server's Tailcat address contains its public key, pre-shared key and home
 relay region. Treat the address as a secret capability. A peer must also hold a
 device key in that game's allowlist.
 
-Each hosted game has its own Tailcat identity. An empty allowlist is never
-served. Revocation closes the game's listeners and live sessions, then starts
-a replacement with the remaining approved keys. The supervisor checks config
+Each hosted game has its own Tailcat identity. A game with zero approvals can
+receive knocks after an invitation is issued. Its Tailcat allowlist remains
+restrictive and it serves zero game ports. Revocation closes the game's
+listeners and live sessions, then starts a replacement with the remaining
+approved keys or returns to waiting for knocks. The supervisor checks config
 once per second by default; Rust decides whether each observation requires
 closing or starting a game server. The Rust agent serializes observations and
 effects, including completing Go closure barriers before replacements; config changes, including key-file mtime changes,
@@ -87,8 +89,9 @@ hardware measurement.
 ```
 gamelink-agent serve
   └─ Rust host runtime (one-second config poll)
-       └─ each game with ≥1 approved device:
+       └─ each game with an active identity and approvals or an invitation:
             transport.StartGameServer
+              ├─ refused DERP handshakes → private join request store
               ├─ TCP: accept → dial configured destination → proxy
               ├─ UDP: one connected socket per client flow → destination
               └─ optional Console Bridge: TCP control + UDP discovery/media
@@ -97,7 +100,9 @@ gamelink-agent serve
 There are up to 32 games and 256 approved devices per game. A normal game
 server permits up to 256 TCP sessions. The bridge has the additional limits
 listed above. `runtime.json` is a five-second heartbeat plus immediate state
-changes and is considered fresh for 20 seconds.
+changes and is considered fresh for 20 seconds. The agent collects bounded
+request batches from Go during reconciliation and persists them separately
+from status. Rotation or expiry discards requests for the retired identity.
 
 ## Optional Pterodactyl host administration
 
@@ -162,7 +167,9 @@ validation.
 ## Invitations and storage
 
 Invitations use `glink1.` plus base64url JSON. Parsing validates game, protocol,
-port, relay and optional Console Bridge v1 capability. A bridge invitation
+port, relay, optional expiry and optional Console Bridge v1 capability. The
+host applies expiry to the game identity, so it also applies to saved
+addresses and live sessions. A bridge invitation
 does not approve a phone by itself; the host must approve its public key.
 
 | Item | Location | Protection |
@@ -171,6 +178,7 @@ does not approve a phone by itself; the host must approve its public key.
 | Windows saved server address | `%AppData%\GameLink\config.json` | DPAPI-sealed |
 | Android identity and invitations | app `noBackupFilesDir` | Android Keystore AES-GCM; backup disabled |
 | Host per-game keys | `keys/<id>.json` | 0600 file, 0700 config directory, atomic replacement |
+| Host pending join requests | `requests.json` | 0600 file, 0700 config directory, atomic replacement |
 | Logs and diagnostics | app data | secrets and bridge signaling redacted |
 
 Non-Windows development builds use owner-only files instead of DPAPI.

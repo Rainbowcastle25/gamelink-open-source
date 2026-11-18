@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tailscale/tailcat"
+	"golang.org/x/time/rate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -20,9 +21,8 @@ import (
 	"github.com/gamelink-project/gamelink/shim/games"
 )
 
-// ErrNoApprovedDevices is returned when asked to serve a game that has no
-// approved devices. Tailcat treats an empty allowlist as "everyone may
-// connect", so GameLink refuses to start such a server at all.
+// ErrNoApprovedDevices is returned when a game has no approved devices and
+// knock-only mode is disabled. Tailcat never receives an empty allowlist.
 var ErrNoApprovedDevices = errors.New("game has no approved devices; refusing to start it")
 
 // ServerOptions configures one exposed game.
@@ -35,7 +35,11 @@ type ServerOptions struct {
 	Private    key.NodePrivate
 	PSK        tailcat.PresharedKey
 	Region     *tailcfg.DERPRegion // pinned relay region; avoids any DERP map fetch
-	Approved   []key.NodePublic    // must not be empty
+	Approved   []key.NodePublic
+	// CollectRequests records refused peers. With an empty approval list it
+	// starts in knock-only mode, with no admitted peers or served game ports.
+	CollectRequests bool
+	ExpiresAt       time.Time
 	// ConsoleBridge explicitly replaces the normal single-protocol forwarder
 	// with both authenticated control and media handlers on TunnelPort.
 	ConsoleBridge ConsoleBridgeHandler
@@ -94,14 +98,19 @@ type GameServer struct {
 	dialLog     rateLimited
 	sizeLog     rateLimited
 	denyLog     rateLimited
+	requests    joinRequests
 	bedrockHost *bedrock.Host
 }
 
 // StartGameServer starts a Tailcat server for one game. It fails with
-// ErrNoApprovedDevices if there are no approved devices.
+// ErrNoApprovedDevices if there are no approved devices and knocks are off.
 func StartGameServer(opts ServerOptions) (*GameServer, error) {
-	if len(opts.Approved) == 0 {
+	knockOnly := len(opts.Approved) == 0
+	if knockOnly && !opts.CollectRequests {
 		return nil, ErrNoApprovedDevices
+	}
+	if !opts.ExpiresAt.IsZero() && !time.Now().Before(opts.ExpiresAt) {
+		return nil, errors.New("game invitation has expired")
 	}
 	if !opts.Protocol.Valid() {
 		return nil, fmt.Errorf("invalid protocol %q", opts.Protocol)
@@ -140,7 +149,11 @@ func StartGameServer(opts ServerOptions) (*GameServer, error) {
 	if opts.Event != nil {
 		g.logf = opts.Event
 	}
-	if opts.Game == games.MinecraftBedrock && opts.ConsoleBridge == nil {
+	if opts.CollectRequests {
+		g.requests.newKeys = rate.NewLimiter(4, 8)
+		g.requests.pending = make(map[key.NodePublic]JoinRequest)
+	}
+	if !knockOnly && opts.Game == games.MinecraftBedrock && opts.ConsoleBridge == nil {
 		if opts.Protocol != games.UDP {
 			return nil, errors.New("Bedrock requires UDP gameplay")
 		}
@@ -155,15 +168,19 @@ func StartGameServer(opts ServerOptions) (*GameServer, error) {
 	}
 
 	port := filter.PortRange{First: opts.TunnelPort, Last: opts.TunnelPort}
+	approved := append([]key.NodePublic(nil), opts.Approved...)
+	if knockOnly {
+		// Tailcat interprets an empty list as allow-all. Use a disposable
+		// public key whose private key is never retained or shared.
+		approved = []key.NodePublic{key.NewNode().Public()}
+	}
 	s := &tailcat.Server{
 		Key:          opts.Private,
 		PresharedKey: opts.PSK,
 		Region:       opts.Region,
-		Logf:         orDiscard(opts.Logf),
-		// Layer 1: Tailcat itself ignores every key not in this list. The list
-		// is non-empty (checked above), so the library's "empty means everyone"
-		// behaviour can never apply.
-		AllowedClients: append([]key.NodePublic(nil), opts.Approved...),
+		Logf:         g.tailcatLog,
+		// Layer 1: Tailcat itself ignores every key not in this list.
+		AllowedClients: approved,
 		// Layer 2: the packet filter admits only the one served port, for one
 		// protocol. The other protocol gets an empty (non-nil) list = none.
 		ServedTCPPorts: []filter.PortRange{},
@@ -172,17 +189,14 @@ func StartGameServer(opts ServerOptions) (*GameServer, error) {
 		// OnTCPForward / OnUDPForward / AllowProxy are deliberately never set:
 		// that would make this server an exit node.
 	}
-	if opts.ConsoleBridge != nil || g.bedrockHost != nil {
-		s.ServedTCPPorts = []filter.PortRange{port}
-		s.ServedUDPPorts = []filter.PortRange{port}
-		s.OnTCP = g.onTCP
-		s.OnUDP = g.onUDP
-	} else {
-		switch opts.Protocol {
-		case games.TCP:
+	// In knock-only mode both filters remain empty and both handlers stay nil.
+	if !knockOnly {
+		bridge := opts.ConsoleBridge != nil || g.bedrockHost != nil
+		if bridge || opts.Protocol == games.TCP {
 			s.ServedTCPPorts = []filter.PortRange{port}
 			s.OnTCP = g.onTCP
-		case games.UDP:
+		}
+		if bridge || opts.Protocol == games.UDP {
 			s.ServedUDPPorts = []filter.PortRange{port}
 			s.OnUDP = g.onUDP
 		}
@@ -194,7 +208,22 @@ func StartGameServer(opts ServerOptions) (*GameServer, error) {
 		return nil, fmt.Errorf("start tailcat server: %w", err)
 	}
 	g.srv = s
+	if !opts.ExpiresAt.IsZero() {
+		go func() {
+			timer := time.NewTimer(time.Until(opts.ExpiresAt))
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				g.Close()
+			case <-g.stopping:
+			}
+		}()
+	}
 	return g, nil
+}
+
+func (g *GameServer) expired() bool {
+	return !g.opts.ExpiresAt.IsZero() && !time.Now().Before(g.opts.ExpiresAt)
 }
 
 // Addr returns the server's full Tailcat address (a secret).
@@ -241,6 +270,9 @@ func (g *GameServer) Close() {
 // authorize checks the tunnel-authenticated peer of a connection against the
 // approved set (defence in depth on top of Tailcat's AllowedClients).
 func (g *GameServer) authorize(remote net.Addr) bool {
+	if g.expired() {
+		return false
+	}
 	ip, ok := addrOf(remote)
 	if ok {
 		if _, allowed := g.allowed[ip]; allowed {
@@ -248,8 +280,12 @@ func (g *GameServer) authorize(remote net.Addr) bool {
 		}
 	}
 	g.denied.Add(1)
-	g.denyLog.do(func() { g.logf("security", "refused a connection from a peer that is not approved for this game") })
+	g.logRefusal()
 	return false
+}
+
+func (g *GameServer) logRefusal() {
+	g.denyLog.do(func() { g.logf("security", "refused a connection from a peer that is not approved for this game") })
 }
 
 func (g *GameServer) admit() bool {
@@ -263,6 +299,9 @@ func (g *GameServer) admit() bool {
 }
 
 func (g *GameServer) onTCP(port uint16) func(net.Conn) {
+	if g.expired() {
+		return nil
+	}
 	select {
 	case <-g.stopping:
 		return nil // reject new handshakes while existing TCP FINs drain
@@ -339,6 +378,9 @@ func (g *GameServer) authorizeTCP(c net.Conn) bool {
 }
 
 func (g *GameServer) onUDP(port uint16) func(tailcat.ConnPacketConn) {
+	if g.expired() {
+		return nil
+	}
 	select {
 	case <-g.stopping:
 		return nil

@@ -74,8 +74,7 @@ Nobody can reach it yet: no devices are approved.
 
 (Your nearest public relay is picked automatically. ✅)
 
-Starting the agent now would expose nothing: a game with no approved devices is
-never served. ✅
+The game port stays unreachable until the host approves at least one device. ✅
 
 ## C. Install GameLink on the friend's Windows PC
 
@@ -86,38 +85,17 @@ code-signed yet, so Windows SmartScreen shows "unknown publisher": choose
 On first start GameLink creates this PC's **device key** and stores it
 encrypted for the current Windows user. Nothing is sent anywhere.
 
-## D. Copy the friend's public key
-
-In GameLink open **Settings**, find the **Public key** row and press **Copy Public
-Key** (the **Requests** tab shows the same key together with the approval command
-to send to the host). The key starts with `nodekey:`. It is public by design (it only identifies this PC), so it is fine
-to send in a chat message. ✅
-
-The friend sends it to the host.
-
-## E. Approve the key (host)
-
-```sh
-gl devices approve --game our-minecraft --key nodekey:<paste here> --label "Sam's PC"
-gl devices list
-```
-
-Only the person who controls the server can do this. The optional
-[Pterodactyl Host screen](pterodactyl.md) also lets an authenticated host
-administrator approve their current device and import a game. ✅
-
-## F. Create the invitation and share it privately (host)
+## D. Share a private invitation (host)
 
 ```sh
 gl invite --game our-minecraft
 ```
 
-It prints one long line starting with `glink1.` to standard output (and a
-reminder to standard error). **This is a secret.** It contains the server's
-Tailcat address. Send it by direct message or in person. Never post it in a
-public channel, a stream, a screenshot, a GitHub issue or a Discord server. ✅
+The invitation is one long line beginning with `glink1.`. It contains the
+game's Tailcat address. Share it by direct message or in person, and keep it out
+of public channels, streams, screenshots, and GitHub issues. ✅
 
-## G. Start the agent (host)
+## E. Start the agent (host)
 
 Foreground, to try it:
 
@@ -143,7 +121,7 @@ enumerate network interfaces and the game fails to start. 🟡
 `gl status` shows each game, its approved device count, whether it is serving,
 and the number of accepted and denied connections. ✅
 
-## H. Import the invitation and Join (friend)
+## F. Import the invitation and request access (friend)
 
 In GameLink: **Servers → Add server → Import invitation**, paste the whole
 `glink1.…` text. GameLink shows the name, game and port for confirmation (never
@@ -152,17 +130,33 @@ server's card. (If you have set Minecraft's program in **Settings → Local game
 executables**, the card shows **Play** instead. Play joins and then starts the
 game, copying the address for you; **Join only** just connects.)
 
-Within a few seconds the card shows **Connected**, the real network path
-(**Direct** or **Relay**), the latency, and the local address, normally
-`127.0.0.1:25565`. If 25565 is busy (say the friend runs a local server too),
-GameLink picks a free port and tells you which. ✅
+The first attempt can show **no response** while the host is waiting to approve
+your device. Let the host know when you clicked **Join**. The agent must be
+running for the attempt to reach it. ✅
 
-If it says **no response**: the host's agent is not running, or the host has not
-approved this PC's key yet (GameLink cannot tell the two apart; see
-[security.md](security.md)). Use **Check** on the server card to retest, and open the card's details for
-**Diagnostics**, a redacted report you can send to the host.
+## G. Approve the request (host)
 
-## I. Connect from Minecraft Java (friend)
+```sh
+gl requests list --game our-minecraft
+gl requests approve 1 --label "Sam's PC"  # use the ID shown for your friend
+```
+
+Confirm which request is your friend's before approving. If more than one
+request appears, ask your friend to compare the key under **Settings → Copy
+Public Key**. You can dismiss an unwanted entry with `gl requests dismiss <id>`.
+You can also approve a key directly with
+`gl devices approve --game our-minecraft --key <public-key>`. ✅
+
+The optional [Pterodactyl Host screen](pterodactyl.md) also lets an authenticated
+host administrator approve their current device and import a game.
+
+If the first attempt timed out, the friend clicks **Join** again after the
+agent reloads. The card shows **Connected**, the network path
+(**Direct** or **Relay**), latency and the local
+address (normally `127.0.0.1:25565`). If 25565 is busy, GameLink picks a free
+port and shows which one it chose. ✅
+
+## H. Connect from Minecraft Java (friend)
 
 With the tunnel connected, start Minecraft Java Edition, **Multiplayer → Add
 Server**, and enter the local address shown in GameLink (for example
@@ -174,7 +168,7 @@ Tip: the server's `online-mode` and whitelist are separate from GameLink. Keep
 `online-mode=true` unless you know why you are changing it, and consider also
 using Minecraft's whitelist.
 
-## J. Revoke access (host)
+## I. Revoke access or replace an invitation (host)
 
 ```sh
 gl devices revoke --game our-minecraft --key nodekey:<the key>
@@ -184,14 +178,21 @@ A running agent applies it within a few seconds: that game's listener restarts,
 the revoked device's open sessions end, and it can no longer connect. Other
 approved devices reconnect automatically after the brief restart. ✅
 
-If the invitation leaked (not just one device), remove and re-add the game to
-issue a new address, then re-approve and re-share:
+If the invitation leaked, issue a replacement:
 
 ```sh
-gl games remove our-minecraft
-gl games add --type minecraft-java --name "Our Minecraft"
-# approve devices again, create a new invite
+gl invite rotate --game our-minecraft
 ```
+
+Rotation ends sessions on the old address after the agent reloads. Existing
+device approvals carry over. Share the new invitation privately and have every
+friend import it.
+
+For a time-limited invitation, use
+`gl invite --game our-minecraft --expires 24h`. This rotates the address
+immediately in the config. When the 24 hours end, the agent drops that identity
+and closes existing sessions, including sessions for approved devices. Rotate
+again to resume access. Expiring invitations require an updated client.
 
 ---
 
@@ -207,7 +208,7 @@ gl games add --type factorio --name "Our Factory"          # UDP 34197
 gl games add --type minecraft-bedrock --name "Bedrock"     # UDP 19132
 ```
 
-Then approve, invite, join exactly as above. In Factorio use **Multiplayer →
+Then invite, join, and approve as above. In Factorio use **Multiplayer →
 Connect to address** with the local address GameLink shows.
 
 Known caveats for this legacy single-port mode:
@@ -239,7 +240,7 @@ hardware checks.
 | Connected, but the game says refused/timeout | The game server itself is down or listens elsewhere. GameLink shows *game not reachable* when the agent cannot reach the destination |
 | Works on Relay only | Strict NAT; normal. Latency will be higher |
 | "port busy" | Pick another local port in the server's settings |
-| `status` says "inactive (no approved devices)" | By design; approve a device |
+| `status` says "waiting for join requests" | Ask your friend to join, then check `gl requests list --game <id>` |
 | Friend's PC changed or reinstalled | New device key; approve the new key and revoke the old one |
 
 Collect a redacted report with **Diagnostics** in the app, or

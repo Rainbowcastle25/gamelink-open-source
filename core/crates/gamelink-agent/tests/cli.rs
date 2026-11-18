@@ -22,7 +22,7 @@ fn ok(dir: &Path, args: &[&str]) -> Output {
 }
 fn legacy_help(text: &str) -> String {
     // Keep the frozen Go oracle for existing text; only the explicitly added
-    // host commands and JSON options are outside that historical contract.
+    // host, request and invitation features are outside that contract.
     text.replace(
         "  host refresh                  discover/register Pterodactyl games once (no background scan)\n",
         "",
@@ -36,7 +36,18 @@ fn legacy_help(text: &str) -> String {
         "",
     )
     .replace(
-        "\nMachine-readable output: status, games list, devices list and host refresh accept --json.\n  host detect --panel-url URL --token-file PATH [--node-id N] [--out PATH] [--json]\n  host check --config PATH [--listen 127.0.0.1:8467] [--json]\nDetect exits 3 when a node decision is needed; check exits 1 if any check fails.\n",
+        "\nMachine-readable output: status, games list, devices list, requests list and host refresh accept --json.\n  host detect --panel-url URL --token-file PATH [--node-id N] [--out PATH] [--json]\n  host check --config PATH [--listen 127.0.0.1:8467] [--json]\nDetect exits 3 when a node decision is needed; check exits 1 if any check fails.\n",
+        "",
+    )
+    .replace("  requests list [--game ID]     list pending join requests\n", "")
+    .replace("  requests approve <id|key>    approve a pending device for its game (optional --label)\n", "")
+    .replace("  requests dismiss <id|key>    remove a pending request from the list\n", "")
+    .replace(
+        "  invite --game ID              print a private invitation (optional --expires 24h rotates the identity)\n  invite rotate --game ID       replace the invitation while keeping device approvals\n",
+        "  invite                        print the invitation a friend imports into GameLink (a secret)\n",
+    )
+    .replace(
+        "  -expires string\n    \trotate to a new game identity that stops serving after this duration, e.g. 24h\n",
         "",
     )
     .replace("  -json\n    \tprint machine-readable JSON\n", "")
@@ -94,7 +105,18 @@ fn migrated_admin_flow_and_private_storage() {
     let list = ok(&dir, &["games", "list"]);
     assert!(String::from_utf8_lossy(&list.stdout).contains("survival-world"));
     let inv = ok(&dir, &["invite", "--game", "survival-world"]);
-    assert!(String::from_utf8_lossy(&inv.stderr).contains("no devices are approved"));
+    assert!(String::from_utf8_lossy(&inv.stderr).contains("requests list --game survival-world"));
+    let cfg: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("agent.json")).unwrap()).unwrap();
+    assert_eq!(cfg["games"][0]["knockEnabled"], true);
+    let requests = ok(
+        &dir,
+        &["requests", "list", "--game", "survival-world", "--json"],
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&requests.stdout).unwrap(),
+        json!({"requests":[]})
+    );
     let pubkey = format!("nodekey:{}", "ab".repeat(32));
     ok(
         &dir,
@@ -329,6 +351,10 @@ fn frozen_go_admin_output() {
             String::from_utf8_lossy(bytes)
                 .replace(dir.path().to_str().unwrap(), "<DIR>")
                 .replace(&chrono::Utc::now().format("%Y-%m-%d").to_string(), "<DATE>")
+                .replace(
+                    "Nobody can reach it yet: no devices are approved. Share a private invitation with:\n  gamelink-agent invite --game survival-world",
+                    "Nobody can reach it yet: no devices are approved. Next:\n  gamelink-agent devices approve --game survival-world --key nodekey:<friend's key> --label <name>\n  gamelink-agent invite --game survival-world",
+                )
         };
         assert_eq!(
             out.status.code(),

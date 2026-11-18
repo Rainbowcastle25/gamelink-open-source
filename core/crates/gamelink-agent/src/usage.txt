@@ -10,12 +10,16 @@ Setup:
   games remove <id>             stop exposing a game and delete its identity
 
 Access control (per game; a game with no approved devices is unreachable):
+  requests list [--game ID]     list pending join requests
+  requests approve <id|key>    approve a pending device for its game (optional --label)
+  requests dismiss <id|key>    remove a pending request from the list
   devices approve               approve a friend's public key for one game
   devices revoke                revoke a device (a running agent restarts that game and ends the session)
   devices list                  list approved devices
 
 Sharing and running:
-  invite                        print the invitation a friend imports into GameLink (a secret)
+  invite --game ID              print a private invitation (optional --expires 24h rotates the identity)
+  invite rotate --game ID       replace the invitation while keeping device approvals
   serve                         run the agent in the foreground (Ctrl-C / SIGTERM to stop)
   host refresh                  discover/register Pterodactyl games once (no background scan)
   host detect                   inspect Panel nodes and eggs; optionally create private host settings
@@ -26,7 +30,7 @@ Sharing and running:
 The configuration directory defaults to $GAMELINK_AGENT_DIR, else
 <user config dir>/gamelink-agent. Run 'gamelink-agent <command> -h' for options.
 
-Machine-readable output: status, games list, devices list and host refresh accept --json.
+Machine-readable output: status, games list, devices list, requests list and host refresh accept --json.
   host detect --panel-url URL --token-file PATH [--node-id N] [--out PATH] [--json]
   host check --config PATH [--listen 127.0.0.1:8467] [--json]
 Detect exits 3 when a node decision is needed; check exits 1 if any check fails.

@@ -57,6 +57,7 @@ type keySpec struct {
 	PrivateKey   string
 	PresharedKey string
 	Region       *tailcfg.DERPRegion
+	ExpiresAt    time.Time
 }
 type bridgeSpec struct {
 	ServerIP       string
@@ -70,6 +71,7 @@ type gameSpec struct {
 	Protocol      games.Protocol
 	TunnelPort    uint16
 	Dest          string
+	KnockEnabled  bool
 	ConsoleBridge *bridgeSpec
 	Bedrock       *struct{ MediaPortFirst, MediaPortLast uint16 }
 }
@@ -177,13 +179,13 @@ func dispatch(data []byte) (any, error) {
 			return nil, errors.New("invalid destination")
 		}
 		var host *consolebridge.Host
-		if b := r.Game.ConsoleBridge; b != nil {
+		if b := r.Game.ConsoleBridge; b != nil && len(approved) != 0 {
 			host, err = consolebridge.NewHost(consolebridge.HostConfig{ServerIP: netip.MustParseAddr(b.ServerIP), BindIP: netip.MustParseAddr(b.BindIP), DiscoveryPort: b.DiscoveryPort, MediaPortFirst: b.MediaPortFirst, MediaPortLast: b.MediaPortLast})
 			if err != nil {
 				return nil, err
 			}
 		}
-		opts := transport.ServerOptions{ID: r.ID, Game: r.Game.Type, Protocol: r.Game.Protocol, TunnelPort: r.Game.TunnelPort, Dest: dest, Private: private, PSK: psk, Region: r.Keys.Region, Approved: approved}
+		opts := transport.ServerOptions{ID: r.ID, Game: r.Game.Type, Protocol: r.Game.Protocol, TunnelPort: r.Game.TunnelPort, Dest: dest, Private: private, PSK: psk, Region: r.Keys.Region, Approved: approved, CollectRequests: r.Game.KnockEnabled || len(approved) != 0, ExpiresAt: r.Keys.ExpiresAt}
 		if b := r.Game.Bedrock; b != nil {
 			opts.BedrockMediaPortFirst, opts.BedrockMediaPortLast = b.MediaPortFirst, b.MediaPortLast
 		}
@@ -221,6 +223,14 @@ func dispatch(data []byte) (any, error) {
 		result := map[string]transport.ServerStats{}
 		for id, server := range owner.running {
 			result[id.ID] = server.Stats()
+		}
+		return result, nil
+	case "requests":
+		result := map[string][]transport.JoinRequest{}
+		for id, server := range owner.running {
+			if requests := server.TakeRequests(); len(requests) != 0 {
+				result[id.ID] = requests
+			}
 		}
 		return result, nil
 

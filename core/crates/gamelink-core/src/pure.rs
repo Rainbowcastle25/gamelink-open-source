@@ -291,6 +291,20 @@ fn redact(v: &Value) -> String {
         .replace_all(&s, "[redacted]")
         .into_owned()
 }
+pub fn check_invite_expiry(expires_at: &Value) -> Result<(), String> {
+    if expires_at.is_null() {
+        return Ok(());
+    }
+    let expires = expires_at
+        .as_str()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .ok_or("invalid invitation expiry")?;
+    if expires <= chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now()) {
+        return Err("this invitation has expired; ask the host for a fresh one".into());
+    }
+    Ok(())
+}
+
 fn invite_fields(v: &Value) -> Result<(), String> {
     let b = number(v, "consoleBridge");
     if !(0..=1).contains(&b) {
@@ -301,6 +315,7 @@ fn invite_fields(v: &Value) -> Result<(), String> {
     }
     display("name", text(v, "name"), 64, true)?;
     display("note", text(v, "note"), 200, false)?;
+    check_invite_expiry(&v["expiresAt"])?;
     check_game(text(v, "game"), text(v, "proto"))?;
     port(number(v, "port"))
 }
@@ -433,6 +448,7 @@ fn decode_invite(s: &str) -> Result<Value, String> {
                 "addr" => "addr",
                 "note" => "note",
                 "consolebridge" => "consoleBridge",
+                "expiresat" => "expiresAt",
                 _ => return Err(damaged()),
             };
             if x.is_null() {
@@ -445,6 +461,11 @@ fn decode_invite(s: &str) -> Result<Value, String> {
                 }
             } else if !x.is_string() {
                 return Err(damaged());
+            }
+            if key == "expiresAt"
+                && chrono::DateTime::parse_from_rfc3339(x.as_str().unwrap()).is_err()
+            {
+                return Err("invalid invitation expiry".into());
             }
             v[key] = x.clone();
         }
@@ -469,8 +490,12 @@ fn encode_invite(v: &Value) -> String {
         "addr",
         "note",
         "consoleBridge",
+        "expiresAt",
     ] {
-        if k == "note" && text(v, k).is_empty() || k == "consoleBridge" && number(v, k) == 0 {
+        if k == "note" && text(v, k).is_empty()
+            || k == "consoleBridge" && number(v, k) == 0
+            || k == "expiresAt" && v[k].is_null()
+        {
             continue;
         }
         let value = if k == "v" { json!(1) } else { v[k].clone() };

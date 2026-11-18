@@ -139,7 +139,14 @@ pub fn dispatch(method: &str, v: Value) -> Result<Value, String> {
                 .retain(|key, _| {
                     matches!(
                         key.as_str(),
-                        "name" | "description" | "game" | "proto" | "port" | "localPort" | "addr"
+                        "name"
+                            | "description"
+                            | "game"
+                            | "proto"
+                            | "port"
+                            | "localPort"
+                            | "addr"
+                            | "expiresAt"
                     )
                 });
             Ok(out)
