@@ -99,10 +99,10 @@ last attempt looks like it is in the future, the next check runs right away.
 An unavailable or unverified result produces no banner and a local debug log
 entry for failures. A verified newer release appears with a link to its notes,
 with stronger styling for security releases. A failed check does not hide a
-notice that was already verified. An unreadable or invalid local cache is
-treated as empty, logged at debug level and replaced by the next successful
-check. A manifest for the same version as the last verified one is rejected if
-its signed bytes differ.
+notice that was already verified. A damaged local cache triggers an immediate
+check, and its rollback protection is lost only if the saved manifest or
+signature can no longer be read or verified. A manifest for the same version
+as the last verified one is rejected if its signed bytes differ.
 
 The Linux agent sends release requests only on `gamelink-agent update check`.
 Add `--json` for an object containing `installedVersion`, `checkedAt`,

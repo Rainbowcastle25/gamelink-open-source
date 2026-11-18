@@ -18,7 +18,7 @@ fn signed(key: &KeyPair, manifest: String, checked_at: u64) -> SignedRelease {
         .unwrap()
         .into_string();
     SignedRelease {
-        checked_at,
+        checked_at: Some(checked_at),
         manifest,
         signature,
     }
@@ -28,6 +28,13 @@ fn quiet(_: &'static str) {}
 
 fn verifier(key: &KeyPair) -> PublicKey {
     PublicKey::from_base64(&key.pk.to_base64()).unwrap()
+}
+
+fn corrupt_attempt_metadata(dir: &Path) {
+    let path = dir.join(CACHE);
+    let mut cache: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    cache["lastAttemptSucceeded"] = json!("damaged");
+    storage::write_atomic(&path, &serde_json::to_vec(&cache).unwrap()).unwrap();
 }
 
 #[test]
@@ -132,6 +139,11 @@ fn replay_below_last_verified_version_is_rejected() {
         check("1.2.0", 2).unwrap_err(),
         "release manifest is older than the last verified release"
     );
+    corrupt_attempt_metadata(dir.path());
+    assert_eq!(
+        check("1.2.0", 3).unwrap_err(),
+        "release manifest is older than the last verified release"
+    );
     let cache = load_cache(dir.path(), quiet);
     assert!(!cache.last_attempt_succeeded);
     let retained = result(&installed, &cache.signed.unwrap(), keys).unwrap();
@@ -173,14 +185,34 @@ fn automatic_checks_reuse_verified_result_until_due() {
     .unwrap();
     assert_eq!(first.checked_at, second.checked_at);
     assert!(second.available);
+}
+
+#[test]
+fn signature_corruption_is_repaired_before_cooldown_expires() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = KeyPair::generate_unencrypted_keypair().unwrap();
+    let keys = &[verifier(&key)];
+    let installed = Version::new(1, 0, 0);
+    check_at(dir.path(), &installed, keys, true, 1, quiet, |now| {
+        Ok(signed(&key, manifest("1.1.0").to_string(), now))
+    })
+    .unwrap();
     let mut cache = load_cache(dir.path(), quiet);
-    cache.signed.as_mut().unwrap().manifest.push('?');
+    cache.signed.as_mut().unwrap().signature = "damaged".into();
     save_cache(dir.path(), &cache).unwrap();
-    assert!(
-        check_at(dir.path(), &installed, keys, true, 3, quiet, |_| panic!(
-            "early fetch"
-        ))
-        .is_err()
+    let repaired = check_at(dir.path(), &installed, keys, true, 2, quiet, |now| {
+        Ok(signed(&key, manifest("1.2.0").to_string(), now))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(repaired.release.version, "1.2.0");
+    let cache = load_cache(dir.path(), quiet);
+    assert_eq!(
+        result(&installed, &cache.signed.unwrap(), keys)
+            .unwrap()
+            .release
+            .version,
+        "1.2.0"
     );
 }
 
@@ -285,7 +317,12 @@ fn same_version_with_different_signed_bytes_is_rejected() {
         check(resigned.to_string(), 2).unwrap_err(),
         "release manifest changed after publication"
     );
-    assert!(check(original, 3).is_ok(), "identical bytes stay accepted");
+    corrupt_attempt_metadata(dir.path());
+    assert_eq!(
+        check(resigned.to_string(), 3).unwrap_err(),
+        "release manifest changed after publication"
+    );
+    assert!(check(original, 4).is_ok(), "identical bytes stay accepted");
     let cache = load_cache(dir.path(), quiet);
     let kept = result(&installed, &cache.signed.unwrap(), keys).unwrap();
     assert_eq!(
