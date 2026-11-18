@@ -7,9 +7,9 @@ import { isMock, type Backend } from "./lib/backend";
 import { NavProvider, useNav } from "./lib/nav";
 import { GameLinkProvider } from "./lib/store";
 import { DashboardScreen } from "./screens/DashboardScreen";
-import { FriendsScreen } from "./screens/FriendsScreen";
+import { PeopleScreen } from "./screens/PeopleScreen";
 import { HostScreen } from "./screens/HostScreen";
-import { RequestsScreen } from "./screens/RequestsScreen";
+import { LocalHostScreen } from "./screens/LocalHostScreen";
 import { ServersScreen } from "./screens/ServersScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 
@@ -18,11 +18,11 @@ function Screen() {
   switch (screen) {
     case "servers":
       return <ServersScreen />;
-    case "requests":
-      return <RequestsScreen />;
-    case "friends":
-      return <FriendsScreen />;
     case "host":
+      return <LocalHostScreen />;
+    case "people":
+      return <PeopleScreen />;
+    case "host-admin":
       return <HostScreen />;
     case "settings":
       return <SettingsScreen />;

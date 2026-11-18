@@ -53,6 +53,9 @@ type ServerOptions struct {
 	// Event, if set, receives human-readable events (denials, dial failures).
 	Event func(kind, msg string)
 
+	// Peers optionally records authorized gameplay sessions.
+	Peers *PeerActivity
+
 	MaxSessions    int           // concurrent TCP connections / UDP flows (default 256)
 	DialTimeout    time.Duration // time allowed to reach Dest (default 5s)
 	UDPIdleTimeout time.Duration // idle UDP flow lifetime (default tailcat's 2 min)
@@ -332,6 +335,7 @@ func (g *GameServer) onTCP(port uint16) func(net.Conn) {
 			return
 		}
 		if g.bedrockHost != nil {
+			g.opts.Peers.recordSession(g.allowed, c.RemoteAddr())
 			g.bedrockHost.Handle(c)
 			return
 		}
@@ -347,6 +351,7 @@ func (g *GameServer) onTCP(port uint16) func(net.Conn) {
 			return
 		}
 		defer g.conns.remove(dst)
+		g.opts.Peers.recordSession(g.allowed, c.RemoteAddr())
 		tailcat.ProxyConns(c, dst) // closes both when finished
 	}
 }
@@ -426,6 +431,7 @@ func (g *GameServer) handleUDP(c tailcat.ConnPacketConn) {
 	}
 	defer g.conns.remove(dst)
 
+	g.opts.Peers.recordSession(g.allowed, c.RemoteAddr())
 	done := make(chan struct{})
 	go func() { // game server -> client
 		defer close(done)

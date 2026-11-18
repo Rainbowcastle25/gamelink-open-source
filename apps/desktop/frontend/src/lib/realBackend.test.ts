@@ -20,6 +20,11 @@ describe("Tauri transport", () => {
     expect(await realBackend.servers()).toEqual([]);
     expect(await realBackend.activity(20)).toEqual([]);
   });
+  it("copies a hosted invitation without passing the invitation through the webview", async () => {
+    mocks.invoke.mockResolvedValue(null);
+    await realBackend.copyHostedInvitation("game");
+    expect(mocks.invoke).toHaveBeenCalledWith("desktop", { request: { method: "copyHostedInvitation", id: "game" } });
+  });
   it("releases a subscription cancelled before native registration resolves", async () => {
     let resolve!: (off: () => void) => void;
     const off = vi.fn();

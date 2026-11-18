@@ -1,4 +1,4 @@
-import { RefreshCw, Server, ShieldCheck, Laptop } from "lucide-react";
+import { RefreshCw, Server, ShieldCheck } from "lucide-react";
 import { Button } from "../components/Button";
 import { ActivityPanel } from "../components/ActivityPanel";
 import { Header } from "../components/Header";
@@ -22,24 +22,8 @@ export function DashboardScreen() {
       {!ready ? (
         <SummarySkeleton />
       ) : (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 gap-4">
           <SummaryCard icon={<Server className="size-4" aria-hidden />} label="Servers" value={overview ? overview.servers : "-"} note={`${overview?.connected ?? 0} connected`} />
-          <SummaryCard
-            icon={<Laptop className="size-4" aria-hidden />}
-            label="Devices"
-            value={overview ? overview.devices : "-"}
-            note={
-              <>
-                This device
-                {overview?.publicKeyShort && (
-                  <>
-                    {" "}
-                    · <span className="font-mono text-xs">{overview.publicKeyShort.replace(/^nodekey:/, "").slice(0, 8)}</span>
-                  </>
-                )}
-              </>
-            }
-          />
           <SummaryCard icon={<ShieldCheck className="size-4" aria-hidden />} label="Security" value="Private" note="Only approved devices can connect." />
         </div>
       )}

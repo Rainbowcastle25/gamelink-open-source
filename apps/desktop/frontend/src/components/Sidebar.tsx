@@ -1,4 +1,4 @@
-import { Inbox, LayoutDashboard, RadioTower, Server, Settings, Users, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, RadioTower, MonitorUp, Server, Settings, Users, type LucideIcon } from "lucide-react";
 import { cn } from "../lib/format";
 import { useNav } from "../lib/nav";
 import { useAppState } from "../lib/store";
@@ -8,9 +8,9 @@ import { Logo } from "./Logo";
 const ITEMS: Array<{ id: Screen; label: string; icon: LucideIcon }> = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "servers", label: "Servers", icon: Server },
-  { id: "requests", label: "Requests", icon: Inbox },
-  { id: "friends", label: "Friends", icon: Users },
-  { id: "host", label: "Host admin", icon: RadioTower },
+  { id: "host", label: "Host", icon: MonitorUp },
+  { id: "people", label: "People", icon: Users },
+  { id: "host-admin", label: "Host admin", icon: RadioTower },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 

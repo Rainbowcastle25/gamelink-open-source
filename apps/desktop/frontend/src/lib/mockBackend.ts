@@ -14,6 +14,8 @@ import type {
   LaunchResult,
   HostConnection,
   HostSnapshot,
+  HostedGame,
+  HostedGameForm,
   SettingsView,
   UpdateTopic,
 } from "./types";
@@ -185,6 +187,51 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
   const seed = opts.seed ?? true;
 
   let saved: ServerView[] = seed ? seedServers() : [];
+  const world = { name: "Demo: LAN Cabin", port: 51734 };
+  let hosted: HostedGame[] = seed ? [{
+    id: "demo-hosted-factory", game: Type.Factorio, name: "Demo: Factory", port: 34197,
+    enabled: true, lan: false, state: "serving", detail: "",
+    approved: [{ publicKey: "nodekey:" + "a".repeat(64), label: "Demo: Alex", lastConnected: iso(80000) }],
+    pending: [{ id: 1, publicKey: "nodekey:" + "b".repeat(64), lastSeen: iso(10000) }],
+  }] : [];
+  let nextHosted = 1;
+
+  function hostedGame(id: string): HostedGame {
+    const game = hosted.find((game) => game.id === id);
+    if (!game) throw new Error("Hosted game was removed");
+    return game;
+  }
+
+  function updateHosting(game: HostedGame) {
+    game.state = game.enabled && game.approved.length > 0 ? "serving" : "inactive";
+    game.detail = !game.enabled ? "Sharing paused" : game.state === "inactive" ? "waiting for join requests; no approved devices" : "";
+    if (!game.enabled) game.pending = [];
+  }
+
+  function pendingRequest(game: HostedGame, requestId: number) {
+    const request = game.pending.find((request) => request.id === requestId);
+    if (!request) throw new Error("That join request is no longer pending");
+    return request;
+  }
+
+  function approveDevice(game: HostedGame, publicKey: string, label: string) {
+    if (!/^nodekey:[0-9a-f]{64}$/i.test(publicKey)) throw new Error("Enter a valid device public key");
+    const device = game.approved.find((device) => device.publicKey === publicKey);
+    if (device) device.label = label || device.label;
+    else game.approved.push({ publicKey, label, lastConnected: null });
+    game.pending = game.pending.filter((request) => request.publicKey !== publicKey);
+    updateHosting(game);
+  }
+
+  function createHosted(form: HostedGameForm, lan: boolean) {
+    const game: HostedGame = {
+      ...form, id: `demo-hosted-${nextHosted++}`, enabled: true, lan,
+      state: "inactive", detail: "", approved: [], pending: [],
+    };
+    updateHosting(game);
+    hosted.push(game);
+    return { id: game.id };
+  }
   const live = new Map<string, ServerView>(); // demo servers keep their state here
   let settings: SettingsView = {
     demoMode: opts.demoMode ?? false,
@@ -396,7 +443,6 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
       servers: real.length,
       connected: 0,
       online: 0,
-      devices: 1,
       publicKeyShort: MOCK_KEY.slice(0, 20) + "…",
       security: "Private keys stay on this device. Only devices approved by a server's owner can connect.",
       status: "idle",
@@ -632,6 +678,67 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
       if (!game) throw new Error("refresh host games first");
       const gameType = game.type === "factorio" ? Type.Factorio : game.type === "minecraft-bedrock" ? Type.MinecraftBedrock : Type.MinecraftJava;
       return clone(addFrom({ name: game.name, description: "Added from your host", game: gameType, proto: GAME_INFO[gameType]?.proto ?? Protocol.TCP, port: GAME_INFO[gameType]?.port ?? 25565, localPort: 0 }));
+    },
+
+    async hostedGames() {
+      await wait();
+      return clone(hosted);
+    },
+    async createHostedGame(form) {
+      await wait();
+      return createHosted(form, false);
+    },
+    async shareLanWorld(detected) {
+      await wait();
+      const existing = hosted.find((game) => game.lan && game.name === detected.name);
+      if (!existing) return createHosted({ ...detected, game: Type.MinecraftJava }, true);
+      existing.port = detected.port;
+      existing.enabled = true;
+      updateHosting(existing);
+      return { id: existing.id };
+    },
+    async scanLanWorlds() {
+      await wait();
+      return seed ? [clone(world)] : [];
+    },
+    async stopLanScan() {
+      await wait();
+    },
+    async approveHostedRequest(id, requestId, label) {
+      await wait();
+      const game = hostedGame(id);
+      approveDevice(game, pendingRequest(game, requestId).publicKey, label);
+    },
+    async dismissHostedRequest(id, requestId) {
+      await wait();
+      const game = hostedGame(id);
+      const request = pendingRequest(game, requestId);
+      game.pending = game.pending.filter((entry) => entry !== request);
+    },
+    async approveHostedDevice(id, publicKey, label) {
+      await wait();
+      approveDevice(hostedGame(id), publicKey, label);
+    },
+    async revokeHostedDevice(id, publicKey) {
+      await wait();
+      const game = hostedGame(id);
+      game.approved = game.approved.filter((device) => device.publicKey !== publicKey);
+      updateHosting(game);
+    },
+    async setHostingEnabled(id, enabled) {
+      await wait();
+      const game = hostedGame(id);
+      game.enabled = enabled;
+      updateHosting(game);
+    },
+    async removeHostedGame(id) {
+      await wait();
+      hosted = hosted.filter((game) => game.id !== id);
+    },
+    async copyHostedInvitation(id) {
+      await wait();
+      hostedGame(id);
+      await navigator.clipboard.writeText("GameLink demo invitation (example only)");
     },
 
     async copyText() {

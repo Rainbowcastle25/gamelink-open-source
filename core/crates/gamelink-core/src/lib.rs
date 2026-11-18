@@ -463,6 +463,7 @@ pub mod config;
 pub mod client_lifecycle;
 pub mod console;
 pub mod discovery;
+pub mod requests;
 pub mod supervisor;
 
 pub mod desktop;

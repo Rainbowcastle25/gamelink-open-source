@@ -24,19 +24,20 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "Servers" }));
     expect(screen.getByRole("heading", { level: 1, name: "Servers" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Requests" }));
-    expect(screen.getByRole("heading", { level: 1, name: "Requests" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Friends" }));
-    expect(screen.getByText("Friends are coming later")).toBeInTheDocument();
-    expect(screen.getAllByText("Planned for a future release")).toHaveLength(3);
+    await user.click(screen.getByRole("button", { name: "Host" }));
+    expect(screen.getByRole("heading", { level: 1, name: "Host" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "People" }));
+    expect(screen.getByRole("heading", { level: 1, name: "People" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Host admin" }));
+    expect(screen.getByRole("heading", { level: 1, name: "Host admin" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Settings" }));
     expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
   });
 
-  it("Requests -> Import invitation opens the import dialog on the Servers screen", async () => {
+  it("People -> Import invitation opens the import dialog on the Servers screen", async () => {
     const user = userEvent.setup();
     render(<App backend={createMockBackend({ delayMs: 0, joinMs: 0 })} mock={false} />);
-    await user.click(screen.getByRole("button", { name: "Requests" }));
+    await user.click(screen.getByRole("button", { name: "People" }));
     await user.click(await screen.findByRole("button", { name: "Import invitation" }));
     expect(screen.getByRole("heading", { level: 1, name: "Servers" })).toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Import invitation" })).toBeInTheDocument();

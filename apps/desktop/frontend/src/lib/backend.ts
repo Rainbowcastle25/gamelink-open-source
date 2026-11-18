@@ -3,6 +3,9 @@ import type {
   CheckView,
   HostConnection,
   HostSnapshot,
+  HostedGame,
+  HostedGameForm,
+  LanWorld,
   IdentityView,
   InvitePreview,
   LaunchResult,
@@ -54,6 +57,19 @@ export interface Backend {
   hostStatus(): Promise<HostSnapshot>;
   refreshHost(): Promise<HostSnapshot>;
   importHostGame(gameID: string): Promise<ServerView>;
+
+  hostedGames(): Promise<HostedGame[]>;
+  createHostedGame(form: HostedGameForm): Promise<{ id: string }>;
+  shareLanWorld(world: LanWorld): Promise<{ id: string }>;
+  scanLanWorlds(): Promise<LanWorld[]>;
+  stopLanScan(): Promise<void>;
+  approveHostedRequest(id: string, requestId: number, label: string): Promise<void>;
+  dismissHostedRequest(id: string, requestId: number): Promise<void>;
+  approveHostedDevice(id: string, publicKey: string, label: string): Promise<void>;
+  revokeHostedDevice(id: string, publicKey: string): Promise<void>;
+  setHostingEnabled(id: string, enabled: boolean): Promise<void>;
+  removeHostedGame(id: string): Promise<void>;
+  copyHostedInvitation(id: string): Promise<void>;
 
   copyText(text: string): Promise<void>;
   /** Native file dialog; resolves to "" when cancelled. */
@@ -124,6 +140,18 @@ export const backend: Backend = {
   hostStatus: lazy((b) => b.hostStatus.bind(b)),
   refreshHost: lazy((b) => b.refreshHost.bind(b)),
   importHostGame: lazy((b) => b.importHostGame.bind(b)),
+  hostedGames: lazy((b) => b.hostedGames.bind(b)),
+  createHostedGame: lazy((b) => b.createHostedGame.bind(b)),
+  shareLanWorld: lazy((b) => b.shareLanWorld.bind(b)),
+  scanLanWorlds: lazy((b) => b.scanLanWorlds.bind(b)),
+  stopLanScan: lazy((b) => b.stopLanScan.bind(b)),
+  approveHostedRequest: lazy((b) => b.approveHostedRequest.bind(b)),
+  dismissHostedRequest: lazy((b) => b.dismissHostedRequest.bind(b)),
+  approveHostedDevice: lazy((b) => b.approveHostedDevice.bind(b)),
+  revokeHostedDevice: lazy((b) => b.revokeHostedDevice.bind(b)),
+  setHostingEnabled: lazy((b) => b.setHostingEnabled.bind(b)),
+  removeHostedGame: lazy((b) => b.removeHostedGame.bind(b)),
+  copyHostedInvitation: lazy((b) => b.copyHostedInvitation.bind(b)),
   copyText: lazy((b) => b.copyText.bind(b)),
   pickExecutable: lazy((b) => b.pickExecutable.bind(b)),
   openConfigFolder: lazy((b) => b.openConfigFolder.bind(b)),

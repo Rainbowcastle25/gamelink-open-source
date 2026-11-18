@@ -61,7 +61,7 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
             onDisconnect={() => void store.disconnect(s.id)}
             onCheck={() => void store.check(s.id)}
             onLaunch={() => void store.launch(s.id)}
-            onOpenRequests={() => go("requests")}
+            onOpenRequests={() => go("people")}
             manage={
               manage && {
                 onEdit: () => manage.onEdit(s),

@@ -2,6 +2,8 @@
 mod bridge;
 mod host;
 mod host_connection;
+mod hosting;
+mod lan;
 
 use gamelink_core::update;
 use serde_json::{json, Value};
@@ -44,6 +46,18 @@ fn public_method(method: &str) -> bool {
             | "hostStatus"
             | "refreshHost"
             | "importHostGame"
+            | "hostedGames"
+            | "createHostedGame"
+            | "shareLanWorld"
+            | "scanLanWorlds"
+            | "stopLanScan"
+            | "approveHostedRequest"
+            | "dismissHostedRequest"
+            | "approveHostedDevice"
+            | "revokeHostedDevice"
+            | "setHostingEnabled"
+            | "removeHostedGame"
+            | "copyHostedInvitation"
             | "copyText"
             | "pickExecutable"
             | "openConfigFolder"
@@ -106,6 +120,13 @@ fn native_or_manager(app: &tauri::AppHandle, request: Value) -> Result<Value, St
                     .open_url(notice.release.release_notes_url, None::<&str>)
                     .map_err(|_| "could not open release notes")?;
             }
+            Ok(Value::Null)
+        }
+        "copyHostedInvitation" => {
+            let invite = host::call(json!({"method":"hostedInvitation","id":request["id"]}))?;
+            app.clipboard()
+                .write_text(invite.as_str().ok_or("could not create the invitation")?)
+                .map_err(|_| "could not access the clipboard")?;
             Ok(Value::Null)
         }
         "copyText" => {
@@ -237,6 +258,9 @@ mod tests {
             "updates",
             "launch.program",
             "launch.uri",
+            "hostedInvitation",
+            "host_start",
+            "host_address",
         ] {
             assert!(!super::public_method(method));
         }

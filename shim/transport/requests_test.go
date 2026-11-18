@@ -45,3 +45,21 @@ func TestJoinRequestBatchesDeduplicateRateLimitAndCap(t *testing.T) {
 		t.Fatal("batch did not cap its pending keys")
 	}
 }
+
+func TestRefusalAdapterRequiresExactTailcatDecisionAndValidKey(t *testing.T) {
+	g := &GameServer{logf: func(kind, message string) {}}
+	g.requests.newKeys = rate.NewLimiter(4, 8)
+	g.requests.pending = make(map[key.NodePublic]JoinRequest)
+	peer := key.NewNode().Public().String()
+	const refusal = "ignoring meow from %v: not in allowedClients"
+	g.tailcatLog("%s", "ignoring meow from "+peer+": not in allowedClients")
+	g.tailcatLog(refusal, "invalid key")
+	if len(g.TakeRequests()) != 0 {
+		t.Fatal("recorded a log line unrelated to a valid Tailcat refusal")
+	}
+	g.tailcatLog(refusal, peer)
+	batch := g.TakeRequests()
+	if len(batch) != 1 || batch[0].PublicKey.String() != peer {
+		t.Fatal("did not record the refused key")
+	}
+}

@@ -42,7 +42,7 @@ export function RequestInstructions({ publicKey, onImport }: Props) {
           Use any private channel: a message, an email, a chat.
         </Step>
         <Step n={3} title="The owner approves it for a specific game">
-          They run this command on the machine that hosts the game, with your key already filled in:
+          A desktop host approves your key in People. A Linux host runs the command below.
           <div className="mt-3 rounded-lg border border-line-strong bg-black/30">
             <pre className="overflow-x-auto px-4 py-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-fg/90 [overflow-wrap:anywhere]" aria-label="Approve command">
               {command}
@@ -64,7 +64,7 @@ export function RequestInstructions({ publicKey, onImport }: Props) {
         </Step>
       </ol>
       <p className="mt-6 rounded-lg border border-line bg-white/3 px-4 py-3 text-[13px] leading-relaxed text-muted">
-        GameLink does not send or sync requests through any cloud service in this alpha. Nothing leaves your device until you share your public key yourself.
+        Contact the host directly to ask for access. The host may also see a pending request if you try an invitation before they approve your device.
       </p>
     </section>
   );

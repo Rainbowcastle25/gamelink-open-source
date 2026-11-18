@@ -1,6 +1,6 @@
 # Architecture
 
-GameLink has a Linux Rust host agent with a Go Tailcat shim, a Windows desktop client, and an Android
+GameLink has a Linux Rust host agent with a Go Tailcat shim, a Windows desktop client and host, and an Android
 app for the Bedrock console bridge. Rust owns shared validation, invitation
 and configuration policy, private storage, console protocol codecs, and the
 Android, desktop client, and supervisor lifecycle reducers.
@@ -31,19 +31,26 @@ relay region. Treat the address as a secret capability. A peer must also hold a
 device key in that game's allowlist.
 
 Each hosted game has its own Tailcat identity. A game with zero approvals can
-receive knocks after an invitation is issued. Its Tailcat allowlist remains
-restrictive and it serves zero game ports. Revocation closes the game's
-listeners and live sessions, then starts a replacement with the remaining
-approved keys or returns to waiting for knocks. The supervisor checks config
-once per second by default; Rust decides whether each observation requires
-closing or starting a game server. The Rust agent serializes observations and
-effects, including completing Go closure barriers before replacements; config changes, including key-file mtime changes,
-are noticed on the next poll. Runtime status is updated on state changes and
-with a five-second heartbeat. Invalid config stops running game servers.
+run in knock-only mode. The Linux agent enables it when it issues an invitation
+and the desktop enables it for each active share. Tailcat gets a disposable
+allowlist key, admits no devices, sends no handshake reply and serves no game
+ports. Revocation closes the game's listeners and live sessions, then starts a
+replacement with the remaining approved keys or returns to knock-only mode.
 
-The ordinary TCP and UDP forwarders carry only the configured tunnel port to
-one configured destination, defaulting to `127.0.0.1:<port>`. Legacy UDP keeps
-Tailcat's 1232-byte packet ceiling: larger datagrams are dropped and counted.
+The shared Go game server uses one exact Tailcat log call at the DERP allowlist
+decision to collect refused source keys, with a rate limit on new keys. Both
+hosts drain the same bounded batches and use the Rust core request store to
+deduplicate by game identity and key, cap pending requests at 32 per game, and
+expire them 24 hours after first sighting. The Linux CLI and desktop People
+screen approve or dismiss a specific pending request. Dismissal leaves access
+unchanged and a fresh attempt can appear again.
+
+The supervisor checks config once per second by default. Rust serializes
+observations and effects, and waits for old Go resources to close before
+starting replacements. Invalid config stops running game servers. The ordinary
+TCP and UDP forwarders carry only the configured tunnel port to one destination.
+The Linux agent defaults to `127.0.0.1:<port>` and desktop hosting requires it.
+Legacy UDP drops and counts datagrams above Tailcat's 1232-byte packet limit.
 
 ## Optional Bedrock Console Bridge
 
@@ -116,7 +123,7 @@ successful Refresh. Explicit per-game import approves the current device and
 passes a private invitation between native hosts without exposing it to the UI.
 No recurring Panel scan or additional daemon is introduced.
 
-## Windows desktop client
+## Windows desktop app
 
 ```
 React UI ⇄ Rust desktop host + core policy ⇄ bounded Go resource API ⇄ Tailcat
@@ -140,6 +147,15 @@ by Go callbacks. Replacement starts occur only after the old resource closes.
 A 15-second frontend poll remains for counters and missed events. The legacy
 five-second tunnel health check and reconnect behavior remain in the Go
 network runtime. Sample servers use only Rust timers and never open sockets.
+
+The desktop host stores games in a private `hosting` directory under the app
+data directory. It uses the core agent config mutations and supervisor reducer
+to reconcile per-game servers, using a separate generation map in the desktop
+Go shim. Adding, revoking, pausing and changing a destination close superseded
+generations before new servers start. Hosting and its in-memory request store
+run until the app exits. The Host view receives bounded Minecraft Java
+multicast announcements from this PC's interface addresses. Updating a LAN destination
+requires confirmation and preserves the game's key, tunnel port and approvals.
 
 ## Android app
 
@@ -175,6 +191,7 @@ does not approve a phone by itself; the host must approve its public key.
 | Item | Location | Protection |
 |---|---|---|
 | Windows private device key | `%AppData%\GameLink\identity.json` | DPAPI-sealed, atomic write |
+| Windows hosted identity and PSK | `%AppData%\GameLink\hosting\keys\<id>.json` | DPAPI-sealed, atomic write |
 | Windows saved server address | `%AppData%\GameLink\config.json` | DPAPI-sealed |
 | Android identity and invitations | app `noBackupFilesDir` | Android Keystore AES-GCM; backup disabled |
 | Host per-game keys | `keys/<id>.json` | 0600 file, 0700 config directory, atomic replacement |
@@ -202,9 +219,9 @@ methods, identity keys and full Tailcat addresses are never returned to it.
 
 The Go archives expose resource initialization/shutdown, key generation and
 Tailcat address validation. Agent operations also resolve relay metadata and
-start/stop generation-scoped servers and return stats/logs. Desktop operations
-start/stop generation-scoped joins/probes, return stats and drain callback
-snapshots. Rust owns all file operations and application effect iteration.
+start/stop generation-scoped servers and return stats, logs and join requests.
+Desktop operations start/stop generation-scoped joins, probes and hosted games,
+drain requests and callback snapshots, and return last authorized session times. Rust owns all file operations and application effect iteration.
 Production dependency checks reject imports from `tests/`, alongside the
 existing SSH/SFTP/port-mapping/router exclusions. There are no duplicate Go hosts: the integration tests drive the shipped Rust
 agent binary as a subprocess, and the Go shim packages directly. Frozen original

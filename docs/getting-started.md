@@ -1,7 +1,7 @@
 # Getting started
 
-This walks through a Linux machine hosting Minecraft Java and a friend on
-Windows joining it. The automated tests prove the tunnel, access control and
+You can host from a Windows PC running GameLink or from a Linux machine
+running the GameLink agent. Both paths use the same per-game allowlist. The automated tests prove the tunnel, access control and
 TCP/UDP behavior with stand-in echo servers through Tailcat. Real PC game
 clients and console hardware remain separate validation work; see the
 [Android Console Bridge guide](android-console-bridge.md) for its current
@@ -9,6 +9,38 @@ build status and hardware checklist.
 
 Legend: ✅ covered by automated tests, 🟡 documented but not exercised with the
 real thing.
+
+## Host from your Windows PC
+
+1. Run GameLink on Windows 10 or 11 with the WebView2 runtime. Keep the
+   desktop app open while friends are playing.
+2. For Minecraft Java, open your world, choose **Open to LAN**, and start the
+   LAN world. Go to **Host** in GameLink and select **Share world** beside
+   the announcement. If discovery is unavailable, use the port Minecraft
+   prints in chat. For a local Minecraft Java, Minecraft Bedrock or Factorio
+   server, start the server and choose **Host a server on this PC**. Choose
+   the game and enter its port. The server must accept traffic on
+   `127.0.0.1` on that PC. Desktop hosting uses the single-port forwarding
+   path and does not enable the Android Console Bridge.
+3. Choose **Copy invitation** and send it privately. Your friend opens
+   **Servers** → **Add server** → **Import invitation**, then chooses **Join**.
+   Their first attempt may show **no response** while you review the request.
+4. In **People**, choose **Review request** for the game. Verify the full key
+   against **Copy Public Key** on your friend's **People** screen, then choose
+   **Approve device**. Choose **Dismiss** for an unwanted request. You can also
+   approve a friend's public key directly before they try to join. Once
+   approved, your friend can retry **Join** and use the loopback address shown
+   by GameLink in their game.
+5. When a Minecraft LAN world reopens on a different port, return to **Host**
+   and choose **Update LAN port**. GameLink keeps the same game, approved
+   devices and invitation. After restarting GameLink, share the detected
+   LAN world again before friends connect. Use **Stop sharing** when you
+   close the world or server.
+6. To remove someone's access, select **Revoke** for that device in **People**.
+   This closes the game's current sessions. Devices that remain approved
+   can reconnect.
+
+## Host from a Linux machine
 
 You will need:
 
@@ -74,7 +106,7 @@ Nobody can reach it yet: no devices are approved.
 
 (Your nearest public relay is picked automatically. ✅)
 
-The game port stays unreachable until the host approves at least one device. ✅
+The game port stays unreachable until the host approves at least one device. Issuing an invitation enables join requests. ✅
 
 ## C. Install GameLink on the friend's Windows PC
 
@@ -141,9 +173,9 @@ gl requests list --game our-minecraft
 gl requests approve 1 --label "Sam's PC"  # use the ID shown for your friend
 ```
 
-Confirm which request is your friend's before approving. If more than one
-request appears, ask your friend to compare the key under **Settings → Copy
-Public Key**. You can dismiss an unwanted entry with `gl requests dismiss <id>`.
+Before approving, compare the request's public key with the key your friend
+copies from **People** → **Copy Public Key**. Dismiss an unwanted entry with
+`gl requests dismiss <id>`. A new join attempt can create a new request.
 You can also approve a key directly with
 `gl devices approve --game our-minecraft --key <public-key>`. ✅
 
@@ -240,7 +272,7 @@ hardware checks.
 | Connected, but the game says refused/timeout | The game server itself is down or listens elsewhere. GameLink shows *game not reachable* when the agent cannot reach the destination |
 | Works on Relay only | Strict NAT; normal. Latency will be higher |
 | "port busy" | Pick another local port in the server's settings |
-| `status` says "waiting for join requests" | Ask your friend to join, then check `gl requests list --game <id>` |
+| Host or `gl status` says "waiting for join requests" | Ask your friend to join, then check **People** on desktop or run `gl requests list --game <id>` on Linux |
 | Friend's PC changed or reinstalled | New device key; approve the new key and revoke the old one |
 
 Collect a redacted report with **Diagnostics** in the app, or

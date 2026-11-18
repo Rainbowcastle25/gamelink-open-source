@@ -237,7 +237,7 @@ pub fn dispatch(method: &str, v: Value) -> Result<Value, String> {
                 key.into()
             };
             Ok(
-                json!({"servers":servers,"connected":connected,"online":online,"devices":1,"publicKeyShort":short,"status":status,"security":"Private keys stay on this device. Only devices approved by a server's owner can connect."}),
+                json!({"servers":servers,"connected":connected,"online":online,"publicKeyShort":short,"status":status,"security":"Private keys stay on this device. Only devices approved by a server's owner can connect."}),
             )
         }
         "desktop.join_parameters" => {
@@ -590,7 +590,6 @@ mod policy_tests {
         assert_eq!(idle["status"], "idle");
         assert_eq!(idle["servers"], 0);
         assert_eq!(idle["publicKeyShort"], "short");
-        assert_eq!(idle["devices"], 1);
 
         let out = overview(
             json!([s("disconnected", "online"), s("disconnected", "unknown")]),

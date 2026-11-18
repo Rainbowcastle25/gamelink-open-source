@@ -1,6 +1,6 @@
 //! Rust desktop application host. One lock serializes policy and ordered effects.
 //! Go callbacks only enqueue snapshots, so closure barriers cannot reenter it.
-use crate::bridge;
+use crate::{bridge, hosting::Hosting};
 use gamelink_core::{client_lifecycle, config, desktop, launch, pure, storage};
 use serde_json::{json, Value};
 use std::{
@@ -56,6 +56,11 @@ struct Request {
     name: String,
     description: String,
     local_port: i64,
+    port: i64,
+    game: String,
+    public_key: String,
+    label: String,
+    enabled: Option<bool>,
     limit: i64,
     form: FormInput,
     settings: SettingsInput,
@@ -74,6 +79,15 @@ pub fn log_release_check_error(error: &'static str) {
     }
 }
 pub fn call(request: Value) -> Result<Value> {
+    let result = call_with_region(request.clone(), None)?;
+    if result["resolveRelay"] == true {
+        let region = bridge::call(json!({"method":"host_resolve"}))?;
+        return call_with_region(request, Some(&region));
+    }
+    Ok(result)
+}
+
+fn call_with_region(request: Value, region: Option<&Value>) -> Result<Value> {
     if serde_json::to_vec(&request)
         .map_err(|_| "invalid desktop request")?
         .len()
@@ -115,7 +129,7 @@ pub fn call(request: Value) -> Result<Value> {
         _ => lock
             .as_mut()
             .ok_or("desktop is not initialized".to_owned())?
-            .command(request),
+            .command_with_region(request, region),
     };
     drop(lock);
     // Preserve the synchronous Check result while permitting another command
@@ -153,6 +167,7 @@ struct App {
     updates: u64,
     startup: Option<Instant>,
     checks: Vec<String>,
+    hosting: Hosting,
 }
 impl App {
     fn open() -> Result<Self> {
@@ -220,6 +235,7 @@ impl App {
         } else {
             None
         };
+        let hosting = Hosting::new(dir.join("hosting"));
         let mut app = Self {
             dir,
             cfg,
@@ -231,6 +247,7 @@ impl App {
             updates: 0,
             startup,
             checks: vec![],
+            hosting,
         };
         if created {
             app.add_log("info", "", "Created this device's identity");
@@ -241,7 +258,7 @@ impl App {
         self.timers.clear();
         self.checks.clear();
         self.startup = None;
-        let mut failure = None;
+        let mut failure = self.hosting.shutdown().err();
         for id in self.states.keys().cloned().collect::<Vec<_>>() {
             if let Err(error) = self.step(&id, json!({"type":"close"})) {
                 failure = Some(error);
@@ -529,10 +546,32 @@ impl App {
         }
         Ok(json!(out))
     }
+    #[cfg(test)]
     fn command(&mut self, r: Value) -> Result<Value> {
+        self.command_with_region(r, None)
+    }
+
+    fn command_with_region(&mut self, r: Value, region: Option<&Value>) -> Result<Value> {
+        let method = text(&r, "method");
+        match method {
+            "hostedGames"
+            | "createHostedGame"
+            | "shareLanWorld"
+            | "scanLanWorlds"
+            | "stopLanScan"
+            | "approveHostedRequest"
+            | "dismissHostedRequest"
+            | "approveHostedDevice"
+            | "revokeHostedDevice"
+            | "setHostingEnabled"
+            | "removeHostedGame"
+            | "hostedInvitation" => return self.hosting.command(&r, region),
+            "updates" => self.hosting.pump(),
+            _ => {}
+        }
         self.pump()?;
         let id = text(&r, "id");
-        match text(&r, "method") {
+        match method {
             "updates" => {
                 let bits = self.updates;
                 self.updates = 0;

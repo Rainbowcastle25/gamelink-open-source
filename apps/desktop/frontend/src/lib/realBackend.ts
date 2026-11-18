@@ -6,6 +6,14 @@ import { listen } from "@tauri-apps/api/event";
 const call = <T>(method: string, args: Record<string, unknown> = {}): Promise<T> =>
   invoke<T>("desktop", { request: { ...args, method } });
 
+// Preserve scan/close ordering when the Host view unmounts or remounts.
+let discovery: Promise<unknown> = Promise.resolve();
+function lanCall<T>(method: string): Promise<T> {
+  const next = discovery.then(() => call<T>(method));
+  discovery = next.catch(() => {});
+  return next;
+}
+
 export const realBackend: Backend = {
   version: async () => call("version"),
   identity: async () => call("identity"),
@@ -37,6 +45,19 @@ export const realBackend: Backend = {
   hostStatus: async () => call("hostStatus"),
   refreshHost: async () => call("refreshHost"),
   importHostGame: async (gameID) => call("importHostGame", { gameID }),
+
+  hostedGames: async () => call("hostedGames"),
+  createHostedGame: async (form) => call("createHostedGame", { ...form }),
+  shareLanWorld: async (world) => call("shareLanWorld", { ...world }),
+  scanLanWorlds: async () => lanCall("scanLanWorlds"),
+  stopLanScan: async () => lanCall("stopLanScan"),
+  approveHostedRequest: async (id, requestId, label) => call("approveHostedRequest", { id, requestId, label }),
+  dismissHostedRequest: async (id, requestId) => call("dismissHostedRequest", { id, requestId }),
+  approveHostedDevice: async (id, publicKey, label) => call("approveHostedDevice", { id, publicKey, label }),
+  revokeHostedDevice: async (id, publicKey) => call("revokeHostedDevice", { id, publicKey }),
+  setHostingEnabled: async (id, enabled) => call("setHostingEnabled", { id, enabled }),
+  removeHostedGame: async (id) => call("removeHostedGame", { id }),
+  copyHostedInvitation: async (id) => call("copyHostedInvitation", { id }),
 
   copyText: async (text) => call("copyText", { text }),
   pickExecutable: async (title) => call("pickExecutable", { title }),

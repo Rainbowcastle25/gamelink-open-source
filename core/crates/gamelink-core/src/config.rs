@@ -651,6 +651,13 @@ pub fn dispatch(method: &str, input: Value) -> Result<Value, String> {
             };
             let v: Value = serde_json::from_slice(&data)
                 .map_err(|_| format!("keys for {id:?} are corrupt: invalid JSON"))?;
+            let v: Value = if input["sealed"] == true {
+                let sealed = v["sealed"].as_str().ok_or("missing protected game keys")?;
+                serde_json::from_str(&storage::unseal(sealed)?)
+                    .map_err(|_| format!("keys for {id:?} are corrupt: invalid protected JSON"))?
+            } else {
+                v
+            };
             if !v.is_object()
                 || ["created", "expiresAt"].iter().any(|k| {
                     !v[*k].is_null()
@@ -831,15 +838,34 @@ pub fn dispatch(method: &str, input: Value) -> Result<Value, String> {
                     if games.iter().any(|g| g["id"] == v["id"]) {
                         return Err(format!("a game with id {:?} already exists", text(v, "id")));
                     }
-                    save(
-                        dir.join("keys")
-                            .join(format!("{}.json", text(v, "id")))
-                            .to_str()
-                            .ok_or("invalid path")?,
-                        &input["keys"],
-                    )?;
+                    let keys = if input["sealed"] == true {
+                        json!({"sealed": storage::seal(&input["keys"].to_string())?})
+                    } else {
+                        input["keys"].clone()
+                    };
+                    let key_path = dir.join("keys").join(format!("{}.json", text(v, "id")));
+                    save(key_path.to_str().ok_or("invalid path")?, &keys)?;
                     games.push(v.clone());
+                    if let Err(error) = save(&path, &cfg) {
+                        let _ = fs::remove_file(&key_path);
+                        return Err(error);
+                    }
+                    saved = true;
                     result = v.clone()
+                }
+                "set_destination" | "set_disabled" => {
+                    let game = array(&mut cfg["games"])
+                        .iter_mut()
+                        .find(|g| g["id"] == id)
+                        .ok_or_else(|| format!("no game with id {id:?}"))?;
+                    if action == "set_destination" {
+                        game["dest"] = check("security.destination", json!({"text":v["dest"]}))?;
+                        game["disabled"] = json!(false);
+                    } else {
+                        game["disabled"] =
+                            json!(v["disabled"].as_bool().ok_or("missing disabled flag")?);
+                    }
+                    result = game.clone();
                 }
                 "remove" => {
                     let games = array(&mut cfg["games"]);
@@ -866,7 +892,7 @@ pub fn dispatch(method: &str, input: Value) -> Result<Value, String> {
                         return Err("game settings changed; try again".into());
                     }
                     let key_path = dir.join("keys").join(format!("{id}.json"));
-                    let keys = checked_current_keys(&key_path, &id, &input["expectedKeys"])?;
+                    let keys = checked_current_keys(&key_path, &id, &input["expectedKeys"], false)?;
                     let replacement = &input["keys"];
                     pure::check_invite_expiry(&replacement["expiresAt"])?;
                     if g["knockEnabled"] != true {
@@ -898,6 +924,7 @@ pub fn dispatch(method: &str, input: Value) -> Result<Value, String> {
                             &dir.join("keys").join(format!("{id}.json")),
                             &id,
                             &input["expectedKeys"],
+                            input["sealed"] == true,
                         )?;
                         pure::check_invite_expiry(&keys["expiresAt"])?;
                     }
@@ -942,9 +969,17 @@ pub fn dispatch(method: &str, input: Value) -> Result<Value, String> {
         _ => Err("unknown config method".into()),
     }
 }
-fn checked_current_keys(path: &Path, id: &str, expected: &Value) -> Result<Value, String> {
+fn checked_current_keys(
+    path: &Path,
+    id: &str,
+    expected: &Value,
+    sealed: bool,
+) -> Result<Value, String> {
     check("security.slug", json!({"text":id}))?;
-    let loaded = dispatch("config.keys_load", json!({"id":id,"path":path}))?;
+    let loaded = dispatch(
+        "config.keys_load",
+        json!({"id":id,"path":path,"sealed":sealed}),
+    )?;
     if loaded["missing"] == true || &loaded["keys"] != expected {
         return Err("game identity changed; try again".into());
     }
