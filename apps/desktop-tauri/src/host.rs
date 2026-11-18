@@ -233,8 +233,23 @@ impl App {
         let config_path = cfg_path
             .to_str()
             .ok_or("configuration path is not valid UTF-8")?;
-        let cfg = config::dispatch("config.client_open", json!({"path":config_path}))?;
-        let cfg = config::assign_client_ports(config_path, cfg)?;
+        let opened = config::dispatch("config.client_open", json!({"path":config_path}))?;
+        let cfg = config::assign_client_ports(config_path, opened.clone())?;
+        // Migration resets a pinned port that clashes with another server's.
+        let reset_pins = rows(&opened["servers"])
+            .iter()
+            .zip(rows(&cfg["servers"]))
+            .filter(|(before, after)| {
+                before["localPort"].as_u64().is_some_and(|p| p != 0) && after["localPort"] == 0
+            })
+            .map(|(before, _)| {
+                format!(
+                    "Server “{}” had local port {}, which another saved server already uses; it now uses an automatic port",
+                    text(before, "name"),
+                    before["localPort"]
+                )
+            })
+            .collect::<Vec<_>>();
         let activity = storage::read_bounded(&dir.join("activity.json"))
             .ok()
             .and_then(|b| serde_json::from_slice::<Vec<Value>>(&b).ok())
@@ -275,6 +290,9 @@ impl App {
         );
         if created {
             app.add_log("info", "", "Created this device's identity");
+        }
+        for message in reset_pins {
+            app.add_log("warning", "", &message);
         }
         Ok(app)
     }
@@ -344,8 +362,24 @@ impl App {
         self.cfg = result["config"].clone();
         Ok(result["result"].clone())
     }
+    /// The loopback port a server's Minecraft list entry should use: the port
+    /// its live tunnel actually bound (it differs from `stablePort` after a
+    /// fallback), otherwise the stable port.
+    fn list_port(&self, server: &Value) -> Value {
+        self.states
+            .get(text(server, "id"))
+            .filter(|state| state["tunnel"] == true)
+            .map(|state| &state["status"]["localPort"])
+            .filter(|port| port.as_u64().is_some_and(|p| p != 0))
+            .unwrap_or(&server["stablePort"])
+            .clone()
+    }
     fn refresh_minecraft_lists(&mut self) {
-        self.minecraft.refresh(&self.dir, &self.cfg);
+        let mut cfg = self.cfg.clone();
+        for server in cfg["servers"].as_array_mut().into_iter().flatten() {
+            server["stablePort"] = self.list_port(server);
+        }
+        self.minecraft.refresh(&self.dir, &cfg);
         self.updates |= 5;
     }
     fn minecraft_listed(&self) -> bool {
@@ -462,7 +496,7 @@ impl App {
                 .filter(|row| row["id"] != id)
                 .filter_map(|row| row["stablePort"].as_u64())
                 .collect::<Vec<_>>();
-            let options = json!({"Name":server["name"],"Game":server["game"],"Proto":server["proto"],"TunnelPort":server["port"],"PreferPort":params["preferPort"],"ReservedPorts":reserved,"AutoReconnect":self.cfg["settings"]["autoReconnect"]});
+            let options = json!({"Name":server["name"],"Game":server["game"],"Proto":server["proto"],"TunnelPort":server["port"],"LocalPort":server["localPort"],"PreferPort":params["preferPort"],"ReservedPorts":reserved,"AutoReconnect":self.cfg["settings"]["autoReconnect"]});
             let started = bridge::call(
                 json!({"method":"join","id":id,"generation":generation,"address":address,"verbose":self.cfg["settings"]["verboseLogging"],"allowLocalRelay":self.cfg["settings"]["allowLocalRelay"],"options":options}),
             );
@@ -561,6 +595,16 @@ impl App {
                         .is_some_and(|state| state["probe"]["generation"] == generation);
                 let agent_answered = event["outcome"] == "online";
                 let result = self.step(id, event)?;
+                if kind == "join_end"
+                    && callback["value"]["failed"] != true
+                    && self.cfg["settings"]["minecraftServerList"] == true
+                    && self
+                        .server(id)
+                        .is_ok_and(|server| server["game"] == "minecraft-java")
+                {
+                    // Point the list entry at the port the tunnel really bound.
+                    self.refresh_minecraft_lists();
+                }
                 if observed {
                     self.observe_presence(id, &result["check"], agent_answered);
                 }
@@ -843,7 +887,7 @@ impl App {
                 )?;
                 if java_list
                     && self.minecraft_listed()
-                    && connection["localPort"] == server["stablePort"]
+                    && connection["localPort"] == self.list_port(&server)
                 {
                     plan["result"]["minecraftEntry"] =
                         json!(format!("{} (GameLink)", text(&server, "name")));
@@ -1188,7 +1232,7 @@ mod tests {
         assert_eq!(request["options"]["Game"], "minecraft-java");
         assert_eq!(request["options"]["Proto"], "tcp");
         assert_eq!(request["options"]["TunnelPort"], 25565);
-        assert!(request["options"]["LocalPort"].is_null());
+        assert_eq!(request["options"]["LocalPort"], 0);
         assert_eq!(request["options"]["PreferPort"], 25565);
         assert_eq!(request["options"]["AutoReconnect"], true);
         assert_eq!(e.app.resources["s1"], 1);
@@ -1220,8 +1264,10 @@ mod tests {
             .contains("Connected to \u{201c}Server s1\u{201d} at 127.0.0.1:25565 (direct, 3 ms)"));
     }
 
+    // A port the user pinned must be bound exactly (the bridge fails the join
+    // if it is busy); only automatic stable ports may fall back.
     #[test]
-    fn join_prefers_a_pinned_local_port_over_the_game_default() {
+    fn join_requires_a_pinned_local_port_exactly() {
         let mut e = env();
         e.mc("s1");
         e.mc("s2");
@@ -1234,9 +1280,57 @@ mod tests {
             .unwrap();
         e.app.join("s1").unwrap();
         let request = e.calls("join").remove(0);
-        assert!(request["options"]["LocalPort"].is_null());
+        assert_eq!(request["options"]["LocalPort"], 40000);
         assert_eq!(request["options"]["PreferPort"], 40000);
         assert_eq!(request["options"]["ReservedPorts"], json!([20000]));
+    }
+
+    #[test]
+    fn startup_logs_a_pinned_port_reset_by_migration() {
+        let mut e = env();
+        e.mc("s1");
+        e.mc("s2");
+        let path = e.dir.path().join("config.json");
+        let mut legacy: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for server in legacy["servers"].as_array_mut().unwrap() {
+            server["localPort"] = json!(30000);
+            server.as_object_mut().unwrap().remove("stablePort");
+        }
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        e.app = App::load_in(e.dir.path().to_path_buf()).unwrap();
+        assert_eq!(e.app.server("s1").unwrap()["localPort"], 30000);
+        assert_eq!(e.app.server("s2").unwrap()["localPort"], 0);
+        let log = e.last_log();
+        assert_eq!(log["kind"], "warning");
+        let message = log["message"].as_str().unwrap();
+        assert!(
+            message.contains("Server s2") && message.contains("30000"),
+            "{message}"
+        );
+        assert!(!message.contains("Server s1"), "{message}");
+    }
+
+    // The first Java server's stable port is 25565; if something else holds it
+    // the tunnel falls back, and the list entry must follow the bound port.
+    #[test]
+    fn minecraft_list_entry_uses_the_port_the_tunnel_bound() {
+        let mut e = env();
+        e.mc("s1");
+        let game_dir = e.dir.path().join("minecraft-home");
+        e.app.minecraft.default_dir = Some(game_dir.clone());
+        e.app.cfg["settings"]["minecraftServerList"] = json!(true);
+        let server = e.app.server("s1").unwrap();
+        assert_eq!(server["stablePort"], 25565);
+        let listed = |port: u16| {
+            let raw = fs::read(game_dir.join("servers.dat")).unwrap();
+            let needle = format!("127.0.0.1:{port}");
+            raw.windows(needle.len()).any(|w| w == needle.as_bytes())
+        };
+        e.connect("s1", 41234);
+        assert!(listed(41234) && !listed(25565));
+        assert_eq!(e.app.list_port(&server), 41234);
+        e.command(json!({"method":"disconnect","id":"s1"})).unwrap();
+        assert_eq!(e.app.list_port(&server), 25565);
     }
 
     #[test]
