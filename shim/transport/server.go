@@ -97,6 +97,7 @@ type GameServer struct {
 	dialFails  atomic.Int64
 	oversize   atomic.Int64
 	overloaded atomic.Int64
+	probes     atomic.Int64
 
 	wg          sync.WaitGroup
 	closeOnce   sync.Once
@@ -411,14 +412,45 @@ func (g *GameServer) handleUDP(c tailcat.ConnPacketConn) {
 	if !g.authorize(c.RemoteAddr()) {
 		return
 	}
-	if !g.admit() {
-		return
-	}
-	defer g.active.Add(-1)
 	if !g.conns.add(c) {
 		return
 	}
 	defer g.conns.remove(c)
+
+	// A Factorio browser or GameLink check can ping before sending gameplay
+	// traffic. Inspect the first datagram to keep these flows out of the
+	// gameplay limit and out of the peer's last-connected timestamp.
+	var buf []byte
+	var n int
+	first := g.opts.Game == games.Factorio && g.opts.ConsoleBridge == nil
+	probe := false
+	if first {
+		buf = make([]byte, readBufSize)
+		var err error
+		n, err = c.Read(buf)
+		if err != nil {
+			return
+		}
+		probe = isFactorioPing(buf[:n])
+	}
+	if probe {
+		const maxFactorioProbeFlows = 256
+		if g.probes.Add(1) > maxFactorioProbeFlows {
+			g.probes.Add(-1)
+			g.overloaded.Add(1)
+			return
+		}
+	} else if !g.admit() {
+		return
+	}
+	defer func() {
+		if probe {
+			g.probes.Add(-1)
+		} else {
+			g.active.Add(-1)
+		}
+	}()
+
 	if g.opts.ConsoleBridge != nil {
 		g.opts.ConsoleBridge.HandleUDP(c)
 		return
@@ -438,7 +470,9 @@ func (g *GameServer) handleUDP(c tailcat.ConnPacketConn) {
 	}
 	defer g.conns.remove(dst)
 
-	g.opts.Peers.recordSession(g.allowed, c.RemoteAddr())
+	if !probe {
+		g.opts.Peers.recordSession(g.allowed, c.RemoteAddr())
+	}
 	done := make(chan struct{})
 	go func() { // game server -> client
 		defer close(done)
@@ -466,11 +500,30 @@ func (g *GameServer) handleUDP(c tailcat.ConnPacketConn) {
 			}
 		}
 	}()
-	buf := make([]byte, readBufSize)
+	if buf == nil {
+		buf = make([]byte, readBufSize)
+	}
 	for { // client -> game server
-		n, err := c.Read(buf)
-		if err != nil {
-			break
+		if first {
+			first = false
+		} else {
+			n, err = c.Read(buf)
+			if err != nil {
+				break
+			}
+		}
+		if probe {
+			if isFactorioPing(buf[:n]) {
+				_ = c.SetReadDeadline(time.Now().Add(2 * factorioProbeTimeout))
+			} else {
+				if !g.admit() {
+					break
+				}
+				probe = false
+				g.probes.Add(-1)
+				_ = c.SetReadDeadline(time.Time{})
+				g.opts.Peers.recordSession(g.allowed, c.RemoteAddr())
+			}
 		}
 		if _, err := dst.Write(buf[:n]); err != nil && !isTransientUDPErr(err) {
 			break

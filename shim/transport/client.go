@@ -132,6 +132,8 @@ type Tunnel struct {
 	flowsMu sync.Mutex
 	flows   map[netip.AddrPort]*udpFlow
 
+	factorio factorioProbe // used by Join until healthLoop takes ownership
+
 	dialFails  atomic.Int64 // consecutive tunnel dial failures
 	oversize   atomic.Int64
 	bytesUp    atomic.Int64
@@ -410,8 +412,7 @@ func (t *Tunnel) newClient(addr tailcat.Addr) *tailcat.Client {
 
 // connectClient builds a fresh Tailcat client and proves it works: the server
 // must answer the handshake (which only approved devices get), then a path
-// measurement is taken and, for TCP when probe is set, the game port is
-// opened once.
+// measurement is taken and, when probe is set, the game endpoint is checked.
 func (t *Tunnel) connectClient(ctx context.Context, probe bool) (*tailcat.Client, measurement, error) {
 	m := measurement{path: PathUnknown, gameReachable: "unknown"}
 	addr, err := PinRelayAddress(ctx, t.opts.Addr, t.opts.AllowLocalRelay)
@@ -428,8 +429,9 @@ func (t *Tunnel) connectClient(ctx context.Context, probe bool) (*tailcat.Client
 	}
 	m = measure(ctx, cl)
 	if probe {
-		m.gameReachable, err = probeEndpoint(ctx, cl, t.opts)
+		m.gameReachable, err = probeEndpoint(ctx, cl, t.opts, &t.factorio)
 		if err != nil {
+			t.factorio.close()
 			_ = cl.Close()
 			return nil, m, fmt.Errorf("reached the agent but could not open the game port through the tunnel: %w", err)
 		}
@@ -510,6 +512,7 @@ func (t *Tunnel) applyMeasurement(m measurement) {
 }
 
 func (t *Tunnel) healthLoop() {
+	defer t.factorio.close()
 	tick := time.NewTicker(t.opts.HealthInterval)
 	defer tick.Stop()
 	fails := 0
@@ -534,7 +537,7 @@ func (t *Tunnel) healthLoop() {
 			fails = 0
 			var m measurement
 			applyPing(&m, res)
-			m.gameReachable = endpointReachable(t.ctx, cl, t.opts)
+			m.gameReachable, _ = probeEndpoint(t.ctx, cl, t.opts, &t.factorio)
 			t.setStatus(func(s *Status) {
 				s.Path, s.Relay = m.path, m.relay
 				s.LatencyKnown, s.LatencyMS = true, float64(m.latency)/float64(time.Millisecond)
@@ -555,6 +558,7 @@ func (t *Tunnel) healthLoop() {
 }
 
 func (t *Tunnel) reconnect() {
+	t.factorio.close()
 	if !t.opts.AutoReconnect {
 		// Give the local port back now rather than when the user dismisses
 		// the error. Stop() can't be used here: this runs inside healthLoop,
@@ -651,12 +655,22 @@ func connectedMessage(reachable string) string {
 	}
 }
 
-func endpointReachable(ctx context.Context, cl *tailcat.Client, opts TunnelOptions) string {
-	reachable, _ := probeEndpoint(ctx, cl, opts)
-	return reachable
+func (opts TunnelOptions) probesFactorio() bool {
+	return opts.Game == games.Factorio && opts.Proto == games.UDP
 }
 
-func probeEndpoint(ctx context.Context, cl *tailcat.Client, opts TunnelOptions) (string, error) {
+func probeEndpoint(ctx context.Context, cl *tailcat.Client, opts TunnelOptions, factorio *factorioProbe) (string, error) {
+	if opts.probesFactorio() {
+		if factorio.ping(ctx, cl, opts.TunnelPort) {
+			return "yes", nil
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return "unknown", ctx.Err()
+		}
+		// A failed UDP probe cannot distinguish a stopped game from packet
+		// loss, an unsupported reply format, or an unavailable tunnel flow.
+		return "unknown", nil
+	}
 	if opts.Game != games.MinecraftBedrock && opts.Proto != games.TCP {
 		return "unknown", nil
 	}
@@ -693,9 +707,15 @@ func CheckEndpoint(ctx context.Context, opts TunnelOptions) (time.Duration, Path
 		return 0, PathUnknown, "unknown", ErrNoResponse
 	}
 	m := measure(ctx, cl)
-	reachable := endpointReachable(ctx, cl, opts)
-	if ctx.Err() != nil {
-		return m.latency, m.path, "unknown", ctx.Err()
+	var factorio factorioProbe
+	defer factorio.close()
+	reachable, _ := probeEndpoint(ctx, cl, opts, &factorio)
+	if err := ctx.Err(); err != nil {
+		// The agent already answered. Expiring the overall check budget
+		// during the Factorio probe still leaves the game status inconclusive.
+		if !opts.probesFactorio() || !errors.Is(err, context.DeadlineExceeded) {
+			return m.latency, m.path, "unknown", err
+		}
 	}
 	return m.latency, m.path, reachable, nil
 }

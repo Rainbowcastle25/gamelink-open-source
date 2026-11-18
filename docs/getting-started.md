@@ -206,13 +206,17 @@ address (normally `127.0.0.1:25565`). Each saved server keeps the same local
 port between sessions. If that port is busy, GameLink shows the temporary
 address for this connection and keeps the stable port for the next join. ✅
 
+For Factorio, **Check** sends a UDP ping through the tunnel using your approved
+device. The card shows **Online** when Factorio replies and **Agent online,
+game status unknown** when the agent answers but the ping is inconclusive.
+
 To get notified after a server comes online, turn on **Settings → Notify me
 when servers come online**. GameLink checks saved servers about every two
 minutes while open. Each check reveals to the host's agent that your device
 is online. The first result establishes a baseline. GameLink sends a local
 OS notification after an observed offline-to-online change, at most once per
-server every ten minutes. For legacy UDP games such as Factorio, the check
-measures whether the host agent answers.
+server every ten minutes. For custom UDP games, the check measures whether the
+host agent answers.
 
 ## H. Connect from Minecraft Java (friend)
 
