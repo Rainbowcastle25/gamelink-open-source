@@ -2,7 +2,7 @@ import { CircleCheck, LoaderCircle, ShieldCheck, TriangleAlert } from "lucide-re
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, parseOptionalPort, sentence } from "../lib/format";
 import { protoLabel } from "../lib/games";
-import { useStore } from "../lib/store";
+import { useAppState, useStore } from "../lib/store";
 import { toast } from "../lib/toast";
 import type { InvitePreview } from "../lib/types";
 import { Button } from "./Button";
@@ -10,14 +10,14 @@ import { Field, inputCls } from "./Field";
 import { GameThumb } from "./GameThumb";
 import { Modal } from "./Modal";
 
-export function InvitePreviewCard({ preview }: { preview: InvitePreview }) {
+export function InvitePreviewCard({ preview, gameIcon }: { preview: InvitePreview; gameIcon?: string }) {
   const warnings = preview.warnings ?? [];
   const relays = (preview.relayHosts ?? []).join(", ");
   const custom = !preview.defaultRelay;
   return (
     <div className="rounded-xl border border-line-strong bg-black/20 p-4" aria-label="Invitation preview" role="group">
       <div className="flex items-center gap-3.5">
-        <GameThumb game={preview.game} className="size-11" />
+        <GameThumb game={preview.game} src={gameIcon} className="size-11" />
         <div className="min-w-0">
           <p className="truncate text-[15px] font-semibold">{preview.name}</p>
           <p className="truncate text-[13px] text-muted">
@@ -51,6 +51,7 @@ export function InvitePreviewCard({ preview }: { preview: InvitePreview }) {
 
 export function ImportInviteModal({ onClose }: { onClose: () => void }) {
   const store = useStore();
+  const { gameIcons } = useAppState();
   const [text, setText] = useState("");
   const [portText, setPortText] = useState("");
   const [preview, setPreview] = useState<InvitePreview | null>(null);
@@ -162,7 +163,7 @@ export function ImportInviteModal({ onClose }: { onClose: () => void }) {
             <p className="flex items-center gap-1.5 text-[13px] text-ok">
               <CircleCheck className="size-4" aria-hidden /> Invitation looks valid
             </p>
-            <InvitePreviewCard preview={preview} />
+            <InvitePreviewCard preview={preview} gameIcon={gameIcons[preview.game]} />
           </div>
         )}
 

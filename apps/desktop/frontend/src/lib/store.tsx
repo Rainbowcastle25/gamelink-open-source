@@ -15,6 +15,7 @@ export interface AppState {
   identity: IdentityView | null;
   paths: Paths | null;
   settings: SettingsView | null;
+  gameIcons: Record<string, string>;
   version: Version | null;
   activity: ActivityEvent[];
   /** Per-server optimistic "something is happening" markers. */
@@ -29,6 +30,7 @@ const initial: AppState = {
   identity: null,
   paths: null,
   settings: null,
+  gameIcons: {},
   version: null,
   activity: [],
   busy: {},
@@ -51,6 +53,7 @@ export class GameLinkStore {
   private active = false;
   private refreshing = false;
   private refreshAgain = false;
+  private iconLookup: { executables: string } | null = null;
   /** Servers the player pressed Play on: launch the game once they connect. */
   private pendingPlay = new Set<string>();
 
@@ -92,6 +95,7 @@ export class GameLinkStore {
     void this.loadAll();
     return () => {
       this.active = false;
+      this.iconLookup = null;
       off();
       if (this.poll) clearInterval(this.poll);
       this.poll = null;
@@ -122,6 +126,7 @@ export class GameLinkStore {
       patch.loadError = errorMessage(serversRes.reason);
     }
     this.set(patch);
+    if (patch.settings) void this.refreshGameIcons(patch.settings);
   }
 
   async retryLoad(): Promise<void> {
@@ -163,9 +168,26 @@ export class GameLinkStore {
   async refreshSettings(): Promise<void> {
     try {
       const settings = await this.backend.settings();
-      if (this.active) this.set({ settings });
+      if (this.active) {
+        this.set({ settings });
+        void this.refreshGameIcons(settings);
+      }
     } catch {
       /* ignore */
+    }
+  }
+
+  private async refreshGameIcons(settings: SettingsView): Promise<void> {
+    if (!this.active) return;
+    const executables = JSON.stringify(settings.gameExecutables ?? {});
+    if (this.iconLookup?.executables === executables) return;
+    const lookup = { executables };
+    this.iconLookup = lookup;
+    try {
+      const gameIcons = await this.backend.gameIcons();
+      if (this.iconLookup === lookup) this.set({ gameIcons });
+    } catch {
+      if (this.iconLookup === lookup) this.iconLookup = null;
     }
   }
 
@@ -319,6 +341,7 @@ export class GameLinkStore {
     try {
       const saved = await this.backend.updateSettings(next);
       this.set({ settings: saved });
+      void this.refreshGameIcons(saved);
       await this.refreshServers();
       return true;
     } catch (e) {

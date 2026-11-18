@@ -1,8 +1,10 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { createMockBackend } from "../lib/mockBackend";
 import { conn, renderApp, sv } from "../test/utils";
 import { ConnectionPanel } from "./ConnectionPanel";
 import { ServerCard } from "./ServerCard";
+import { ServerList } from "./ServerList";
 import { StatusIndicator } from "./StatusIndicator";
 
 const noop = () => {};
@@ -22,6 +24,26 @@ describe("StatusIndicator", () => {
   it("falls back to Ready for unknown values instead of showing a green dot", () => {
     render(<StatusIndicator status="online" />);
     expect(screen.getByRole("status")).toHaveTextContent("Ready");
+  });
+});
+
+describe("ServerList", () => {
+  it("shows the installed game icon and falls back if it cannot be displayed", async () => {
+    const backend = createMockBackend({ delayMs: 0 });
+    const src = "data:image/png;base64,AA==";
+    let finishIcons!: (icons: Record<string, string>) => void;
+    vi.spyOn(backend, "gameIcons").mockReturnValue(new Promise((resolve) => { finishIcons = resolve; }));
+    vi.spyOn(backend, "servers").mockResolvedValue([sv({ game: "factorio" })]);
+    renderApp(<ServerList />, { backend });
+
+    const card = await screen.findByRole("article", { name: "Test Server" });
+    const tile = within(card).getByRole("img", { name: "Factorio" });
+    expect(tile.querySelector("svg")).toBeInTheDocument();
+    finishIcons({ factorio: src });
+    await waitFor(() => expect(tile.querySelector("img")).toHaveAttribute("src", src));
+    fireEvent.error(tile.querySelector("img")!);
+    expect(tile.querySelector("img")).toBeNull();
+    expect(tile.querySelector("svg")).toBeInTheDocument();
   });
 });
 

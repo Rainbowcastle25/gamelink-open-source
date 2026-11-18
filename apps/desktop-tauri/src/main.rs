@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod bridge;
+mod game_icons;
 mod host;
 mod host_connection;
 mod hosting;
@@ -56,6 +57,7 @@ fn public_method(method: &str) -> bool {
             | "overview"
             | "servers"
             | "settings"
+            | "gameIcons"
             | "activity"
             | "clearActivity"
             | "join"
@@ -205,6 +207,10 @@ fn native_or_manager(app: &tauri::AppHandle, request: Value) -> Result<Value, St
                 .open_path(path, None::<&str>)
                 .map_err(|_| "could not open configuration folder")?;
             Ok(Value::Null)
+        }
+        "gameIcons" => {
+            let settings = host::call(json!({"method":"settings"}))?;
+            Ok(game_icons::load(app, &settings["gameExecutables"]))
         }
         _ => host::call(request),
     }

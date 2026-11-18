@@ -32,6 +32,7 @@ export interface Backend {
   overview(): Promise<Overview>;
   servers(): Promise<ServerView[]>;
   settings(): Promise<SettingsView>;
+  gameIcons(): Promise<Record<string, string>>;
   checkRelease(): Promise<ReleaseNotice | null>;
   openReleaseNotes(): Promise<void>;
   activity(limit: number): Promise<ActivityEvent[]>;
@@ -123,6 +124,7 @@ export const backend: Backend = {
   overview: lazy((b) => b.overview.bind(b)),
   servers: lazy((b) => b.servers.bind(b)),
   settings: lazy((b) => b.settings.bind(b)),
+  gameIcons: lazy((b) => b.gameIcons.bind(b)),
   checkRelease: lazy((b) => b.checkRelease.bind(b)),
   openReleaseNotes: lazy((b) => b.openReleaseNotes.bind(b)),
   activity: lazy((b) => b.activity.bind(b)),
