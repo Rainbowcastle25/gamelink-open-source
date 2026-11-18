@@ -4,10 +4,24 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"time"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/sys/unix"
 )
+
+var lanNow = linuxLANClock(unix.ClockGettime)
+
+func linuxLANClock(clockGettime func(int32, *unix.Timespec) error) func() time.Time {
+	return func() time.Time {
+		var now unix.Timespec
+		if err := clockGettime(unix.CLOCK_BOOTTIME, &now); err != nil {
+			return time.Time{}
+		}
+		// Store uptime relative to the Unix epoch for time.Time comparisons.
+		return time.Unix(now.Unix())
+	}
+}
 
 type groupSocket struct {
 	conn *net.UDPConn

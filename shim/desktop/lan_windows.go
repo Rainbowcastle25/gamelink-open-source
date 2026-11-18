@@ -6,11 +6,15 @@ import (
 	"net"
 	"net/netip"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/sys/windows"
 )
+
+// Go's monotonic clock on Windows advances across suspend.
+func lanNow() time.Time { return time.Now() }
 
 type groupSocket struct {
 	conn *net.UDPConn

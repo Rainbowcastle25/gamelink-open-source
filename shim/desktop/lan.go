@@ -71,39 +71,26 @@ func sameLANInterface(a, b lanInterface) bool {
 		slices.Equal(a.iface.HardwareAddr, b.iface.HardwareAddr) && slices.Equal(a.addrs, b.addrs)
 }
 
-type lanTime struct {
-	monotonic time.Time
-	wall      time.Time
-}
-
-func lanNow() lanTime {
-	now := time.Now()
-	return lanTime{monotonic: now, wall: now.Round(0)}
-}
-
-func (now lanTime) expired(received lanTime, ttl time.Duration) bool {
-	// The monotonic clock protects against wall clock setbacks. The wall clock
-	// advances across suspend even when the monotonic clock does not.
-	return now.monotonic.Sub(received.monotonic) >= ttl || now.wall.Sub(received.wall) >= ttl
-}
-
 // The desktop owner serializes socket changes. The receiver and TCP dial
 // guard access the announcement cache under mu, independently of that owner.
 type lanDiscovery struct {
-	clock      func() lanTime
+	// The clock must include time spent suspended and return zero on failure.
+	// Implementations match the Linux and Windows build matrix, excluding macOS.
+	clock      func() time.Time
 	interfaces func() ([]lanInterface, error)
 	bind       func() (lanSocket, error)
 	conn       lanSocket
 	done       chan struct{}
 	network    []lanInterface
+	pending    []net.Interface
 
 	mu      sync.Mutex
-	packets map[lanWorld]lanTime
+	packets map[lanWorld]time.Time
 	failed  bool
 }
 
 func newLANDiscovery() *lanDiscovery {
-	return &lanDiscovery{clock: lanNow, interfaces: lanInterfaces, bind: bindMulticast, packets: make(map[lanWorld]lanTime)}
+	return &lanDiscovery{clock: lanNow, interfaces: lanInterfaces, bind: bindMulticast, packets: make(map[lanWorld]time.Time)}
 }
 
 func (d *lanDiscovery) poll(ttl time.Duration) ([]lanWorld, error) {
@@ -118,6 +105,10 @@ func (d *lanDiscovery) poll(ttl time.Duration) ([]lanWorld, error) {
 			d.close()
 			return nil, err
 		}
+	} else {
+		d.pending = slices.DeleteFunc(d.pending, func(iface net.Interface) bool {
+			return d.conn.join(&iface) == nil
+		})
 	}
 	worlds, err := d.snapshot(ttl)
 	if err != nil {
@@ -132,20 +123,20 @@ func (d *lanDiscovery) listen(network []lanInterface) error {
 		return errors.New("could not open Minecraft LAN discovery")
 	}
 	local := make(map[netip.Addr]bool)
-	joined := false
+	var pending []net.Interface
 	for _, iface := range network {
 		for _, addr := range iface.addrs {
 			local[addr] = true
 		}
-		if conn.join(&iface.iface) == nil {
-			joined = true
+		if conn.join(&iface.iface) != nil {
+			pending = append(pending, iface.iface)
 		}
 	}
-	if !joined {
+	if len(pending) == len(network) {
 		conn.close()
 		return errors.New("could not join Minecraft LAN discovery on a local interface")
 	}
-	d.conn, d.done, d.network = conn, make(chan struct{}), network
+	d.conn, d.done, d.network, d.pending = conn, make(chan struct{}), network, pending
 	d.mu.Lock()
 	d.failed = false
 	d.mu.Unlock()
@@ -157,7 +148,7 @@ func (d *lanDiscovery) closeSocket() {
 	if d.conn != nil {
 		d.conn.close()
 		<-d.done
-		d.conn, d.done, d.network = nil, nil, nil
+		d.conn, d.done, d.network, d.pending = nil, nil, nil, nil
 	}
 }
 
@@ -194,17 +185,21 @@ func (d *lanDiscovery) receive(local map[netip.Addr]bool) {
 func (d *lanDiscovery) record(world lanWorld) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	now := d.clock()
+	if now.IsZero() {
+		return
+	}
 	if _, exists := d.packets[world]; !exists && len(d.packets) >= lanPacketCount {
 		var oldest lanWorld
 		var earliest time.Time
 		for candidate, received := range d.packets {
-			if earliest.IsZero() || received.monotonic.Before(earliest) {
-				oldest, earliest = candidate, received.monotonic
+			if earliest.IsZero() || received.Before(earliest) {
+				oldest, earliest = candidate, received
 			}
 		}
 		delete(d.packets, oldest)
 	}
-	d.packets[world] = d.clock()
+	d.packets[world] = now
 }
 
 func (d *lanDiscovery) snapshot(ttl time.Duration) ([]lanWorld, error) {
@@ -215,10 +210,14 @@ func (d *lanDiscovery) snapshot(ttl time.Duration) ([]lanWorld, error) {
 	}
 	out := make([]lanWorld, 0, len(d.packets))
 	now := d.clock()
+	if now.IsZero() {
+		return out, nil
+	}
 	for world, received := range d.packets {
-		if now.expired(received, lanShareTTL) {
+		age := now.Sub(received)
+		if age >= lanShareTTL {
 			delete(d.packets, world)
-		} else if !now.expired(received, ttl) {
+		} else if age < ttl {
 			out = append(out, world)
 		}
 	}
@@ -229,7 +228,11 @@ func (d *lanDiscovery) live(world lanWorld) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	received, ok := d.packets[world]
-	return !d.failed && ok && !d.clock().expired(received, lanShareTTL)
+	if d.failed || !ok {
+		return false
+	}
+	now := d.clock()
+	return !now.IsZero() && now.Sub(received) < lanShareTTL
 }
 
 func parseLANAnnouncement(packet []byte) (lanWorld, bool) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net"
 	"net/netip"
 	"slices"
@@ -77,9 +78,15 @@ type lanTestDatagram struct {
 type lanTestSocket struct {
 	datagrams chan lanTestDatagram
 	closed    chan struct{}
+	joinGroup func(*net.Interface) error
 }
 
-func (s *lanTestSocket) join(*net.Interface) error { return nil }
+func (s *lanTestSocket) join(iface *net.Interface) error {
+	if s.joinGroup != nil {
+		return s.joinGroup(iface)
+	}
+	return nil
+}
 
 func (s *lanTestSocket) read(buf []byte) (int, netip.Addr, error) {
 	select {
@@ -162,6 +169,41 @@ func TestLANDiscoveryRebindsAfterAddressChange(t *testing.T) {
 	}
 	if probes != 3 {
 		t.Fatalf("interface source was called %d times for three polls", probes)
+	}
+}
+
+func TestLANDiscoveryRetriesOnlyFailedMemberships(t *testing.T) {
+	discovery := newLANDiscovery()
+	discovery.interfaces = func() ([]lanInterface, error) {
+		return []lanInterface{{iface: net.Interface{Index: 1}}, {iface: net.Interface{Index: 2}}}, nil
+	}
+	var attempts []int
+	binds := 0
+	discovery.bind = func() (lanSocket, error) {
+		binds++
+		return &lanTestSocket{
+			closed: make(chan struct{}),
+			joinGroup: func(iface *net.Interface) error {
+				attempts = append(attempts, iface.Index)
+				if iface.Index == 2 && len(attempts) < 4 {
+					return errors.New("temporary join failure")
+				}
+				return nil
+			},
+		}, nil
+	}
+	defer discovery.close()
+
+	for range 4 {
+		if _, err := discovery.poll(lanShareTTL); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if want := []int{1, 2, 2, 2}; !slices.Equal(attempts, want) {
+		t.Fatalf("join attempts = %v, want %v", attempts, want)
+	}
+	if binds != 1 {
+		t.Fatalf("socket bound %d times, want 1", binds)
 	}
 }
 

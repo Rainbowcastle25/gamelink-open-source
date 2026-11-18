@@ -185,10 +185,10 @@ func TestDesktopHostAccessAndRevocation(t *testing.T) {
 
 	t.Run("LANExpiryRefusesDialAfterSuspendBeforePoll", func(t *testing.T) {
 		discovery := owner.lan
-		started := lanNow()
-		var suspended atomic.Int64
-		discovery.clock = func() lanTime {
-			return lanTime{monotonic: started.monotonic, wall: started.wall.Add(time.Duration(suspended.Load()))}
+		started := time.Now()
+		var elapsed atomic.Int64
+		discovery.clock = func() time.Time {
+			return started.Add(time.Duration(elapsed.Load()))
 		}
 		world := lanWorld{Name: "Cabin", Port: netip.MustParseAddrPort(echo.Addr().String()).Port()}
 		discovery.record(world)
@@ -224,15 +224,15 @@ func TestDesktopHostAccessAndRevocation(t *testing.T) {
 			t.Fatal("a fresh LAN announcement did not allow forwarding")
 		}
 
-		suspended.Store(int64(lanPacketTTL))
+		elapsed.Store(int64(lanPacketTTL))
 		worlds, err := discovery.snapshot(lanPacketTTL)
 		if err != nil || slices.Contains(worlds, world) || !discovery.live(world) {
 			t.Fatal("a packet aged six seconds should only remain visible to the existing share")
 		}
 
-		// Only the wall clock advances. The last packet is still cached and
-		// the owner has not made a LAN or host reconciliation call.
-		suspended.Store(int64(lanShareTTL))
+		// Simulate resuming with the last packet still cached and no LAN or
+		// host reconciliation call.
+		elapsed.Store(int64(lanShareTTL))
 		before := accepted.Load()
 		expired := open()
 		defer expired.Close()
