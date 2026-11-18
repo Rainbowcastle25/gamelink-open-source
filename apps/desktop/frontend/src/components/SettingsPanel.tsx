@@ -227,6 +227,9 @@ export function SettingsPanel() {
 
       <Section title="About">
         <Row title="Version" description={version ? `${version.app} ${version.version}` : "Unknown"} />
+        <Row title="Check for updates" description="Check for signed release notices once a day while GameLink is open. You install updates yourself.">
+          <Toggle label="Check for updates" checked={settings.checkForUpdates} onChange={(v) => void store.updateSettings({ checkForUpdates: v })} />
+        </Row>
         <Row title="Transport" description={version?.transport ?? "Unknown"} />
         <Row
           title="Alpha software"

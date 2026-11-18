@@ -9,6 +9,7 @@ import type {
   NewServerForm,
   Overview,
   Paths,
+  ReleaseNotice,
   ServerView,
   SettingsView,
   UpdateTopic,
@@ -27,6 +28,8 @@ export interface Backend {
   overview(): Promise<Overview>;
   servers(): Promise<ServerView[]>;
   settings(): Promise<SettingsView>;
+  checkRelease(): Promise<ReleaseNotice | null>;
+  openReleaseNotes(): Promise<void>;
   activity(limit: number): Promise<ActivityEvent[]>;
   clearActivity(): Promise<void>;
 
@@ -100,6 +103,8 @@ export const backend: Backend = {
   overview: lazy((b) => b.overview.bind(b)),
   servers: lazy((b) => b.servers.bind(b)),
   settings: lazy((b) => b.settings.bind(b)),
+  checkRelease: lazy((b) => b.checkRelease.bind(b)),
+  openReleaseNotes: lazy((b) => b.openReleaseNotes.bind(b)),
   activity: lazy((b) => b.activity.bind(b)),
   clearActivity: lazy((b) => b.clearActivity.bind(b)),
   join: lazy((b) => b.join.bind(b)),

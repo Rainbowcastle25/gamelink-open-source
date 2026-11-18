@@ -22,5 +22,8 @@ mkdir -p "$(dirname "$out")"
 link_flags="-C linker=rust-lld -C linker-flavor=ld.lld -C relocation-model=static -C strip=symbols"
 # Preserve the target's Cortex-A53 erratum workaround when bypassing cc.
 [[ "$arch" != arm64 ]] || link_flags+=" -C link-arg=--fix-cortex-a53-843419"
-RUSTFLAGS="${RUSTFLAGS:-} $link_flags" cargo build --manifest-path core/Cargo.toml --locked --release -p gamelink-agent --target "$target"
+# Cargo's TLS dependency also compiles C code for the musl target.
+env "CC_${target//-/_}=$PWD/scripts/zig-cc-linux-$arch.sh" \
+    RUSTFLAGS="${RUSTFLAGS:-} $link_flags" \
+    cargo build --manifest-path core/Cargo.toml --locked --release -p gamelink-agent --target "$target"
 cp "core/target/$target/release/gamelink-agent" "$out"

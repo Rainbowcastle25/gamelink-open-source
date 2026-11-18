@@ -6,7 +6,7 @@ mod pterodactyl;
 mod requests;
 mod runtime;
 use clap::{Arg, ArgAction, Command};
-use gamelink_core::{config, pure, storage};
+use gamelink_core::{config, pure, storage, update};
 use serde_json::{json, Value};
 use std::{
     path::PathBuf,
@@ -16,6 +16,7 @@ use std::{
     },
 };
 type Result<T> = std::result::Result<T, String>;
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 fn s<'a>(v: &'a Value, k: &str) -> &'a str {
     v[k].as_str().unwrap_or("")
 }
@@ -215,6 +216,14 @@ impl Cli {
             "invite" | "invite rotate" => self.invite(m, cmd == "invite rotate")?,
             "requests list" | "requests approve" | "requests dismiss" => self.requests(cmd, m)?,
             "status" => self.status(flag("json"))?,
+            "update check" => {
+                let checked = update::check_now(&self.dir, VERSION)?;
+                if flag("json") {
+                    println!("{}", json!(checked));
+                } else {
+                    print_update(&checked);
+                }
+            }
             "host detect" => {
                 if get("panel-url").is_empty() || get("token-file").is_empty() {
                     return Err("--panel-url and --token-file are required".into());
@@ -308,7 +317,7 @@ impl Cli {
                     log("no games configured yet; add one with `gamelink-agent games add`. Waiting for configuration changes.");
                 }
                 log(&format!(
-                    "gamelink-agent 0.1.0-alpha started; configuration in {}",
+                    "gamelink-agent {VERSION} started; configuration in {}",
                     self.dir.display()
                 ));
                 log("only approved devices can reach a game; games with no approved devices are not served");
@@ -338,7 +347,11 @@ impl Cli {
     fn status(&self, json: bool) -> Result<()> {
         let cfg = self.load()?;
         let runtime = read_runtime(&self.dir);
-        let snapshot = status_json(&cfg, &runtime);
+        let mut snapshot = status_json(&cfg, &runtime);
+        let checked = update::cached(&self.dir, VERSION);
+        if let Some(checked) = &checked {
+            snapshot["update"] = json!(checked);
+        }
         if json {
             println!("{snapshot}");
             return Ok(());
@@ -358,6 +371,11 @@ impl Cli {
             );
         } else {
             println!("Agent: not running (start it with `gamelink-agent serve`)\n");
+        }
+        if let Some(checked) = &checked {
+            println!("Last verified release check ({})", checked.checked_at);
+            print_update(checked);
+            println!();
         }
         if rows(&cfg["games"]).is_empty() {
             println!("No games configured.");
@@ -398,6 +416,22 @@ impl Cli {
         }
         print_table(table);
         Ok(())
+    }
+}
+
+fn print_update(checked: &update::CheckResult) {
+    if checked.available {
+        let label = match checked.release.severity {
+            update::Severity::Normal => "Update available",
+            update::Severity::Security => "Security update available",
+        };
+        println!("{label}: GameLink {}", checked.release.version);
+        println!("Release notes: {}", checked.release.release_notes_url);
+    } else {
+        println!(
+            "No newer release in the verified manifest for GameLink {}",
+            checked.installed_version
+        );
     }
 }
 fn read_runtime(dir: &std::path::Path) -> Value {
@@ -502,8 +536,16 @@ fn run() -> i32 {
     }
     let mut cmd = args.remove(0);
     if cmd == "version" || cmd == "--version" {
-        println!("gamelink-agent 0.1.0-alpha");
+        println!("gamelink-agent {VERSION}");
         return 0;
+    }
+    if cmd == "update" {
+        if !args.first().is_some_and(|sub| sub == "check") {
+            eprintln!("usage: gamelink-agent update check [--json]");
+            return 2;
+        }
+        args.remove(0);
+        cmd = "update check".into();
     }
     if cmd == "host" {
         if !args
@@ -551,6 +593,7 @@ fn run() -> i32 {
         "invite rotate",
         "serve",
         "status",
+        "update check",
         "host refresh",
         "host detect",
         "host check",
@@ -564,11 +607,15 @@ fn run() -> i32 {
         Ok(m) => m,
         Err(code) => return code,
     };
-    let _host = match bridge::Host::init() {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
+    let _host = if cmd == "update check" {
+        None
+    } else {
+        match bridge::Host::init() {
+            Ok(host) => Some(host),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return 1;
+            }
         }
     };
     match (Cli {
@@ -701,7 +748,7 @@ fn specs(cmd: &str) -> Vec<(&'static str, &'static str, bool)> {
  ("type","game type: minecraft-java, minecraft-bedrock, factorio or custom (required)",false),("id","short identifier (default: derived from the name)",false),("name","display name shown to friends (default: the game type's name)",false),("description","optional short description",false),("proto","tcp or udp (required for custom games)",false),("port","port inside the tunnel (default: the game's standard port)",false),("dest","where to forward to, as ip:port (default: 127.0.0.1:<port>); use this for Docker or Pterodactyl",false),("console-bridge","enable Bedrock LAN console bridge",true),("bedrock-ip","Bedrock server LAN IPv4 address",false),("bridge-bind-ip","agent LAN IPv4 address",false),("media-ports","allowed Bedrock media port range, e.g. 19132-19136",false),("relay-region","use this region of the public Tailcat relay map (default: nearest)",false),("relay-host","use your own DERP relay at this host name instead of the public relays",false)],
  "devices approve"=>vec![("game","game id (required)",false),("key","the friend's public key, nodekey:... (required)",false),("label","a name to remember this device by",false)],
  "devices revoke"=>vec![("game","game id (required)",false),("key","public key to revoke, nodekey:... (required)",false)],
- "games list" | "status"=>vec![("json","print machine-readable JSON",true)],
+ "games list" | "status" | "update check"=>vec![("json","print machine-readable JSON",true)],
  "devices list"=>vec![("game","only this game",false),("json","print machine-readable JSON",true)],
  "requests list"=>vec![("game","only this game",false),("json","print machine-readable JSON",true)],
  "requests approve"=>vec![("game","only this game",false),("label","a name to remember this device by",false)],

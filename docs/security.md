@@ -27,7 +27,7 @@ protect, what it assumes, and what it does not defend against.
 | No general LAN access or exit node | No route forwarding is enabled. The optional Console Bridge only accepts traffic for the selected Bedrock server and configured media range; it does not expose other host or LAN ports |
 | Secrets are not logged | A redactor scrubs private keys, PSKs, Tailcat addresses and invitations from logs and diagnostics. Verbose Tailcat output is off by default and redacted when on |
 | Secrets are not committed | `.gitignore` excludes key material; `config/examples` contain placeholders only; CI scans for key-shaped strings |
-| No telemetry | The apps make no analytics or update calls. Traffic is Tailcat, local Bedrock traffic while the Console Bridge is active, and explicit authenticated host administration/Panel requests when that integration is used |
+| No telemetry | The apps make no analytics calls. Release checks are off by default on desktop and are manual on the Linux agent. The HTTPS GETs carry a generic User-Agent and no cookies, credentials, installed version or device identifiers |
 
 ## Trust boundaries
 
@@ -123,8 +123,13 @@ Invitation holder (not approved) ──X─►   (handshake gets no reply)
 11. **Android API 37 local-network permission.** Android API 37 prompts for
     `ACCESS_LOCAL_NETWORK`. iOS is not supported; its local-network and
     background-operation permissions require a separate design and validation.
-12. **Windows binaries are unsigned,** so SmartScreen will warn, and there is no
-    auto-update: you must fetch fixes yourself.
+12. **Windows binaries are unsigned,** so SmartScreen will warn. Users download
+    and install fixes manually. The optional
+    [release notifications](release-manifest.md) verify an Ed25519 signature
+    against a build-time Minisign pin before using the manifest. A release host
+    can withhold a manifest or replay one on a first check. Once a release is
+    verified and cached, checks reject versions older than that verified version.
+    The release host and its CDN see the IP address and timing of requests.
 13. **Dependency risk.** The Windows/Linux builds include Go packages; Android
     also includes pinned Rust/JNI and AndroidX/Kotlin libraries. The desktop
     ships a small React stack. Versions and license notices are in
@@ -159,6 +164,9 @@ See [SECURITY.md](../SECURITY.md).
 - Redaction removes keys, PSKs, addresses and invitations from logs and
   diagnostics.
 - Atomic, owner-only writes of key files; crash-safe replacement.
+- Release metadata verification rejects changed bytes, wrong keys, malformed
+  manifests and versions older than the last verified release. Desktop retries
+  respect the persisted 24-hour interval even after a failed attempt.
 - Disconnect releases ports, connections and goroutines.
 - Relay-only fallback works and is reported as "relay", not "direct".
 - Console Bridge framing, candidate pinning, subnet/source filtering,
@@ -168,7 +176,8 @@ See [SECURITY.md](../SECURITY.md).
 ## What is deliberately out of scope
 
 Accounts, Cloudflare, Discord sign-in, mobile VPN apps, public discovery, mod
-installation, auto-update, iOS, and any public admin API are not built. The
-Android Console Bridge is a LAN-scoped Bedrock accessory, not a general mobile
-VPN. iOS needs separate local-network permission, multicast, and background
-networking policy work before it can be considered.
+installation, automatic update downloads or installation, iOS, and any public
+admin API are out of scope. The Android Console Bridge connects consoles on
+the selected LAN to the configured Bedrock server. iOS needs separate
+local-network permission, multicast, and background networking policy work
+before it can be considered.

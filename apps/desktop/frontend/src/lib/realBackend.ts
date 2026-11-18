@@ -13,6 +13,8 @@ export const realBackend: Backend = {
   overview: async () => call("overview"),
   servers: async () => (await call<Awaited<ReturnType<Backend["servers"]>>>("servers")) ?? [],
   settings: async () => call("settings"),
+  checkRelease: async () => call("checkRelease"),
+  openReleaseNotes: async () => call("openReleaseNotes"),
   activity: async (limit) => (await call<Awaited<ReturnType<Backend["activity"]>>>("activity", { limit })) ?? [],
   clearActivity: async () => call("clearActivity"),
 

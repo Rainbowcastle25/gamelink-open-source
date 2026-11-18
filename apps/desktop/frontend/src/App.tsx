@@ -1,5 +1,6 @@
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MockRibbon } from "./components/MockRibbon";
+import { ReleaseNotifications } from "./components/ReleaseNotifications";
 import { Sidebar } from "./components/Sidebar";
 import { Toaster } from "./components/Toaster";
 import { isMock, type Backend } from "./lib/backend";
@@ -45,6 +46,7 @@ export default function App({ backend, mock = isMock }: Props) {
             <Sidebar />
             <main className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
               <div className="mx-auto w-full max-w-[1180px] px-8 py-8">
+                <ReleaseNotifications />
                 <Screen />
               </div>
             </main>

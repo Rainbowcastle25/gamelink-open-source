@@ -174,6 +174,7 @@ export interface SettingsView {
     "demoMode": boolean;
     "autoReconnect": boolean;
     "checkOnStartup": boolean;
+    "checkForUpdates": boolean;
     "verboseLogging": boolean;
     "allowLocalRelay": boolean;
     "gameExecutables": { [_ in string]?: string } | null;
@@ -192,6 +193,12 @@ export interface Version {
     "app": string;
     "version": string;
     "transport": string;
+}
+
+export interface ReleaseNotice {
+  version: string;
+  severity: "normal" | "security";
+  releaseNotesUrl: string;
 }
 
 /**

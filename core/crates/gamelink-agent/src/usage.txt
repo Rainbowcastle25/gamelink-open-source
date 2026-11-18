@@ -25,6 +25,7 @@ Sharing and running:
   host detect                   inspect Panel nodes and eggs; optionally create private host settings
   host check                    diagnose host settings, Panel access, registration and loopback API
   status                        show games, approvals and whether the agent is running
+  update check [--json]         verify release metadata and report available updates
   version                       print the version
 
 The configuration directory defaults to $GAMELINK_AGENT_DIR, else
