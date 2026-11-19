@@ -79,7 +79,15 @@ func TestFactorioReachability(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer tunnel.Stop()
-				if got := tunnel.Status().GameReachable; got != tc.want {
+				// The first probe can time out on a loaded CI runner; the health
+				// loop re-probes every HealthInterval, so wait for it.
+				deadline := time.Now().Add(15 * time.Second)
+				got := tunnel.Status().GameReachable
+				for got != tc.want && time.Now().Before(deadline) {
+					time.Sleep(100 * time.Millisecond)
+					got = tunnel.Status().GameReachable
+				}
+				if got != tc.want {
 					t.Fatalf("connected game reachability = %q, want %q", got, tc.want)
 				}
 			}
