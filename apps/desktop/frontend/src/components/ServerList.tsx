@@ -26,24 +26,26 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
   const linked = useLinkedGames(store.backend);
   const hosted = [
     ...(local.games ?? []).map((game) => ({
-      key: `local-${game.id}`, name: game.name, game: game.game, serverPublicKey: game.serverPublicKey,
+      key: `local-${game.id}`, name: game.name, game: game.game, serverFingerprint: game.serverFingerprint,
       tunnel: undefined,
+      legacyAgent: false,
       detail: `Hosted on this PC · Port ${game.port} · ${game.enabled ? game.state === "serving" ? "Tunnel active" : game.detail : "Sharing paused"}`,
       copy: game.enabled ? () => store.backend.copyHostedInvitation(game.id) : undefined,
     })),
     ...(linked.games ?? []).flatMap((game) => {
-      const { serverPublicKey } = game;
-      if (!serverPublicKey) return [];
+      const { serverFingerprint } = game;
+      if (!serverFingerprint && !game.legacyAgent) return [];
       return [{
-        key: `linked-${game.id}`, name: game.name, game: game.type, serverPublicKey,
+        key: `linked-${game.id}`, name: game.name, game: game.type, serverFingerprint,
         tunnel: game.proto && game.port !== undefined ? { proto: game.proto, port: game.port } : undefined,
+        legacyAgent: game.legacyAgent,
         detail: `Hosted on your linked node${game.port ? ` · Port ${game.port}` : ""} · ${game.disabled ? "Disabled" : game.detail || game.state}`,
-        copy: game.canCopyInvitation ? () => store.backend.copyLinkedInvitation(game.id, serverPublicKey) : undefined,
+        copy: serverFingerprint && !game.legacyAgent && game.canCopyInvitation ? () => store.backend.copyLinkedInvitation(game.id, serverFingerprint) : undefined,
       }];
     }),
   ];
   const matches = (server: ServerView, game: (typeof hosted)[number]) =>
-    !server.demo && !!game.serverPublicKey && server.serverPublicKey === game.serverPublicKey;
+    !server.demo && !!game.serverFingerprint && server.serverFingerprint === game.serverFingerprint;
   const hasCurrentSettings = (server: ServerView, game: (typeof hosted)[number]) =>
     server.game === game.game && (!game.tunnel || (server.proto === game.tunnel.proto && server.port === game.tunnel.port));
   const savedCards = new Map(hosted.map((game) => {
@@ -74,8 +76,12 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
     />
   );
 
+  const linkedRefreshing = linked.refreshing && (
+    <p role="status" className="text-sm text-muted">Refreshing…</p>
+  );
+
   if (servers.length === 0 && hostedOnly.length === 0) {
-    if (savedError || linkedError) return <div className="space-y-3">{savedError}{linkedError}</div>;
+    if (savedError || linkedError || linkedRefreshing) return <div className="space-y-3">{savedError}{linkedError}{linkedRefreshing}</div>;
     if ((!local.games && !local.error) || (!linked.games && !linked.error)) return <ServerListSkeleton />;
     return (
       <EmptyState
@@ -97,13 +103,14 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
     <ul className="flex flex-col gap-3">
       {savedError && <li>{savedError}</li>}
       {linkedError && <li>{linkedError}</li>}
+      {linkedRefreshing && <li>{linkedRefreshing}</li>}
       {hostedOnly.map((game) => (
         <li key={game.key} className="min-w-0">
           <article aria-label={game.name} className="flex min-w-0 items-start gap-4 rounded-xl border border-line bg-surface p-4 shadow-card">
             <GameThumb game={game.game} />
             <div className="min-w-0 flex-1">
               <h3 className="text-[15px] font-semibold [overflow-wrap:anywhere]">{game.name}</h3>
-              <HostedCardDetails name={game.name} detail={game.detail} copy={game.copy} />
+              <HostedCardDetails name={game.name} detail={game.detail} copy={game.copy} legacyAgent={game.legacyAgent} />
             </div>
           </article>
         </li>
@@ -117,7 +124,7 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
               server={s}
               busy={busy[s.id]}
               hosted={(game || stale) && <>
-                {game && <HostedCardDetails name={s.name} detail={game.detail} copy={game.copy} />}
+                {game && <HostedCardDetails name={s.name} detail={game.detail} copy={game.copy} legacyAgent={game.legacyAgent} />}
                 {stale && <p className="text-[13px] text-warn">Saved connection settings are out of date. Add this game again from Host admin.</p>}
               </>}
               onJoin={() => void store.join(s.id)}

@@ -3,6 +3,8 @@ package integration
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net"
@@ -24,6 +26,12 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
+
+// serverFingerprint mirrors gamelink_core::requests::server_fingerprint.
+func serverFingerprint(publicKey string) string {
+	sum := sha256.Sum256([]byte("gamelink server fingerprint v1\n" + strings.ToLower(publicKey)))
+	return hex.EncodeToString(sum[:])
+}
 
 // Exercises the shipped Rust executable and its real HTTP shim. No Panel,
 // relay, or administrative credentials from the user's machine are used.
@@ -196,23 +204,48 @@ func TestRustAgentPterodactylManualRefresh(t *testing.T) {
 	}
 	selected := statusFor(snapshot, id)
 	other := statusFor(snapshot, otherID)
-	if selected["canCopyInvitation"] != true || selected["serverPublicKey"] == other["serverPublicKey"] {
+	if selected["canCopyInvitation"] != true || selected["serverFingerprint"] == other["serverFingerprint"] {
 		t.Fatal("host status did not identify the selected game")
 	}
-	selection := map[string]any{"gameId": id, "serverPublicKey": selected["serverPublicKey"]}
-	if _, err := request("POST", "/v1/host/invitation", selection, false, 401); err != nil {
+	if _, exposed := selected["serverPublicKey"]; exposed {
+		t.Fatal("host status exposed a full server public key")
+	}
+	selection := map[string]any{"gameId": id, "serverFingerprint": selected["serverFingerprint"]}
+	call("POST", "/v1/host/invitation", selection, 404)
+	if _, err := request("POST", "/v2/host/invitation", selection, false, 401); err != nil {
 		t.Fatal(err)
 	}
-	call("POST", "/v1/host/invitation", map[string]any{"gameId": otherID, "serverPublicKey": selected["serverPublicKey"]}, 400)
-	result := call("POST", "/v1/host/invitation", selection, 200)
+	call("POST", "/v2/host/invitation", map[string]any{"gameId": otherID, "serverFingerprint": selected["serverFingerprint"]}, 400)
+	result := call("POST", "/v2/host/invitation", selection, 200)
 	copied, details, err := invite.Parse(result["invitation"].(string), invite.Options{})
-	if err != nil || copied.Name != selectedName || details.ServerPublicKey != selected["serverPublicKey"] {
+	if err != nil || copied.Name != selectedName || serverFingerprint(details.ServerPublicKey) != selected["serverFingerprint"] {
 		t.Fatal("copied invitation did not import as the selected game")
 	}
 	snapshot = call("GET", "/v1/host/status", nil, 200)
 	if statusFor(snapshot, id)["approvedDevices"] != float64(0) || statusFor(snapshot, otherID)["approvedDevices"] != float64(0) {
 		t.Fatal("copying approved a device")
 	}
+	rejects := func(path string, body map[string]any, want string) {
+		t.Helper()
+		if got := call("POST", path, body, 400)["error"]; got != want {
+			t.Fatalf("%s returned %q, want %q", path, got, want)
+		}
+	}
+	const changedGame = "the selected game identity has changed"
+	const notPending = "request is no longer pending for that device and game"
+	otherDevice, otherPublic := newKey()
+	// Import approves only the game whose current identity was selected.
+	imported := map[string]any{"gameId": otherID, "serverFingerprint": selected["serverFingerprint"], "publicKey": otherPublic}
+	rejects("/v2/host/import", imported, changedGame)
+	if statusFor(call("GET", "/v1/host/status", nil, 200), otherID)["approvedDevices"] != float64(0) {
+		t.Fatal("a rejected import approved a device")
+	}
+	imported["serverFingerprint"] = other["serverFingerprint"]
+	call("POST", "/v1/host/import", imported, 404)
+	if statusFor(call("GET", "/v1/host/status", nil, 200), otherID)["approvedDevices"] != float64(0) {
+		t.Fatal("the retired import route approved a device")
+	}
+	call("POST", "/v2/host/import", imported, 200)
 
 	// The copy endpoint enforces production relay policy. Switch only the
 	// relay for the wire test, keeping the keys from the copied invitation.
@@ -233,8 +266,8 @@ func TestRustAgentPterodactylManualRefresh(t *testing.T) {
 	}
 	setLocalRelay(id)
 	setLocalRelay(otherID)
-	// Enable pending requests on the other game too, so the denial below uses
-	// a live game tunnel with an empty allowlist.
+	// The other game serves only its imported device; the positive control
+	// below proves it is live when the friend is denied there.
 	copiedAddress, err := tailcat.ParseAddr(tailcat.Addr(copied.Addr))
 	if err != nil {
 		t.Fatal("invalid copied address")
@@ -245,7 +278,8 @@ func TestRustAgentPterodactylManualRefresh(t *testing.T) {
 		t.Fatal("invalid other game invitation")
 	}
 	friend, friendPublic := newKey()
-	otherDevice, otherPublic := newKey()
+	stranger, strangerPublic := newKey()
+	probe, _ := newKey()
 	join := func(addr tailcat.Addr, device key.NodePrivate) (*transport.Tunnel, error) {
 		opts := joinOpts(addr, games.TCP, 25565, device)
 		opts.ConnectTimeout = 3 * time.Second
@@ -261,36 +295,72 @@ func TestRustAgentPterodactylManualRefresh(t *testing.T) {
 			t.Fatal("a device without approval was not refused")
 		}
 	}
-	deny(copiedAddress.Addr(), friend)
-	var requestID any
-	for deadline := time.Now().Add(agentWait); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-		snapshot = call("GET", "/v1/host/status", nil, 200)
-		for _, item := range statusFor(snapshot, id)["pending"].([]any) {
+	pendingIDs := func(snapshot map[string]any, gameID string) map[any]any {
+		ids := map[any]any{}
+		for _, item := range statusFor(snapshot, gameID)["pending"].([]any) {
 			pending := item.(map[string]any)
-			if pending["publicKey"] == friendPublic {
-				requestID = pending["id"]
+			ids[pending["publicKey"]] = pending["id"]
+		}
+		return ids
+	}
+	// knockUntil knocks with the devices in order until the last one is listed.
+	knockUntil := func(devices ...key.NodePrivate) map[string]any {
+		t.Helper()
+		last := devices[len(devices)-1].Public().String()
+		for deadline := time.Now().Add(agentWait); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			for _, device := range devices {
+				deny(copiedAddress.Addr(), device)
+			}
+			snapshot := call("GET", "/v1/host/status", nil, 200)
+			if pendingIDs(snapshot, id)[last] != nil {
+				return snapshot
 			}
 		}
-		if requestID != nil {
-			break
-		}
-		deny(copiedAddress.Addr(), friend)
+		t.Fatal("a join request was not listed")
+		return nil
 	}
+	snapshot = knockUntil(friend, stranger)
+	requestID := pendingIDs(snapshot, id)[friendPublic]
 	if requestID == nil || len(statusFor(snapshot, otherID)["pending"].([]any)) != 0 {
 		t.Fatal("friend's join request was not scoped to the copied game")
 	}
-	approval := map[string]any{"gameId": otherID, "serverPublicKey": other["serverPublicKey"], "requestId": requestID, "publicKey": friendPublic, "label": "Friend"}
-	call("POST", "/v1/host/requests/approve", approval, 400)
-	approval["gameId"], approval["serverPublicKey"], approval["publicKey"] = id, selected["serverPublicKey"], otherPublic
-	call("POST", "/v1/host/requests/approve", approval, 400)
+
+	// Dismiss requires the same selection as approval, then ignores the key.
+	dismissal := map[string]any{"gameId": id, "serverFingerprint": other["serverFingerprint"], "requestId": pendingIDs(snapshot, id)[strangerPublic], "publicKey": strangerPublic}
+	rejects("/v2/host/requests/dismiss", dismissal, changedGame)
+	dismissal["serverFingerprint"], dismissal["publicKey"] = selected["serverFingerprint"], friendPublic
+	rejects("/v2/host/requests/dismiss", dismissal, notPending)
+	dismissal["publicKey"] = strangerPublic
+	call("POST", "/v1/host/requests/dismiss", dismissal, 404)
+	call("POST", "/v2/host/requests/dismiss", dismissal, 200)
+	snapshot = knockUntil(stranger, probe)
+	if pending := pendingIDs(snapshot, id); pending[strangerPublic] != nil || pending[friendPublic] != requestID {
+		t.Fatal("a dismissed device was listed again before rotation")
+	}
+
+	approval := map[string]any{"gameId": otherID, "serverFingerprint": other["serverFingerprint"], "requestId": requestID, "publicKey": friendPublic, "label": "Friend"}
+	rejects("/v2/host/requests/approve", approval, notPending)
+	approval["gameId"] = id
+	rejects("/v2/host/requests/approve", approval, changedGame)
+	approval["serverFingerprint"], approval["publicKey"] = selected["serverFingerprint"], otherPublic
+	rejects("/v2/host/requests/approve", approval, notPending)
 	approval["publicKey"] = friendPublic
-	call("POST", "/v1/host/requests/approve", approval, 200)
+	call("POST", "/v1/host/requests/approve", approval, 404)
+	call("POST", "/v2/host/requests/approve", approval, 200)
 	var handled struct {
-		Games map[string]struct{ Dismissed map[string]time.Time }
+		Games map[string]struct {
+			Pending   []struct{ PublicKey string }
+			Dismissed map[string]time.Time `json:"dismissedUntilRotation"`
+		}
 	}
 	handledBytes, err := os.ReadFile(filepath.Join(dir, "requests.json"))
-	if err != nil || json.Unmarshal(handledBytes, &handled) != nil || handled.Games[id].Dismissed[friendPublic].IsZero() {
-		t.Fatal("approval did not retire the old request")
+	if err != nil || json.Unmarshal(handledBytes, &handled) != nil || handled.Games[id].Dismissed[strangerPublic].IsZero() || !handled.Games[id].Dismissed[friendPublic].IsZero() {
+		t.Fatal("approval or dismissal did not update the request store")
+	}
+	for _, pending := range handled.Games[id].Pending {
+		if pending.PublicKey == friendPublic {
+			t.Fatal("approval did not retire the old request")
+		}
 	}
 
 	var tunnel *transport.Tunnel
@@ -306,6 +376,22 @@ func TestRustAgentPterodactylManualRefresh(t *testing.T) {
 	defer tunnel.Stop()
 	if roundTripTCP(t, tunnel.Status().LocalAddr, "selected game") != "selected game" {
 		t.Fatal("approved tunnel did not reach the selected destination")
+	}
+	// Positive control: the other game is live and admits its own device, so
+	// the denials below come from per-game approval, not a missing tunnel.
+	var otherTunnel *transport.Tunnel
+	for deadline := time.Now().Add(agentWait); time.Now().Before(deadline); {
+		otherTunnel, err = join(tailcat.Addr(otherInvite.Addr), otherDevice)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil || otherTunnel == nil {
+		t.Fatal("a device approved for the other game could not join it")
+	}
+	defer otherTunnel.Stop()
+	if roundTripTCP(t, otherTunnel.Status().LocalAddr, "other game") != "other game" {
+		t.Fatal("approved tunnel did not reach the other game")
 	}
 	deny(tailcat.Addr(otherInvite.Addr), friend)
 	deny(copiedAddress.Addr(), otherDevice)

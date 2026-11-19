@@ -5,8 +5,10 @@ import { Field, inputCls } from "../components/Field";
 import { Header } from "../components/Header";
 import { useStore } from "../lib/store";
 import type { HostConnection, HostSnapshot } from "../lib/types";
+import { LEGACY_AGENT_UPDATE } from "../lib/useHostedGames";
 
 function errorText(error: unknown) {
+  if (typeof error === "string") return error;
   return error instanceof Error ? error.message : "The host request failed";
 }
 
@@ -77,12 +79,12 @@ export function HostScreen() {
     }
   }
 
-  async function addGame(id: string) {
+  async function addGame(id: string, serverFingerprint: string) {
     setImporting(id);
     setError("");
     setNotice("");
     try {
-      const server = await backend.importHostGame(id);
+      const server = await backend.importHostGame(id, serverFingerprint);
       await store.refreshServers();
       setNotice(`${server.name} was added to your servers.`);
     } catch (e) {
@@ -149,9 +151,10 @@ export function HostScreen() {
                     <h3 className="truncate text-sm font-medium">{game.name}</h3>
                     <p className="mt-1 text-xs text-muted">{game.type} · {game.approvedDevices} approved {game.approvedDevices === 1 ? "device" : "devices"}{game.disabled ? " · disabled" : ""}</p>
                     <p className="mt-1 text-xs text-muted">Status: <span className={game.state === "unknown" ? "text-muted" : "text-fg"}>{stateLabel(game.state)}</span>{game.detail ? ` · ${game.detail}` : ""}</p>
+                    {game.legacyAgent && <p className="mt-1 text-sm text-muted">{LEGACY_AGENT_UPDATE}</p>}
                   </div>
                 </div>
-                <Button variant="primary" size="sm" loading={importing === game.id} disabled={actionBusy || game.disabled} onClick={() => void addGame(game.id)}>Add to GameLink</Button>
+                <Button variant="primary" size="sm" loading={importing === game.id} disabled={actionBusy || game.disabled || game.legacyAgent || !game.serverFingerprint} onClick={() => void addGame(game.id, game.serverFingerprint ?? "")}>Add to GameLink</Button>
               </article>
             ))}
           </div>

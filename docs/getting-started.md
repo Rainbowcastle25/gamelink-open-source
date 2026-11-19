@@ -191,7 +191,8 @@ gl requests approve 1 --label "Sam's PC"  # use the ID shown for your friend
 
 Before approving, compare the request's public key with the key your friend
 copies from **People** → **Copy Public Key**. Dismiss an unwanted entry with
-`gl requests dismiss <id>`. A new join attempt can create a new request.
+`gl requests dismiss <id>`. GameLink then ignores that device for the game
+until you rotate its invitation.
 You can also approve a key directly with
 `gl devices approve --game our-minecraft --key <public-key>`. ✅
 

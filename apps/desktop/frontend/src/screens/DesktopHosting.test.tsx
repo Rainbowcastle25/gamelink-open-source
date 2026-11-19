@@ -7,6 +7,7 @@ import { Type } from "../lib/types";
 import { createMockBackend } from "../lib/mockBackend";
 import { renderApp } from "../test/utils";
 import { DashboardScreen } from "./DashboardScreen";
+import { HostScreen } from "./HostScreen";
 import { ServersScreen } from "./ServersScreen";
 import { LocalHostScreen } from "./LocalHostScreen";
 import { PeopleScreen } from "./PeopleScreen";
@@ -147,7 +148,7 @@ describe.each([
     await backend.configureHost("http://127.0.0.1:8467", "test");
     const snapshot = await backend.refreshHost();
     const linked = snapshot.games[1];
-    await backend.importHostGame(linked.id);
+    await backend.importHostGame(linked.id, linked.serverFingerprint ?? "");
     const copyLocal = vi.spyOn(backend, "copyHostedInvitation");
     const copyLinked = vi.spyOn(backend, "copyLinkedInvitation");
     const { user } = renderApp(<><Screen /><Toaster /></>, { backend });
@@ -155,7 +156,7 @@ describe.each([
     const linkedCard = await screen.findByRole("article", { name: linked.name });
     await user.click(within(linkedCard).getByRole("button", { name: "Copy invitation" }));
     expect(await screen.findByText(`Invitation copied for ${linked.name}. Share it privately.`)).toBeInTheDocument();
-    expect(copyLinked.mock.calls).toEqual([[linked.id, linked.serverPublicKey]]);
+    expect(copyLinked.mock.calls).toEqual([[linked.id, linked.serverFingerprint]]);
     expect(await navigator.clipboard.readText()).toBe(`GameLink demo invitation for ${linked.name} (example only)`);
     expect(within(linkedCard).getByRole("button", { name: "Join" })).toBeInTheDocument();
     expect(copyLocal).not.toHaveBeenCalled();
@@ -174,7 +175,7 @@ it("puts hosting controls on the current saved entry when a linked game's tunnel
   await backend.configureHost("http://127.0.0.1:8467", "test");
   const snapshot = await backend.refreshHost();
   const game = snapshot.games[0];
-  const stale = await backend.importHostGame(game.id);
+  const stale = await backend.importHostGame(game.id, game.serverFingerprint ?? "");
   game.port = 25570;
   vi.spyOn(backend, "hostStatus").mockResolvedValue(snapshot);
   vi.spyOn(backend, "servers").mockResolvedValue([
@@ -261,6 +262,53 @@ it("shows a LAN world on both screens after sharing and tracks pause, port chang
   }
 });
 
+it("shows a linked node with no cached games as refreshing in People", async () => {
+  const backend = createMockBackend({ delayMs: 0 });
+  const refreshing = { games: [], refreshedAt: "", refreshing: true };
+  vi.spyOn(backend, "hostStatus").mockResolvedValue(refreshing);
+  renderApp(<PeopleScreen />, { backend });
+
+  const linked = await screen.findByRole("region", { name: "Access to games on your linked node" });
+  expect(within(linked).getByRole("status")).toHaveTextContent("Refreshing…");
+  expect(within(linked).queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("shows legacy linked games with an update message and no available access actions", async () => {
+  const backend = createMockBackend({ delayMs: 0, seed: false });
+  await backend.configureHost("http://127.0.0.1:8467", "test");
+  const snapshot = await backend.refreshHost();
+  const game = {
+    ...snapshot.games[0],
+    legacyAgent: true,
+    pending: [{ id: 21, publicKey: "nodekey:" + "e".repeat(64), lastSeen: new Date().toISOString() }],
+  };
+  const legacy = { ...snapshot, games: [game] };
+  vi.spyOn(backend, "hostStatus").mockResolvedValue(legacy);
+  vi.spyOn(backend, "refreshHost").mockResolvedValue(legacy);
+  const message = "Update the GameLink agent on this node to manage access from the desktop app.";
+
+  const people = renderApp(<PeopleScreen />, { backend });
+  const accessCard = await screen.findByRole("article", { name: game.name });
+  expect.soft(accessCard).toHaveTextContent(message);
+  expect.soft(within(accessCard).getByRole("button", { name: "Review request" })).toBeDisabled();
+  expect.soft(within(accessCard).getByRole("button", { name: "Dismiss" })).toBeDisabled();
+  people.unmount();
+
+  const servers = renderApp(<ServersScreen />, { backend });
+  const hostedCard = await screen.findByRole("article", { name: game.name });
+  expect.soft(hostedCard).toHaveTextContent(message);
+  expect.soft(within(hostedCard).queryByRole("button", { name: "Copy invitation" })).not.toBeInTheDocument();
+  servers.unmount();
+
+  const { user } = renderApp(<HostScreen />, { backend });
+  const refresh = screen.getByRole("button", { name: "Refresh games" });
+  await waitFor(() => expect(refresh).toBeEnabled());
+  await user.click(refresh);
+  const importCard = (await screen.findByRole("heading", { name: game.name })).closest("article")!;
+  expect.soft(importCard).toHaveTextContent(message);
+  expect(within(importCard).getByRole("button", { name: "Add to GameLink" })).toBeDisabled();
+});
+
 it("reviews and explicitly approves the selected device for a linked game in People", async () => {
   const backend = createMockBackend({ delayMs: 0 });
   await backend.configureHost("http://127.0.0.1:8467", "test");
@@ -280,6 +328,28 @@ it("reviews and explicitly approves the selected device for a linked game in Peo
   expect(approve).not.toHaveBeenCalled();
   await user.click(within(dialog).getByRole("button", { name: "Approve device" }));
   expect(await screen.findByText(`Device approved for ${game.name}. Ask your friend to try Join again.`)).toBeInTheDocument();
-  expect(approve.mock.calls).toEqual([[game.id, game.serverPublicKey, request, ""]]);
+  expect(approve.mock.calls).toEqual([[game.id, game.serverFingerprint, request, ""]]);
   expect(approveLocal).not.toHaveBeenCalled();
+});
+
+it("dismisses a linked game's join request on the node without approving it", async () => {
+  const backend = createMockBackend({ delayMs: 0 });
+  await backend.configureHost("http://127.0.0.1:8467", "test");
+  const snapshot = await backend.refreshHost();
+  const game = snapshot.games[1];
+  const request = { id: 22, publicKey: "nodekey:" + "a".repeat(64), lastSeen: new Date().toISOString() };
+  game.pending = [request];
+  const status = vi.spyOn(backend, "hostStatus").mockResolvedValue(snapshot);
+  const dismiss = vi.spyOn(backend, "dismissLinkedRequest").mockImplementation(async () => {
+    status.mockResolvedValue({ ...snapshot, games: snapshot.games.map((g) => (g.id === game.id ? { ...g, pending: [] } : g)) });
+  });
+  const approve = vi.spyOn(backend, "approveLinkedRequest");
+  const { user } = renderApp(<PeopleScreen />, { backend });
+
+  const card = await screen.findByRole("article", { name: game.name });
+  await user.click(within(card).getByRole("button", { name: "Dismiss" }));
+  expect(await screen.findByText("Join request dismissed.")).toBeInTheDocument();
+  expect(dismiss.mock.calls).toEqual([[game.id, game.serverFingerprint, request]]);
+  expect(approve).not.toHaveBeenCalled();
+  expect(within(card).queryByText("Incoming join requests")).not.toBeInTheDocument();
 });

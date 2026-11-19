@@ -149,7 +149,7 @@ export interface ServerView {
     "launchConnects"?: boolean;
     "id": string;
     "name": string;
-    "serverPublicKey"?: string | null;
+    "serverFingerprint"?: string | null;
     "description": string;
     "game": GameId | "";
     "gameName": string;
@@ -232,7 +232,8 @@ export interface HostGame {
   approvedDevices: number;
   proto?: Proto;
   port?: number;
-  serverPublicKey?: string | null;
+  serverFingerprint?: string | null;
+  legacyAgent?: boolean;
   canCopyInvitation?: boolean;
   pending?: PendingDevice[];
   state: string;
@@ -242,6 +243,7 @@ export interface HostGame {
 export interface HostSnapshot {
   games: HostGame[];
   refreshedAt: string;
+  refreshing?: boolean;
 }
 
 export type DesktopGameType = Exclude<GameId, "custom">;
@@ -271,7 +273,7 @@ export interface PendingDevice {
 
 export interface HostedGame extends HostedGameForm {
   id: string;
-  serverPublicKey?: string | null;
+  serverFingerprint?: string | null;
   lan: boolean;
   enabled: boolean;
   /** A shared LAN world stopped announcing; the tunnel waits for it on the same port. */

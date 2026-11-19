@@ -686,7 +686,7 @@ impl App {
             .and_then(|addr| self.validate(&addr, true).ok())
             .unwrap_or(Value::Null);
         Ok(
-            json!({"id":server["id"],"name":server["name"],"description":text(&server,"description"),"game":server["game"],"gameName":info["name"],"proto":server["proto"],"port":server["port"],"localPort":server["localPort"],"stablePort":server["stablePort"],"minecraftListed":server["game"]=="minecraft-java"&&self.minecraft_listed(),"launchConnects":desktop::launch_connects(&server["game"],&self.cfg["settings"],cfg!(windows)),"defaultPort":info["defaultPort"],"addedAt":server["addedAt"],"hint":info["hint"],"hasExecutable":!text(&self.cfg["settings"]["gameExecutables"],text(&server,"game")).is_empty() || (cfg!(windows)&&!text(&info,"launchUri").is_empty()),"relayHosts":details["relayHosts"],"defaultRelay":details["defaultRelay"]==true,"serverKey":text(&details,"serverKey"),"serverPublicKey":details["serverPublicKey"],"demo":false,"connection":connection["connection"],"check":connection["check"]}),
+            json!({"id":server["id"],"name":server["name"],"description":text(&server,"description"),"game":server["game"],"gameName":info["name"],"proto":server["proto"],"port":server["port"],"localPort":server["localPort"],"stablePort":server["stablePort"],"minecraftListed":server["game"]=="minecraft-java"&&self.minecraft_listed(),"launchConnects":desktop::launch_connects(&server["game"],&self.cfg["settings"],cfg!(windows)),"defaultPort":info["defaultPort"],"addedAt":server["addedAt"],"hint":info["hint"],"hasExecutable":!text(&self.cfg["settings"]["gameExecutables"],text(&server,"game")).is_empty() || (cfg!(windows)&&!text(&info,"launchUri").is_empty()),"relayHosts":details["relayHosts"],"defaultRelay":details["defaultRelay"]==true,"serverKey":text(&details,"serverKey"),"serverFingerprint":details["serverPublicKey"].as_str().map(gamelink_core::requests::server_fingerprint),"demo":false,"connection":connection["connection"],"check":connection["check"]}),
         )
     }
     fn servers(&mut self) -> Result<Value> {
@@ -998,7 +998,7 @@ mod tests {
             errors: BTreeMap::new(),
             stats: json!({}),
             events: vec![],
-            validate: json!({"relayHosts":["derp.example.com"],"relayRegion":"Example","defaultRelay":true,"serverKey":"nodekey:servervalue"}),
+            validate: json!({"relayHosts":["derp.example.com"],"relayRegion":"Example","defaultRelay":true,"serverKey":"nodekey:servervalue","serverPublicKey":"nodekey:serverfullvalue"}),
         }))
     }
     // Strict: an unscripted bridge method is a test failure, never a real call.
@@ -2080,6 +2080,12 @@ mod tests {
         assert_eq!(view["gameName"], "Factorio");
         assert_eq!(view["serverKey"], "nodekey:servervalue");
         assert_eq!(view["defaultRelay"], true);
+        // The full server key is enough to knock; the UI gets a fingerprint.
+        assert!(!view.to_string().contains("serverfullvalue"));
+        assert_eq!(
+            view["serverFingerprint"],
+            gamelink_core::requests::server_fingerprint("nodekey:serverfullvalue")
+        );
         let id = view["id"].as_str().unwrap().to_owned();
         let asked = e.calls("validate");
         assert_eq!(asked[0]["address"], " tcAbc123 ");

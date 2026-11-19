@@ -155,7 +155,8 @@ privately import its invitation for your own use. To invite a friend, open
 card. Copying and reviewing join requests require the updated desktop and
 Linux agent. Your friend imports the invitation and clicks **Join** to request access.
 In **People**, review the request for that game, confirm the device's public
-key, and approve it. The desktop manages one connected node at a time. Change
+key, and approve it, or dismiss it. Dismissal on the node needs the updated
+agent. The desktop manages one connected node at a time. Change
 the endpoint and token in **Host admin** to administer another node.
 
 Suspended, missing, and newly unmapped servers are disabled on the next
@@ -166,9 +167,20 @@ access immediately between refreshes, use the existing local device-revocation
 commands or stop the agent. Rotating the host admin token requires restarting
 the agent and updating the desktop connection.
 
-The authenticated interface provides cached status, pending join requests,
-explicit Refresh, invitation copying, and device approval for enabled managed
-games. Copying an invitation enables join requests without granting access. It exposes no shell,
+The authenticated interface serves cached status and pending join requests at
+`GET /v1/host/status` and explicit Refresh at `POST /v1/host/refresh`. Status
+identifies each game's server key by a one-way fingerprint. The following POST
+routes apply to enabled managed games and require the fingerprint of the game's
+current identity.
+
+- `/v2/host/invitation` copies an invitation and enables join requests without
+  granting access.
+- `/v2/host/requests/approve` approves a pending device.
+- `/v2/host/requests/dismiss` dismisses a pending request.
+- `/v2/host/import` approves the importing device and returns its invitation.
+
+These actions require an updated desktop and agent. The agent rejects the
+previous `/v1` routes for these actions. The interface exposes no shell,
 console commands, files, arbitrary destinations, game power controls, or Panel
-credentials. Protect the admin token: it authorizes device approval for this
-node's registered games.
+credentials. The admin token authorizes device approval for this node's
+registered games.
