@@ -3,6 +3,7 @@
 GameLink desktop and the Linux agent share a verifier for the release manifest
 and its detached Minisign signature. The Windows NSIS install and Linux
 AppImage use that manifest to offer one-click desktop updates.
+The Linux agent can also stage and install a signed update on explicit request.
 
 ## Release files
 
@@ -184,7 +185,7 @@ saved manifest or signature can no longer be read or verified. A manifest for
 the same version as the last verified one is rejected if its signed bytes
 differ.
 
-The Linux agent sends release requests only on `gamelink-agent update check`.
+For a metadata-only check on Linux, run `gamelink-agent update check`.
 Add `--json` for an object containing `installedVersion`, `checkedAt`,
 `available` and the verified `release` manifest. Failures exit nonzero and
 write to stderr. `gamelink-agent status` reads the last verified result
@@ -195,3 +196,9 @@ credentials, installed version, or device identifiers. HTTPS redirects are
 allowed for release asset hosting. The release host and its CDN can see the
 request's IP address and timing. Installer downloads start when you choose
 **Update**.
+
+`gamelink-agent update stage` always checks the built-in GitHub feed. It
+downloads the native agent and its Minisign signature from the verified
+version's tag, checks the signature and signed SHA-256, and caps the binary
+at 64 MiB. The optional systemd helper verifies the staged files again before
+installing. See [agent setup](agent-setup.md#signed-agent-updates).

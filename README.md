@@ -83,7 +83,7 @@ approved.
 | Identity | Windows device and hosted-game keys sealed with DPAPI; Android bridge key protected by Android Keystore; separate key per hosted game |
 | Desktop app | Dashboard, Servers, Host, People, Host admin, Settings; connection status with the real network path (direct or relay) and latency |
 | Resilience | Auto-reconnect with backoff, local port fallback if the preferred port is busy, diagnostics report with secrets redacted |
-| Agent CLI | `init`, `games add/list/remove`, `requests list/approve/dismiss`, `devices approve/revoke/list`, `invite`, `invite rotate`, `serve`, `status`, `update check` |
+| Agent CLI | `init`, `games add/list/remove`, `requests list/approve/dismiss`, `devices approve/revoke/list`, `invite`, `invite rotate`, `serve`, `status`, `update check`, `update stage` |
 | Multiple servers | Import several invitations; connect to several games at once |
 
 See [docs/getting-started.md](docs/getting-started.md) for the full tutorial.
@@ -103,10 +103,12 @@ four hours while GameLink is open. You can turn checks off under
 restarts GameLink. The Windows installer and Linux AppImage support this
 flow. Other builds with a release verification key show a release notes link.
 Checks use HTTPS GETs with a generic `GameLink` User-Agent.
-The Linux agent checks only when you run `gamelink-agent update check [--json]`.
-Its `status` command can show the last verified check without contacting the
-release host. Agent updates are installed manually. See the
-[release manifest guide](docs/release-manifest.md) for feed and signing details.
+
+On Linux, `gamelink-agent update check [--json]` checks for a release and
+`status` can show the last verified check offline. The server's optional
+[signed updater](docs/agent-setup.md#signed-agent-updates) installs a release
+on explicit request. See the [release manifest guide](docs/release-manifest.md)
+for feed and signing details.
 
 ## Quick start
 

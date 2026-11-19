@@ -1,9 +1,14 @@
 //! Opt-in administration inside the existing node agent. Panel requests are
 //! exclusively user-triggered; the socket sleeps in accept between requests.
 use crate::{
-    bridge, config, invitations, json, now, pterodactyl, pure, requests, rows, s, Cli, Result,
+    bridge, config, invitations, json, now, pterodactyl, pure, requests, rows, s, self_update, Cli,
+    Result, VERSION,
 };
-use gamelink_core::requests::{server_fingerprint, Scope};
+use gamelink_core::{
+    requests::{server_fingerprint, Scope},
+    update::valid_release_version,
+};
+use serde::Deserialize;
 use serde_json::Value;
 use std::{
     fs,
@@ -277,6 +282,60 @@ const UNKNOWN_GAME: &str = "unknown or disabled managed game";
 const CHANGED_GAME: &str = "the selected game identity has changed";
 const NOT_PENDING: &str = "request is no longer pending for that device and game";
 
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateRequest {
+    #[serde(default, deserialize_with = "read_version")]
+    version: Option<String>,
+}
+
+fn read_version<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    String::deserialize(decoder).map(Some)
+}
+
+pub(super) fn request_update(
+    body: &[u8],
+    queue: impl FnOnce(Option<String>) -> std::result::Result<(), self_update::QueueError>,
+) -> ApiResult<(u16, Value)> {
+    let request = if body.is_empty() {
+        UpdateRequest::default()
+    } else {
+        if body
+            .iter()
+            .copied()
+            .find(|byte| !byte.is_ascii_whitespace())
+            != Some(b'{')
+        {
+            return Err((400, "Invalid agent update request".into()));
+        }
+        serde_json::from_slice::<UpdateRequest>(body)
+            .map_err(|_| (400, "Invalid agent update request".into()))?
+    };
+    if request
+        .version
+        .as_deref()
+        .is_some_and(|version| !valid_release_version(version))
+    {
+        return Err((400, "Invalid agent release version".into()));
+    }
+    queue(request.version).map_err(|error| match error {
+        self_update::QueueError::Busy => {
+            (409, "An agent update is already staged or running".into())
+        }
+        self_update::QueueError::Cooldown => (
+            429,
+            "Agent updates are limited to one attempt every five minutes".into(),
+        ),
+        self_update::QueueError::Unavailable => (
+            503,
+            "Agent updates are unavailable on this installation".into(),
+        ),
+    })?;
+    Ok((202, json!({"accepted":true})))
+}
+
 impl Host {
     fn handle(&mut self, request: Request) -> ApiResult<(u16, Value)> {
         if request.origin
@@ -286,6 +345,9 @@ impl Host {
         }
         match (request.method.as_str(), request.path.as_str()) {
             ("GET", "/v1/host/status") => {}
+            ("POST", "/v2/host/update") => {
+                return request_update(&request.body, self_update::queue)
+            }
             ("POST", "/v1/host/refresh") => {
                 let result=refresh(&self.dir,&self.path).map_err(|_|(502,"Refresh failed; check host settings and Panel connectivity. Previous registrations were retained.".into()))?;
                 self.statuses = result["statuses"].clone();
@@ -322,6 +384,7 @@ impl Host {
                 "/v1/host/status"
                 | "/v1/host/refresh"
                 | "/v2/host/import"
+                | "/v2/host/update"
                 | "/v2/host/invitation"
                 | "/v2/host/requests/approve"
                 | "/v2/host/requests/dismiss",
@@ -367,7 +430,10 @@ impl Host {
                 "canCopyInvitation":scopes.contains_key(id) && !key.is_null(),"pending":pending
             })
         }).collect();
-        Ok(json!({"games":games,"refreshedAt":self.checked_at}))
+        Ok(json!({
+            "games":games,"refreshedAt":self.checked_at,
+            "agentVersion":VERSION,"update":self_update::status()
+        }))
     }
 
     fn selected_game(&self, body: &Value) -> Result<(Value, Value)> {
@@ -492,7 +558,10 @@ mod tests {
         let (_, value) = host
             .handle(request("GET", "/v1/host/status", &host.token.clone()))
             .unwrap();
-        assert_eq!(value, json!({"games":[],"refreshedAt":""}));
+        assert_eq!(value["games"], json!([]));
+        assert_eq!(value["refreshedAt"], "");
+        assert_eq!(value["agentVersion"], VERSION);
+        assert!(value["update"]["state"].is_string());
         let token = host.token.clone();
         let error = host
             .handle(request("POST", "/v1/host/refresh", &token))
@@ -500,6 +569,66 @@ mod tests {
         assert_eq!(error.0, 502);
         assert!(!error.1.contains(&token));
         assert_eq!(host.checked_at, "");
+    }
+    #[test]
+    fn update_requires_bearer_and_rejects_browser_origins_and_extra_parameters() {
+        let dir = tempfile::tempdir().unwrap();
+        let token = "test-token".repeat(8);
+        let mut host = Host {
+            dir: dir.path().to_owned(),
+            path: dir.path().join("host.json"),
+            token: token.clone(),
+            checked_at: String::new(),
+            statuses: json!([]),
+        };
+        let request = |path: &str, authorization, origin, body: &[u8]| Request {
+            method: "POST".into(),
+            path: path.into(),
+            authorization,
+            origin,
+            body: body.to_vec(),
+        };
+        let path = "/v2/host/update";
+        let bearer = || format!("Bearer {token}");
+        assert_eq!(
+            host.handle(request(path, String::new(), false, b"{}"))
+                .unwrap_err()
+                .0,
+            401
+        );
+        assert_eq!(
+            host.handle(request(path, bearer(), true, b"{}"))
+                .unwrap_err()
+                .0,
+            401
+        );
+        for body in [
+            br#"{"url":"https://example.com"}"#.as_slice(),
+            br#"{"version":"9.0.0","path":"/tmp/agent"}"#,
+            br#"{"command":"start"}"#,
+            br#"{"version":null}"#,
+            br#"{"version":"not-a-version"}"#,
+            br#"{"version":"1.0.0","version":"2.0.0"}"#,
+            br#"["1.0.0"]"#,
+        ] {
+            assert_eq!(
+                host.handle(request(path, bearer(), false, body))
+                    .unwrap_err()
+                    .0,
+                400
+            );
+        }
+        assert_eq!(
+            host.handle(request(
+                "/v2/host/update?url=https://example.com",
+                bearer(),
+                false,
+                b"{}"
+            ))
+            .unwrap_err()
+            .0,
+            404
+        );
     }
     #[test]
     fn configuration_files_are_private_and_admin_binds_loopback() {

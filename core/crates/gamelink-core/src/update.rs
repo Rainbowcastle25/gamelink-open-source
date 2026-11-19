@@ -4,6 +4,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use minisign_verify::{PublicKey, Signature};
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fs::OpenOptions,
@@ -13,9 +14,13 @@ use std::{
 };
 use url::Url;
 
-const DEFAULT_URL: &str = "https://github.com/Rainbowcastle25/gamelink-open-source/releases/latest/download/release-manifest.json";
-const MAX_MANIFEST: usize = 64 * 1024;
-const MAX_SIGNATURE: usize = 4 * 1024;
+const RELEASES_URL: &str = "https://github.com/Rainbowcastle25/gamelink-open-source/releases";
+pub const MANIFEST_NAME: &str = "release-manifest.json";
+pub const MANIFEST_SIGNATURE_NAME: &str = "release-manifest.json.minisig";
+pub const MAX_MANIFEST: usize = 64 * 1024;
+pub const MAX_SIGNATURE: usize = 4 * 1024;
+pub const MAX_AGENT_BINARY: usize = 64 * 1024 * 1024;
+const MAX_AGENT_VERSION: usize = 254; // Leave one byte in the tag component for the v prefix.
 const MAX_REDIRECTS: usize = 5;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(8);
 const DESKTOP_CHECK_INTERVAL: u64 = 4 * 60 * 60;
@@ -113,21 +118,33 @@ fn manifest_url() -> Result<Url> {
         Err(std::env::VarError::NotPresent) => {}
         Err(_) => return Err("invalid manifest URL"),
     }
-    https_url(DEFAULT_URL)
+    latest_manifest_url()
+}
+
+fn latest_manifest_url() -> Result<Url> {
+    https_url(&format!("{RELEASES_URL}/latest/download/{MANIFEST_NAME}"))
+}
+
+fn verify_signature(bytes: &[u8], signature: &str, keys: &[PublicKey]) -> Result<()> {
+    if signature.len() > MAX_SIGNATURE {
+        return Err("release metadata exceeds size limit");
+    }
+    let signature = Signature::decode(signature).map_err(|_| "invalid release signature")?;
+    if keys
+        .iter()
+        .any(|key| key.verify(bytes, &signature, false).is_ok())
+    {
+        Ok(())
+    } else {
+        Err("release signature verification failed")
+    }
 }
 
 fn verify(signed: &SignedRelease, keys: &[PublicKey]) -> Result<(Manifest, Version)> {
-    if signed.manifest.len() > MAX_MANIFEST || signed.signature.len() > MAX_SIGNATURE {
+    if signed.manifest.len() > MAX_MANIFEST {
         return Err("release metadata exceeds size limit");
     }
-    let signature =
-        Signature::decode(&signed.signature).map_err(|_| "invalid release signature")?;
-    if !keys.iter().any(|key| {
-        key.verify(signed.manifest.as_bytes(), &signature, false)
-            .is_ok()
-    }) {
-        return Err("release signature verification failed");
-    }
+    verify_signature(signed.manifest.as_bytes(), &signed.signature, keys)?;
     let mut manifest: Manifest =
         serde_json::from_str(&signed.manifest).map_err(|_| "invalid release manifest")?;
     let version = Version::parse(&manifest.version).map_err(|_| "invalid release version")?;
@@ -160,19 +177,19 @@ fn verify(signed: &SignedRelease, keys: &[PublicKey]) -> Result<(Manifest, Versi
     Ok((manifest, version))
 }
 
-fn fetch(agent: &ureq::Agent, mut url: Url) -> Result<ureq::Body> {
+fn fetch(agent: &ureq::Agent, mut url: Url, timeout: Duration) -> Result<ureq::Body> {
     let start = Instant::now();
     for _ in 0..=MAX_REDIRECTS {
-        let remaining = FETCH_TIMEOUT
+        let remaining = timeout
             .checked_sub(start.elapsed())
-            .ok_or("release metadata request timed out")?;
+            .ok_or("release download timed out")?;
         let response = agent
             .get(url.as_str())
             .config()
             .timeout_global(Some(remaining))
             .build()
             .call()
-            .map_err(|_| "release metadata request failed")?;
+            .map_err(|_| "release download failed")?;
         match response.status().as_u16() {
             200 => return Ok(response.into_body()),
             301 | 302 | 303 | 307 | 308 => {
@@ -180,31 +197,31 @@ fn fetch(agent: &ureq::Agent, mut url: Url) -> Result<ureq::Body> {
                     .headers()
                     .get("location")
                     .and_then(|value| value.to_str().ok())
-                    .ok_or("invalid release metadata redirect")?;
+                    .ok_or("invalid release download redirect")?;
                 let target = url
                     .join(location)
-                    .map_err(|_| "invalid release metadata redirect")?;
+                    .map_err(|_| "invalid release download redirect")?;
                 url = https_url(target.as_str())?;
                 url.set_fragment(None);
             }
-            _ => return Err("release metadata request failed"),
+            _ => return Err("release download failed"),
         }
     }
-    Err("too many release metadata redirects")
+    Err("too many release download redirects")
 }
 
-fn read_metadata(body: impl Read, limit: usize) -> Result<String> {
+fn read_download(body: impl Read, limit: usize, too_large: &'static str) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     body.take(limit as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| "could not read release metadata")?;
+        .map_err(|_| "could not read release download")?;
     if bytes.len() > limit {
-        return Err("release metadata exceeds size limit");
+        return Err(too_large);
     }
-    String::from_utf8(bytes).map_err(|_| "release metadata is not UTF-8")
+    Ok(bytes)
 }
 
-fn metadata_agent() -> ureq::Agent {
+fn release_client() -> ureq::Agent {
     ureq::Agent::config_builder()
         .https_only(true)
         .max_redirects(0)
@@ -216,7 +233,8 @@ fn metadata_agent() -> ureq::Agent {
 
 /// Fetches the Tauri updater feed as untrusted metadata, with the same bound as the manifest.
 pub fn fetch_updater_feed(url: Url) -> Result<serde_json::Value> {
-    read_updater_feed(fetch(&metadata_agent(), url)?.into_reader())
+    let body = fetch(&release_client(), url, FETCH_TIMEOUT)?;
+    read_updater_feed(body.into_reader())
 }
 
 fn read_updater_feed(body: impl Read) -> Result<serde_json::Value> {
@@ -224,17 +242,37 @@ fn read_updater_feed(body: impl Read) -> Result<serde_json::Value> {
     serde_json::from_str(&feed).map_err(|_| "invalid updater feed")
 }
 
-fn download(now: u64) -> Result<SignedRelease> {
-    let url = manifest_url()?;
+fn read_metadata(body: impl Read, limit: usize) -> Result<String> {
+    let bytes = read_download(body, limit, "release metadata exceeds size limit")?;
+    String::from_utf8(bytes).map_err(|_| "release metadata is not UTF-8")
+}
+
+fn fetch_metadata(agent: &ureq::Agent, url: Url, limit: usize) -> Result<String> {
+    let body = fetch(agent, url, FETCH_TIMEOUT)?;
+    if body
+        .content_length()
+        .is_some_and(|size| size > limit as u64)
+    {
+        return Err("release metadata exceeds size limit");
+    }
+    read_metadata(body.into_reader(), limit)
+}
+
+fn download_manifest(agent: &ureq::Agent, url: Url) -> Result<SignedRelease> {
     let signature_url = https_url(&format!("{url}.minisig"))?;
-    let agent = metadata_agent();
-    let manifest = read_metadata(fetch(&agent, url)?.into_reader(), MAX_MANIFEST)?;
-    let signature = read_metadata(fetch(&agent, signature_url)?.into_reader(), MAX_SIGNATURE)?;
+    let manifest = fetch_metadata(agent, url, MAX_MANIFEST)?;
+    let signature = fetch_metadata(agent, signature_url, MAX_SIGNATURE)?;
     Ok(SignedRelease {
-        checked_at: Some(now),
+        checked_at: None,
         manifest,
         signature,
     })
+}
+
+fn download(now: u64) -> Result<SignedRelease> {
+    let mut signed = download_manifest(&release_client(), manifest_url()?)?;
+    signed.checked_at = Some(now);
+    Ok(signed)
 }
 
 /// Reads the cache, recovering the checkpoint independently of attempt metadata.
@@ -276,6 +314,136 @@ fn keys() -> Result<Vec<PublicKey>> {
     pins.split_whitespace()
         .map(|pin| PublicKey::from_base64(pin).map_err(|_| "invalid embedded release signing key"))
         .collect()
+}
+
+fn agent_target(arch: &str) -> Result<(&'static str, u16)> {
+    match arch {
+        "x86_64" => Ok(("gamelink-agent-linux-amd64", 62)),
+        "aarch64" => Ok(("gamelink-agent-linux-arm64", 183)),
+        _ => Err("unsupported Linux agent architecture"),
+    }
+}
+
+pub fn agent_asset_name() -> Result<&'static str> {
+    agent_target(std::env::consts::ARCH).map(|(name, _)| name)
+}
+
+pub fn valid_release_version(version: &str) -> bool {
+    version.len() <= MAX_AGENT_VERSION
+        && Version::parse(version).is_ok_and(|version| version.build.is_empty())
+}
+
+/// Signed metadata for an agent upgrade, tied to a version and architecture.
+pub struct AgentRelease {
+    signed: SignedRelease,
+    keys: Vec<PublicKey>,
+    artifact: Artifact,
+    version: Version,
+    machine: u16,
+}
+
+impl AgentRelease {
+    fn verify(
+        signed: SignedRelease,
+        keys: Vec<PublicKey>,
+        installed: &str,
+        arch: &str,
+    ) -> Result<Self> {
+        let (manifest, version) = verify(&signed, &keys)?;
+        let installed = Version::parse(installed).map_err(|_| "invalid installed version")?;
+        if !version.cmp_precedence(&installed).is_gt() {
+            return Err("signed release is not newer than the installed agent");
+        }
+        if !version.build.is_empty() || manifest.version.len() > MAX_AGENT_VERSION {
+            return Err("invalid agent release version");
+        }
+        let (name, machine) = agent_target(arch)?;
+        let artifact = manifest
+            .artifacts
+            .into_iter()
+            .find(|artifact| artifact.name == name)
+            .ok_or("signed release has no agent for this architecture")?;
+        Ok(Self {
+            signed,
+            keys,
+            artifact,
+            version,
+            machine,
+        })
+    }
+
+    /// The install flow always uses the built-in GitHub release feed.
+    pub fn latest(installed: &str) -> Result<Self> {
+        let pins = keys()?;
+        let signed = download_manifest(&release_client(), latest_manifest_url()?)?;
+        Self::verify(signed, pins, installed, std::env::consts::ARCH)
+    }
+
+    /// Reconstruct the verification context from staged bytes and embedded pins.
+    pub fn from_staged(installed: &str, manifest: String, signature: String) -> Result<Self> {
+        let signed = SignedRelease {
+            manifest,
+            signature,
+            checked_at: None,
+        };
+        Self::verify(signed, keys()?, installed, std::env::consts::ARCH)
+    }
+
+    pub fn version(&self) -> String {
+        self.version.to_string()
+    }
+
+    pub fn manifest_bytes(&self) -> &[u8] {
+        self.signed.manifest.as_bytes()
+    }
+
+    pub fn manifest_signature(&self) -> &[u8] {
+        self.signed.signature.as_bytes()
+    }
+
+    pub fn verify_binary(&self, binary: &[u8], signature: &str) -> Result<()> {
+        if binary.len() > MAX_AGENT_BINARY {
+            return Err("agent binary exceeds size limit");
+        }
+        if !format!("{:x}", Sha256::digest(binary)).eq_ignore_ascii_case(&self.artifact.sha256) {
+            return Err("agent binary does not match the signed SHA-256 digest");
+        }
+        verify_signature(binary, signature, &self.keys)?;
+        // ELF64, little-endian Linux targets. Check e_machine as well as the
+        // signed asset name so a mispackaged binary cannot reach the swap.
+        if binary.len() < 64
+            || !binary.starts_with(b"\x7fELF\x02\x01\x01")
+            || u16::from_le_bytes([binary[18], binary[19]]) != self.machine
+        {
+            return Err("agent binary has the wrong Linux architecture");
+        }
+        Ok(())
+    }
+
+    pub fn download_binary(&self) -> Result<(Vec<u8>, String)> {
+        let agent = release_client();
+        // Use the verified version's immutable tag rather than the moving
+        // latest alias. The asset name is selected from the native targets.
+        let url = https_url(&format!(
+            "{RELEASES_URL}/download/v{}/{}",
+            self.version, self.artifact.name
+        ))?;
+        let signature =
+            fetch_metadata(&agent, https_url(&format!("{url}.minisig"))?, MAX_SIGNATURE)?;
+        let body = fetch(&agent, url, Duration::from_secs(120))?;
+        if body
+            .content_length()
+            .is_some_and(|size| size > MAX_AGENT_BINARY as u64)
+        {
+            return Err("agent binary exceeds size limit");
+        }
+        let binary = read_download(
+            body.into_reader(),
+            MAX_AGENT_BINARY,
+            "agent binary exceeds size limit",
+        )?;
+        Ok((binary, signature))
+    }
 }
 
 fn result(installed: &Version, signed: &SignedRelease, keys: &[PublicKey]) -> Result<CheckResult> {

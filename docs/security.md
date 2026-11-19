@@ -24,11 +24,29 @@ protect, what it assumes, and what it does not defend against.
 | Agent invitation rotation and expiry | Rotation replaces the per-game key and PSK. At expiry the host retires the whole identity, including established sessions. Device approvals carry over to the next identity |
 | Revocation works | Closes the game's server and restarts it with the remaining keys; live TCP and UDP sessions end. Tested end to end |
 | Narrow listeners | Desktop client game sockets and desktop host destinations use `127.0.0.1`. Minecraft Java discovery receives only multicast announcements: Windows binds the wildcard address but accepts only group-destined datagrams from this PC. The Linux agent defaults to a loopback destination. The explicit Bedrock Console Bridge uses a Wi-Fi discovery/media path scoped to one configured server IPv4 and media-port range |
-| No SSH, shell, file transfer | No such handler exists in GameLink. Tailcat's SSH/SFTP server is compiled out (`ts_omit_ssh`). Optional host administration is a bearer-authenticated, loopback-only API for explicit Pterodactyl refresh and per-game device approval/import. It is off by default and exposes no shell, console, files, or power controls |
+| No SSH, shell, file transfer | No such handler exists in GameLink. Tailcat's SSH/SFTP server is compiled out (`ts_omit_ssh`). Optional host administration is a bearer-authenticated, loopback-only API for explicit Pterodactyl refresh, per-game device approval/import, and signed Linux agent updates. It is off by default and exposes no shell, console, files, or power controls |
 | No general LAN access or exit node | No route forwarding is enabled. The optional Console Bridge only accepts traffic for the selected Bedrock server and configured media range; it does not expose other host or LAN ports |
 | Secrets are not logged | A redactor scrubs private keys, PSKs, Tailcat addresses and invitations from logs and diagnostics. Verbose Tailcat output is off by default and redacted when on |
 | Secrets are not committed | `.gitignore` excludes key material; `config/examples` contain placeholders only; CI scans for key-shaped strings |
-| No telemetry | The apps make no analytics calls. Release checks are on by default for new desktop installs and are manual on the Linux agent. The GitHub HTTPS GETs carry a generic User-Agent and no cookies, credentials, installed version or device identifiers |
+| No telemetry | The apps make no analytics calls. Release checks are on by default for new desktop installs and run on explicit request on the Linux agent. The GitHub HTTPS GETs carry a generic User-Agent and no cookies, credentials, installed version or device identifiers |
+
+The desktop may ask the Linux agent to install the latest signed release
+through the existing host admin API. The request can contain only an optional
+expected version, which must equal the latest signed manifest version. It
+accepts no URL, file, path, or command. The unprivileged agent fetches release
+metadata from the built-in GitHub endpoint. A separately installed root
+helper verifies the staged manifest and native binary again against the
+installed agent's embedded Minisign pins and the signed SHA-256 digest. It
+requires a newer version and replaces only the installed GameLink agent.
+The root helper guarantees “signed by the release key and newer than installed”,
+while selection of the latest release is the unprivileged agent's responsibility.
+Both authorized entry points, `update stage` and the desktop's request, run as
+the `gamelink` account. So root can't tell an owner's request from a request
+file that account wrote directly. A compromised `gamelink` account can at most
+make root install a genuine signed release newer than the installed one; it
+gains no further privilege. The agent never stages an update on its own: there
+is no timer or background check, and updates happen only when someone runs the
+command or clicks Update.
 
 Desktop presence notifications are off by default. With the setting enabled,
 checks go through the same Tailcat probe as **Check** and reveal to the host's
@@ -233,7 +251,7 @@ See [SECURITY.md](../SECURITY.md).
 ## What is deliberately out of scope
 
 Accounts, Cloudflare, Discord sign-in, mobile VPN apps, public discovery, mod
-installation, automatic update downloads or installation, iOS, and any public
+installation, unattended update checks or installation, iOS, and any public
 admin API are out of scope. The Android Console Bridge connects consoles on
 the selected LAN to the configured Bedrock server. iOS needs separate
 local-network permission, multicast, and background networking policy work

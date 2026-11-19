@@ -25,7 +25,8 @@ Tailcat tunnel. Every rule below protects that property.
    offers an admin or writable key, ask for a read-only one instead.
 4. **Stay inside the agent's footprint**, which is all you install:
    `/usr/local/bin/gamelink-agent`, the `gamelink` system user,
-   `/var/lib/gamelink-agent/`, and the `gamelink-agent` systemd unit.
+   `/var/lib/gamelink-agent/`, the `gamelink-agent` systemd unit, and its
+   optional signed-update path and service units.
    GameLink needs no changes to firewalls, router ports, Docker, Wings, the
    Panel or game containers. Ask the owner before touching anything outside
    the footprint, such as a VPN policy or a hypervisor.
@@ -219,14 +220,91 @@ Give the owner:
 
 ## Updating and removing
 
-- **Update:** verify the new binary (step 2), run `sudo systemctl stop gamelink-agent`,
-  install it over `/usr/local/bin/gamelink-agent`, then run `sudo systemctl start gamelink-agent`.
+- **Manual replacement:** verify the new binary (step 2). If the update path
+  unit is enabled, stop it and wait for any running update to finish. Run
+  `sudo systemctl stop gamelink-agent`, install the binary over
+  `/usr/local/bin/gamelink-agent`. If signed updates are configured, relink the
+  helper with
+  `sudo ln -f /usr/local/bin/gamelink-agent /usr/local/bin/.gamelink-agent-update-helper`.
+  Then run `sudo systemctl start gamelink-agent`.
+  Start the path unit again if you stopped it.
   Let any running agent CLI commands finish before the swap and wait until the
   service is back up before running another.
   Approvals, invitations and game identities survive.
-- **Remove:** `sudo systemctl disable --now gamelink-agent`, then remove the
-  unit and the binary. Deleting `/var/lib/gamelink-agent` destroys every game
-  identity and invitation, so ask the owner first.
+- **Remove:** if installed, disable `gamelink-agent-update.path` and let any
+  running update finish. Then run `sudo systemctl disable --now gamelink-agent`
+  and remove the units, binary and `/usr/local/bin/.gamelink-agent-update-helper`.
+  Deleting `/var/lib/gamelink-agent` destroys
+  every game identity and invitation, so ask the owner first.
+
+### Signed agent updates
+
+To opt in, first install a release build with embedded Minisign pins that
+supports `update stage`. Use the standard binary path, system account and unit
+name from this guide. Wait for other agent CLI commands to finish. Run this
+one-time setup on the server.
+
+```sh
+sudo chown -h root:gamelink /var/lib/gamelink-agent &&
+  sudo test ! -L /var/lib/gamelink-agent &&
+  sudo test -d /var/lib/gamelink-agent &&
+  sudo chmod 1770 /var/lib/gamelink-agent &&
+  test "$(sudo stat -c '%u:%G:%a' /var/lib/gamelink-agent)" = '0:gamelink:1770' &&
+  sudo mkdir -m 0750 /var/lib/gamelink-agent/update &&
+  sudo chgrp gamelink /var/lib/gamelink-agent/update &&
+  sudo install -d -o gamelink -g gamelink -m 0700 /var/lib/gamelink-agent/update/staged &&
+  sudo install -m 0644 /dev/null /var/lib/gamelink-agent/update/swap.lock
+```
+
+The command chain stops if `mkdir` finds an existing update directory.
+Inspect its ownership and permissions before continuing. Taking ownership
+before setting the sticky bit protects the root-owned update directory from
+replacement while letting `gamelink` manage its existing state files. Use
+local filesystems for the state and binary.
+
+Install the two helper files from
+[`packaging/systemd/`](../packaging/systemd/) in the same trusted release's
+source tree.
+
+```sh
+helper=/usr/local/bin/.gamelink-agent-update-helper
+sudo install -m 0644 packaging/systemd/gamelink-agent-update.path /etc/systemd/system/ &&
+  sudo install -m 0644 packaging/systemd/gamelink-agent-update.service /etc/systemd/system/ &&
+  { sudo test -e "$helper" || sudo ln /usr/local/bin/gamelink-agent "$helper"; } &&
+  sudo test ! -L "$helper" &&
+  test "$(sudo stat -c '%u:%a' "$helper")" = '0:755' &&
+  sudo "$helper" --version &&
+  sudo systemctl daemon-reload &&
+  sudo systemctl enable --now gamelink-agent-update.path
+```
+
+The chain only enables the watcher once the helper exists, is root-owned and
+runs. If it stops, fix the helper before enabling the path unit. Otherwise
+staged requests would wait for a helper that can't start. If you later replace
+the agent by hand, the helper keeps the previous trusted version until the next
+signed update advances it.
+
+Stage the latest signed release with `gl update stage`. Add
+`--version <expected>` to require an exact match with the latest signed
+manifest. The path unit starts the root helper as soon as staging finishes.
+For a manual handoff, leave the path unit disabled, run `gl update stage`,
+then run `sudo /usr/local/bin/.gamelink-agent-update-helper update install-staged`.
+`sudo systemctl start gamelink-agent-update.service` runs the same command in
+the unit's sandbox. Enable the path unit again if you want automatic handoff
+on later requests.
+
+The root-owned helper is a separate hard link to the trusted binary. Its
+path stays executable if the candidate fails to launch. The helper advances
+the link only after the replacement passes its health check and commits.
+It stops the main service, keeps the previous binary as
+`/usr/local/bin/.gamelink-agent.previous`, and atomically installs the verified
+binary. It checks the version and watches the service for 10 seconds. A bad
+start or health check triggers rollback and a restart of the previous agent.
+Game sessions disconnect during the restart. The helper waits up to five
+seconds for existing CLI commands before it gives up on the swap. A root-owned
+transaction record lets the helper recover or finish cleanup after interruption.
+Agent update attempts have a five-minute cooldown, including after failures
+and service restarts. The host update endpoint returns HTTP 429 during cooldown.
 
 ## Troubleshooting
 
@@ -239,3 +317,19 @@ Give the owner:
 | `host check` admin_api warns "not listening" | `ExecStart` lacks `--host-config`. |
 | The service starts but the game never comes up | `AF_NETLINK` was removed from `RestrictAddressFamilies`. |
 | A friend's GameLink shows "no response" | Check that the agent is running, the invitation is current, and the friend's request appears in `gl requests list --game <id>`. |
+
+### Signed update fails or stays staged
+
+- Read `updateState` in `gl status --json` once the agent is back, or check
+  `GET /v1/host/status` for `agentVersion` and `update`. A failed update
+  includes a reason. The admin API is briefly unavailable while the agent
+  restarts.
+- Check `sudo journalctl -u gamelink-agent-update.service -u gamelink-agent -n 100`
+  for verification, startup and rollback errors. On a rejected download,
+  check outbound HTTPS access, the version and the installed release pins.
+- If the state stays `staged`, check
+  `sudo systemctl status gamelink-agent-update.path gamelink-agent-update.service`.
+  If recovery fails, fix the reported service or filesystem problem, then
+  run the root helper manually to finish the recorded transaction.
+  Use the manual stop-replace-start procedure above if the helper itself
+  cannot run.

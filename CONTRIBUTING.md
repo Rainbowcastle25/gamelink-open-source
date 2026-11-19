@@ -14,6 +14,10 @@ Thanks for helping. GameLink is small on purpose; please keep it that way.
   keep discovery running after **Stop sharing**. Never open router ports, run
   remote commands, transfer files, add an admin API or telemetry, or set Tailcat
   forwarding hooks.
+- **Signed agent update exception.** The desktop may ask the agent to install
+  the latest signed release through the existing loopback host admin API. The
+  request can contain only an optional expected version, which must equal the
+  latest signed manifest version. It accepts no URL, file, path, or command.
 - **No secrets in the repository,** including test fixtures. Tests generate
   fresh keys. Never paste a real invitation or `nodekey` into an issue.
 - **No fake data in the UI.** Demo mode is the only place sample data may

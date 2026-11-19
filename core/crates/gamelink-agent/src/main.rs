@@ -5,6 +5,7 @@ mod invitations;
 mod pterodactyl;
 mod requests;
 mod runtime;
+mod self_update;
 use clap::{Arg, ArgAction, Command};
 use gamelink_core::{config, pure, storage, update};
 use serde_json::{json, Value};
@@ -224,6 +225,12 @@ impl Cli {
                     print_update(&checked);
                 }
             }
+            "update stage" => {
+                let version =
+                    self_update::stage(m.get_one::<String>("version").map(String::as_str))?;
+                println!("Staged signed agent update {version}");
+            }
+            "update install-staged" => self_update::install_staged()?,
             "host detect" => {
                 if get("panel-url").is_empty() || get("token-file").is_empty() {
                     return Err("--panel-url and --token-file are required".into());
@@ -348,6 +355,8 @@ impl Cli {
         let cfg = self.load()?;
         let runtime = read_runtime(&self.dir);
         let mut snapshot = status_json(&cfg, &runtime);
+        snapshot["agentVersion"] = json!(VERSION);
+        snapshot["updateState"] = self_update::status();
         let checked = update::cached(&self.dir, VERSION);
         if let Some(checked) = &checked {
             snapshot["update"] = json!(checked);
@@ -522,7 +531,22 @@ fn run() -> i32 {
         print!("{}", include_str!("usage.txt"));
         return 0;
     }
-    if dir.is_empty() {
+    let mut cmd = args.remove(0);
+    if cmd == "version" || cmd == "--version" {
+        println!("gamelink-agent {VERSION}");
+        return 0;
+    }
+    if cmd == "update" {
+        if !args
+            .first()
+            .is_some_and(|sub| ["check", "stage", "install-staged"].contains(&sub.as_str()))
+        {
+            eprintln!("usage: gamelink-agent update check|stage|install-staged [options]");
+            return 2;
+        }
+        cmd = format!("update {}", args.remove(0));
+    }
+    if dir.is_empty() && !matches!(cmd.as_str(), "update stage" | "update install-staged") {
         dir = std::env::var("XDG_CONFIG_HOME")
             .ok()
             .filter(|s| !s.is_empty())
@@ -533,19 +557,6 @@ fn run() -> i32 {
             eprintln!("error: cannot determine a configuration directory; set GAMELINK_AGENT_DIR or pass --dir");
             return 2;
         }
-    }
-    let mut cmd = args.remove(0);
-    if cmd == "version" || cmd == "--version" {
-        println!("gamelink-agent {VERSION}");
-        return 0;
-    }
-    if cmd == "update" {
-        if !args.first().is_some_and(|sub| sub == "check") {
-            eprintln!("usage: gamelink-agent update check [--json]");
-            return 2;
-        }
-        args.remove(0);
-        cmd = "update check".into();
     }
     if cmd == "host" {
         if !args
@@ -594,6 +605,8 @@ fn run() -> i32 {
         "serve",
         "status",
         "update check",
+        "update stage",
+        "update install-staged",
         "host refresh",
         "host detect",
         "host check",
@@ -607,7 +620,21 @@ fn run() -> i32 {
         Ok(m) => m,
         Err(code) => return code,
     };
-    let _host = if cmd == "update check" {
+    let _cli_lock = if matches!(
+        cmd.as_str(),
+        "serve" | "update stage" | "update install-staged"
+    ) {
+        None
+    } else {
+        match self_update::cli_lock() {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return 1;
+            }
+        }
+    };
+    let _host = if cmd.starts_with("update ") {
         None
     } else {
         match bridge::Host::init() {
@@ -735,6 +762,7 @@ fn parse(cmd: &str, args: Vec<String>) -> std::result::Result<clap::ArgMatches, 
         "games remove" if count != 1 => Some("<id>"),
         "requests approve" | "requests dismiss" if count != 1 => Some("<id|key> [options]"),
         "requests list" | "invite" | "invite rotate" if count != 0 => Some("[options]"),
+        "update stage" | "update install-staged" if count != 0 => Some("[options]"),
         _ => None,
     } {
         eprintln!("usage: gamelink-agent {cmd} {operand}");
@@ -749,6 +777,7 @@ fn specs(cmd: &str) -> Vec<(&'static str, &'static str, bool)> {
  "devices approve"=>vec![("game","game id (required)",false),("key","the friend's public key, nodekey:... (required)",false),("label","a name to remember this device by",false)],
  "devices revoke"=>vec![("game","game id (required)",false),("key","public key to revoke, nodekey:... (required)",false)],
  "games list" | "status" | "update check"=>vec![("json","print machine-readable JSON",true)],
+ "update stage"=>vec![("version","require this exact latest signed release version",false)],
  "devices list"=>vec![("game","only this game",false),("json","print machine-readable JSON",true)],
  "requests list"=>vec![("game","only this game",false),("json","print machine-readable JSON",true)],
  "requests approve"=>vec![("game","only this game",false),("label","a name to remember this device by",false)],

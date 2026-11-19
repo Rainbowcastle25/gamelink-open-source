@@ -35,10 +35,11 @@ fn manifest_url_override_is_only_enabled_in_debug_builds() {
     const IN_CHILD: &str = "GAMELINK_TEST_MANIFEST_URL_OVERRIDE";
     const OVERRIDE: &str = "https://example.org/custom-manifest.json";
     if std::env::var_os(IN_CHILD).is_some() {
+        let default_url = latest_manifest_url().unwrap();
         let expected = if cfg!(debug_assertions) {
             OVERRIDE
         } else {
-            DEFAULT_URL
+            default_url.as_str()
         };
         assert_eq!(manifest_url().unwrap().as_str(), expected);
         return;
@@ -72,6 +73,111 @@ fn oversized_feed_is_rejected_while_reading_even_when_json_is_valid() {
         Err("release metadata exceeds size limit")
     );
     assert_eq!(body.position(), MAX_MANIFEST as u64 + 1);
+}
+
+fn agent_manifest(name: &str, version: &str, binary: &[u8]) -> String {
+    let mut value = manifest(version);
+    value["artifacts"] = json!([{"name":name,"sha256":format!("{:x}", Sha256::digest(binary))}]);
+    value.to_string()
+}
+
+#[test]
+fn agent_update_requires_a_newer_signed_manifest_and_the_native_asset() {
+    let key = KeyPair::generate_unencrypted_keypair().unwrap();
+    let other = KeyPair::generate_unencrypted_keypair().unwrap();
+    let amd64 = "gamelink-agent-linux-amd64";
+    for (signer, name, version, error) in [
+        (
+            &other,
+            amd64,
+            "2.0.0",
+            "release signature verification failed",
+        ),
+        (
+            &key,
+            amd64,
+            "1.0.0",
+            "signed release is not newer than the installed agent",
+        ),
+        (
+            &key,
+            amd64,
+            "0.9.0",
+            "signed release is not newer than the installed agent",
+        ),
+        (
+            &key,
+            "gamelink-agent-linux-arm64",
+            "2.0.0",
+            "signed release has no agent for this architecture",
+        ),
+    ] {
+        let signed = signed(signer, agent_manifest(name, version, b"binary"), 1);
+        assert_eq!(
+            AgentRelease::verify(signed, vec![verifier(&key)], "1.0.0", "x86_64").err(),
+            Some(error)
+        );
+    }
+}
+
+#[test]
+fn agent_update_checks_the_binary_pin_digest_size_and_elf_architecture() {
+    let key = KeyPair::generate_unencrypted_keypair().unwrap();
+    let other = KeyPair::generate_unencrypted_keypair().unwrap();
+    let (name, _) = agent_target("x86_64").unwrap();
+    let sign = |key: &KeyPair, binary: &[u8]| {
+        minisign::sign(Some(&key.pk), &key.sk, binary, None, None)
+            .unwrap()
+            .into_string()
+    };
+    let release = |binary: &[u8]| {
+        AgentRelease::verify(
+            signed(&key, agent_manifest(name, "2.0.0", binary), 1),
+            vec![verifier(&key)],
+            "1.0.0",
+            "x86_64",
+        )
+        .unwrap()
+    };
+    let mut binary = [0; 64];
+    binary[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+    binary[18] = 62;
+    let candidate = release(&binary);
+    let signature = sign(&key, &binary);
+    assert!(candidate.verify_binary(&binary, &signature).is_ok());
+    assert_eq!(
+        candidate.verify_binary(&binary, &sign(&other, &binary)),
+        Err("release signature verification failed")
+    );
+    binary[63] = 1;
+    assert_eq!(
+        candidate.verify_binary(&binary, &signature),
+        Err("agent binary does not match the signed SHA-256 digest")
+    );
+    binary[18] = 183;
+    assert_eq!(
+        release(&binary).verify_binary(&binary, &sign(&key, &binary)),
+        Err("agent binary has the wrong Linux architecture")
+    );
+    assert_eq!(
+        read_download(std::io::repeat(0), 8, "agent binary exceeds size limit"),
+        Err("agent binary exceeds size limit")
+    );
+    assert_eq!(
+        candidate.verify_binary(&vec![0; MAX_AGENT_BINARY + 1], &signature),
+        Err("agent binary exceeds size limit")
+    );
+}
+
+#[test]
+fn staging_feed_and_redirects_use_https() {
+    assert_eq!(
+        latest_manifest_url().unwrap().as_str(),
+        "https://github.com/Rainbowcastle25/gamelink-open-source/releases/latest/download/release-manifest.json"
+    );
+    for target in ["http://github.com/game", "https://user@github.com/game"] {
+        assert!(https_url(target).is_err());
+    }
 }
 
 fn corrupt_attempt_metadata(dir: &Path) {
