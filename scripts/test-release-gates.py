@@ -27,6 +27,12 @@ def fixture_tauri(pin):
 
 
 class ReleaseGates(unittest.TestCase):
+    def test_verifier_requires_exactly_one_passing_test(self):
+        release.require_one_passed_test("running 1 test\ntest result: ok. 1 passed; 0 failed; 0 ignored\n")
+        for output in ("test result: ok. 0 passed; 0 failed; 0 ignored\n", "", "test result: ok. 2 passed; 0 failed;\n"):
+            with self.assertRaises(RuntimeError):
+                release.require_one_passed_test(output)
+
     @classmethod
     def setUpClass(cls):
         scratch = release.ROOT / ".tools"

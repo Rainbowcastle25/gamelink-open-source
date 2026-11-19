@@ -278,14 +278,25 @@ def sign_release(version, severity, linux_only, work, out, tools, pins, keys, re
     print(f"Verified release assets: {out}", flush=True)
 
 
+VERIFIER_TEST = "update::tests::verifies_release_pipeline_manifest"
+
+
+def require_one_passed_test(output):
+    """A renamed or filtered-out test must not count as a passing verification."""
+    if not re.search(r"^test result: ok\. 1 passed; 0 failed;", output, re.M):
+        raise RuntimeError(f"expected exactly one passing {VERIFIER_TEST} run")
+
+
 def verify_release(out, pins, env):
-    run("cargo", "test", "--manifest-path", "core/Cargo.toml", "--locked", "-p", "gamelink-core",
-        "--features", "update-notifications", "--lib",
-        "update::tests::verifies_release_pipeline_manifest", "--", "--ignored", "--exact",
-        env=env | {
-            "GAMELINK_UPDATE_PUBLIC_KEYS": " ".join(pins[0]),
-            "GAMELINK_TEST_SIGNED_RELEASE_DIR": str(out),
-        })
+    result = run("cargo", "test", "--manifest-path", "core/Cargo.toml", "--locked", "-p", "gamelink-core",
+                 "--features", "update-notifications", "--lib",
+                 VERIFIER_TEST, "--", "--ignored", "--exact",
+                 env=env | {
+                     "GAMELINK_UPDATE_PUBLIC_KEYS": " ".join(pins[0]),
+                     "GAMELINK_TEST_SIGNED_RELEASE_DIR": str(out),
+                 }, stdout=subprocess.PIPE, text=True)
+    sys.stdout.write(result.stdout)
+    require_one_passed_test(result.stdout)
     run("sha256sum", "--check", "--strict", "SHA256SUMS", cwd=out, env=env)
 
 
