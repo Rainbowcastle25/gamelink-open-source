@@ -244,8 +244,26 @@ func TestRustAgentSubprocessApprovalKeepsExistingTCPSession(t *testing.T) {
 	if env.addr("mc") != addr {
 		t.Fatal("approval changed the game's Tailcat address")
 	}
-	echo(connect(bob), "newly approved bob")
+	env.waitApproved("mc", 2)
 	echo(live, "alice after approval on the same connection")
+	bobConn := connect(bob)
+	echo(bobConn, "newly approved bob")
+
+	env.revoke("mc", bobPub)
+	bobConn.SetReadDeadline(time.Now().Add(20 * time.Second))
+	if _, err := bobConn.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("Bob's TCP session was still open after revocation: %v", err)
+	}
+	env.waitApproved("mc", 1)
+
+	opts := joinOpts(addr, games.TCP, 25565, bob)
+	opts.ConnectTimeout = 4 * time.Second
+	if tun, err := transport.Join(context.Background(), opts); err == nil {
+		tun.Stop()
+		t.Fatal("revoked Bob was able to rejoin the TCP game")
+	} else if !errors.Is(err, transport.ErrNoResponse) {
+		t.Fatalf("revoked Bob's TCP join: got %v, want ErrNoResponse", err)
+	}
 }
 
 // Revoking a device must end its live session and block new ones, while the

@@ -72,7 +72,7 @@ impl Runtime<'_> {
         let out = self.reduce(Event::Shutdown)?;
         self.effects(out.effects, &BTreeMap::new())
     }
-    fn reconcile(&mut self) -> Result<()> {
+    fn observe_config(&mut self) -> Result<(Event, BTreeMap<String, Value>)> {
         let cfg = config::dispatch(
             "config.agent_load",
             json!({"path":self.dir.join("agent.json")}),
@@ -135,9 +135,31 @@ impl Runtime<'_> {
                 .map_err(|_| "invalid host observation")?
             }
         };
-        let out = self.reduce(event)?;
+        Ok((event, games))
+    }
+
+    fn reconcile(&mut self) -> Result<()> {
+        let (event, mut games) = self.observe_config()?;
+        let mut change = supervisor::reduce(self.state.clone(), event)?;
+        // Request approval takes the request lock before the config lock.
         self.publish_requests();
-        self.effects(out.effects, &games)?;
+        {
+            let _lock;
+            if change
+                .effects
+                .iter()
+                .any(|e| matches!(e, Effect::Allow { .. }))
+            {
+                // Re-read both config and keys before granting access. Keep
+                // the lock through the allow and any replacement start.
+                _lock = config::lock_mutations(self.dir)?;
+                let event;
+                (event, games) = self.observe_config()?;
+                change = supervisor::reduce(self.state.clone(), event)?;
+            }
+            self.state = change.state;
+            self.effects(change.effects, &games)?;
+        }
         let final_state = self.reduce(Event::Commit)?;
         self.games = final_state
             .games
@@ -261,6 +283,7 @@ mod tests {
         stats: Value,
         logs: Vec<Value>,
         on_logs: Option<Box<dyn FnMut()>>,
+        on_requests: Option<Box<dyn FnOnce()>>,
     }
     type Shared = Rc<RefCell<Script>>;
 
@@ -271,6 +294,7 @@ mod tests {
             stats: json!({}),
             logs: vec![],
             on_logs: None,
+            on_requests: None,
         }))
     }
     // Strict: any bridge method the test did not script is a failure, so a stray
@@ -287,7 +311,12 @@ mod tests {
             match method.as_str() {
                 "start" | "stop" | "allow" | "shutdown" | "init" => Ok(Value::Null),
                 "stats" => Ok(s.stats.clone()),
-                "requests" => Ok(json!({})),
+                "requests" => {
+                    if let Some(f) = s.on_requests.take() {
+                        f();
+                    }
+                    Ok(json!({}))
+                }
                 "logs" => {
                     if let Some(f) = s.on_logs.as_mut() {
                         f();
@@ -486,6 +515,30 @@ mod tests {
         assert_eq!(start["approved"], json!([KEY_A, KEY_B]));
         assert_eq!(runtime_json(dir.path())["games"][0]["state"], "serving");
         assert_eq!(runtime_json(dir.path())["games"][0]["approved"], 2);
+    }
+
+    #[test]
+    fn revoked_device_is_never_added_from_a_stale_snapshot() {
+        let dir = dir_with_game(&[KEY_A]);
+        let script = script();
+        let _bridge = fake(&script);
+        let mut rt = runtime(dir.path());
+        rt.reconcile().unwrap();
+
+        write_agent(dir.path(), &[KEY_A, KEY_B]);
+        let path = dir.path().join("agent.json");
+        // Requests are sampled after the config read and before applying effects.
+        script.borrow_mut().on_requests = Some(Box::new(move || {
+            config::dispatch(
+                "config.agent_mutate",
+                json!({"path":path,"action":"revoke","id":"x","publicKey":KEY_B}),
+            )
+            .unwrap();
+        }));
+        rt.reconcile().unwrap();
+
+        assert_eq!(lifecycle(&script), ["start:\"x\":1"]);
+        assert_eq!(runtime_json(dir.path())["games"][0]["approved"], 1);
     }
 
     // TestSupervisorBridgeChangeRequestsRestart (device/key variants)

@@ -2,9 +2,9 @@
 use crate::{pure, storage};
 use serde_json::{json, Value};
 use std::{
-    fs,
+    fs::{self, TryLockError},
     path::Path,
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 fn text(v: &Value, k: &str) -> String {
     v[k].as_str().unwrap_or("").to_owned()
@@ -653,42 +653,26 @@ fn sync_managed(dir: &Path, cfg: &mut Value, input: &Value) -> Result<Value, Str
     }
     Ok(json!({"origin":origin,"discovered":seen.len()}))
 }
-struct Lock(std::path::PathBuf);
-impl Drop for Lock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
+/// Serializes changes to agent.json and its game key files.
+pub fn lock_mutations(dir: &Path) -> Result<fs::File, String> {
+    // Keep the file in place so everyone locks the same file. The OS releases
+    // the lock when the handle closes, including if the process exits.
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
     }
-}
-fn lock(dir: &Path) -> Result<Lock, String> {
-    let path = dir.join("agent.lock");
+    let file = opts
+        .open(dir.join("agent.lock"))
+        .map_err(|e| e.to_string())?;
     for _ in 0..100 {
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(50)),
+            Err(TryLockError::Error(e)) => return Err(e.to_string()),
         }
-        match opts.open(&path) {
-            Ok(mut f) => {
-                use std::io::Write;
-                let _ = write!(f, "{}", std::process::id());
-                return Ok(Lock(path));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                if fs::metadata(&path)
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| SystemTime::now().duration_since(t).ok())
-                    .is_some_and(|age| age > Duration::from_secs(30))
-                {
-                    let _ = fs::remove_file(&path);
-                    continue;
-                }
-            }
-            Err(e) => return Err(e.to_string()),
-        }
-        std::thread::sleep(Duration::from_millis(50));
     }
     Err(format!(
         "could not lock {} (another gamelink-agent command is running?)",
@@ -909,7 +893,7 @@ pub fn dispatch(method: &str, input: Value) -> Result<Value, String> {
                 storage::ensure_dir(dir)?;
                 storage::ensure_dir(&dir.join("keys"))?
             }
-            let _lock = lock(dir)?;
+            let _lock = lock_mutations(dir)?;
             let mut cfg = if action == "init" {
                 if Path::new(&path).exists() {
                     return Err(format!("{path} already exists; refusing to overwrite"));
@@ -1931,7 +1915,7 @@ mod behaviour {
         let got = load(&dir).unwrap();
         assert_eq!(got["games"][0]["devices"][0]["label"], "updated");
         assert_eq!(got["games"][1]["devices"][0]["label"], "updated");
-        assert!(!dir.join("agent.lock").exists(), "lock leaked");
+        drop(lock_mutations(&dir).expect("lock leaked"));
     }
 
     // TestExampleAgentConfigLoads
@@ -2046,7 +2030,7 @@ mod behaviour {
             mutate(&dir, "explode", "", json!({})).unwrap_err(),
             "unknown agent mutation"
         );
-        assert!(!dir.join("agent.lock").exists());
+        drop(lock_mutations(&dir).expect("lock leaked"));
     }
 
     // TestAgentStoreRejectsInvalid
@@ -2226,15 +2210,33 @@ mod behaviour {
     }
 
     #[test]
-    fn stale_lock_files_are_replaced() {
+    fn a_live_mutation_lock_cannot_be_stolen_when_its_file_ages() {
+        let (_root, dir) = fresh_agent();
+        let guard = lock_mutations(&dir).unwrap();
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(dir.join("agent.lock"))
+            .unwrap();
+        file.set_modified(std::time::SystemTime::now() - Duration::from_secs(120))
+            .unwrap();
+        assert!(
+            lock_mutations(&dir).is_err(),
+            "active mutation lock was stolen"
+        );
+        drop(guard);
+        lock_mutations(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_leftover_lock_file_does_not_block_mutations() {
         let (_root, dir) = fresh_agent();
         let lock_path = dir.join("agent.lock");
         let file = fs::File::create(&lock_path).unwrap();
-        file.set_modified(SystemTime::now() - Duration::from_secs(120))
+        file.set_modified(std::time::SystemTime::now() - Duration::from_secs(120))
             .unwrap();
         drop(file);
         add_game(&dir, json!({"type":"factorio"})).unwrap();
-        assert!(!lock_path.exists());
+        drop(lock_mutations(&dir).expect("lock leaked"));
     }
 
     #[test]

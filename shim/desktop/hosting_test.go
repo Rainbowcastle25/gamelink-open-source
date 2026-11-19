@@ -116,7 +116,7 @@ func TestDesktopHostAccessAndRevocation(t *testing.T) {
 			t.Fatalf("desktop host did not forward to the loopback game: %v", err)
 		}
 	}
-	echoThrough := func(device key.NodePrivate) net.Conn {
+	echoThrough := func(device key.NodePrivate) (net.Conn, *transport.Tunnel) {
 		t.Helper()
 		tun, err := join(device)
 		if err != nil {
@@ -129,7 +129,7 @@ func TestDesktopHostAccessAndRevocation(t *testing.T) {
 		}
 		t.Cleanup(func() { c.Close() })
 		echoOn(c)
-		return c
+		return c, tun
 	}
 
 	noResponse := func(device key.NodePrivate) {
@@ -171,7 +171,7 @@ func TestDesktopHostAccessAndRevocation(t *testing.T) {
 	if _, err := start(2, echo.Addr().String(), alice.Public()); err != nil {
 		t.Fatal(err)
 	}
-	aliceConn := echoThrough(alice)
+	aliceConn, _ := echoThrough(alice)
 	noResponse(stranger)
 	peers := snapshot()
 	expectRequest(peers, stranger.Public())
@@ -186,7 +186,8 @@ func TestDesktopHostAccessAndRevocation(t *testing.T) {
 	}
 	noResponse(bob)
 	must(allow(2, bob.Public()))
-	echoThrough(bob).Close()
+	_, bobTunnel := echoThrough(bob)
+	bobTunnel.Stop()
 	echoOn(aliceConn)
 	if snapshot().Connected[bob.Public().String()].IsZero() {
 		t.Fatal("missing gameplay timestamp for the live-approved device")
@@ -203,7 +204,8 @@ func TestDesktopHostAccessAndRevocation(t *testing.T) {
 	}
 	must(map[string]any{"method": "host_stop", "id": "game", "generation": 2}) // stale stop
 	noResponse(alice)
-	echoThrough(bob).Close()
+	_, bobTunnel = echoThrough(bob)
+	bobTunnel.Stop()
 	must(map[string]any{"method": "host_stop", "id": "game", "generation": 3})
 
 	t.Run("LANExpiryRefusesDialAfterSuspendBeforePoll", func(t *testing.T) {
