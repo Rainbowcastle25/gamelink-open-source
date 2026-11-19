@@ -239,9 +239,12 @@ impl Hosting {
         Ok((event, scopes))
     }
 
-    fn reconcile(&mut self) -> Result<()> {
-        let loaded = self.load_games();
-        let lan_live = self.observe_lan(loaded.as_ref().unwrap_or(&Value::Null));
+    fn observe_config(
+        &mut self,
+        loaded: Result<Value>,
+        worlds: &BTreeSet<LanWorld>,
+    ) -> (Event, Value, BTreeSet<String>, bool) {
+        let lan_live = self.live_lan(loaded.as_ref().unwrap_or(&Value::Null), worlds);
         let loaded = loaded.and_then(|games| Ok((self.observe(&games, &lan_live)?, games)));
         let ((event, scopes), games, invalid) = match loaded {
             Ok((observation, games)) => (observation, games, false),
@@ -257,27 +260,49 @@ impl Hosting {
             ),
         };
         self.scopes = scopes;
+        (event, games, lan_live, invalid)
+    }
+
+    fn reconcile(&mut self) -> Result<()> {
+        let loaded = self.load_games();
+        let worlds = self.observe_lan(loaded.as_ref().unwrap_or(&Value::Null));
+        let (event, mut games, mut lan_live, mut invalid) = self.observe_config(loaded, &worlds);
         // Collect before closing a generation, keeping requests for the same
         // identity across approval, revocation and destination changes.
         let sampled = self.sample_peers();
-        let change = supervisor::reduce(self.state.clone(), event)?;
-        // All old generations complete closure before any replacement starts.
-        self.stop_generations(&change.effects)?;
-        self.state = change.state;
-        for effect in change.effects {
-            if let Effect::Start { id, generation } = effect {
-                let error = self.start(&games, &id, generation).err();
-                self.state = supervisor::reduce(
-                    self.state.clone(),
-                    Event::StartCompleted {
-                        id,
-                        generation,
-                        error,
-                        now_ns: self.now_ns(),
-                    },
-                )?
-                .state;
+        let mut change = supervisor::reduce(self.state.clone(), event)?;
+        loop {
+            if !change.has_grants() {
+                self.stop_generations(&change.effects)?;
+                self.state = change.state;
+                break;
             }
+            let Some(lock) = config::try_lock_mutations(&self.dir)? else {
+                self.stop_generations(&change.effects)?;
+                self.save_connections();
+                return sampled;
+            };
+            let mut event;
+            (event, games, lan_live, invalid) = self.observe_config(self.load_games(), &worlds);
+            change = supervisor::reduce(self.state.clone(), event)?;
+            if !change.has_grants() {
+                drop(lock);
+                continue;
+            }
+            if change.has_stops() {
+                // Close all old generations before replanning any grants.
+                drop(lock);
+                self.stop_generations(&change.effects)?;
+            } else {
+                self.state = change.state;
+                let followups = self.apply_grants(change.effects, &games)?;
+                drop(lock);
+                if !self.stop_generations(&followups)? {
+                    break;
+                }
+            }
+            (event, games, lan_live, invalid) = self.observe_config(self.load_games(), &worlds);
+            change = supervisor::reduce(self.state.clone(), event)?;
         }
         let current = supervisor::reduce(self.state.clone(), Event::Commit)?;
         self.state = current.state;
@@ -298,23 +323,61 @@ impl Hosting {
         sampled
     }
 
-    fn stop_generations(&mut self, effects: &[Effect]) -> Result<()> {
+    fn apply_grants(&mut self, effects: Vec<Effect>, games: &Value) -> Result<Vec<Effect>> {
+        let mut followups = Vec::new();
+        for effect in effects {
+            let completed = match effect {
+                Effect::Start { id, generation } => {
+                    let error = self.start(games, &id, generation).err();
+                    Event::StartCompleted {
+                        id,
+                        generation,
+                        error,
+                        now_ns: self.now_ns(),
+                    }
+                }
+                Effect::Allow {
+                    id,
+                    generation,
+                    approved,
+                } => {
+                    let error = bridge::call(
+                        json!({"method":"host_allow","id":id,"generation":generation,"approved":approved}),
+                    )
+                    .err();
+                    Event::AllowCompleted {
+                        id,
+                        generation,
+                        error,
+                    }
+                }
+                Effect::Stop { .. } | Effect::Log { .. } => continue,
+            };
+            followups.extend(self.state.complete_grant(completed)?);
+        }
+        Ok(followups)
+    }
+
+    fn stop_generations(&mut self, effects: &[Effect]) -> Result<bool> {
+        let mut stopped = false;
         for effect in effects {
             if let Effect::Stop { id, generation } = effect {
                 let peers =
                     bridge::call(json!({"method":"host_stop","id":id,"generation":generation}))?;
                 self.record_connections(id, &peers["connected"]);
                 self.running_identities.remove(id);
+                self.state.record_stop(id, *generation);
+                stopped = true;
             }
         }
-        Ok(())
+        Ok(stopped)
     }
 
     pub fn shutdown(&mut self) -> Result<()> {
         let change = supervisor::reduce(std::mem::take(&mut self.state), Event::Shutdown)?;
         let stopped = self.stop_generations(&change.effects);
         self.save_connections();
-        stopped
+        stopped.map(|_| ())
     }
 
     fn start(&mut self, games: &Value, id: &str, generation: u64) -> Result<()> {
@@ -401,7 +464,7 @@ impl Hosting {
         }
     }
 
-    fn observe_lan(&mut self, games: &Value) -> BTreeSet<String> {
+    fn observe_lan(&mut self, games: &Value) -> BTreeSet<LanWorld> {
         let shared = |id: &str| {
             rows(games)
                 .iter()
@@ -425,13 +488,23 @@ impl Hosting {
             return BTreeSet::new();
         };
         self.lan_open = true;
-        self.lan_ports
+        worlds
+    }
+
+    fn live_lan(&self, games: &Value, worlds: &BTreeSet<LanWorld>) -> BTreeSet<String> {
+        rows(games)
             .iter()
-            .filter_map(|(id, &port)| {
-                let name = text(shared(id)?, "name").into();
+            .filter_map(|game| {
+                let id = text(game, "id");
+                let &port = self.lan_ports.get(id)?;
+                let dest = text(game, "dest").parse::<SocketAddrV4>().ok()?;
+                if !is_lan(game) || game["disabled"] == true || dest.port() != port {
+                    return None;
+                }
+                let name = text(game, "name").into();
                 worlds
                     .contains(&LanWorld { name, port })
-                    .then(|| id.clone())
+                    .then(|| id.to_owned())
             })
             .collect()
     }
@@ -557,13 +630,21 @@ impl Hosting {
     fn mutate(&mut self, action: &str, mut input: Value) -> Result<()> {
         input["action"] = json!(action);
         input["path"] = json!(self.path());
+        let approval_id = (action == "approve").then(|| text(&input, "id").to_owned());
         let result = config::dispatch("config.agent_mutate", input);
         // Observe even a failed write. The key file or config may have changed.
         self.refresh();
         result?;
-        self.issue
-            .as_ref()
-            .map_or(Ok(()), |issue| Err(issue.clone()))
+        if let Some(issue) = &self.issue {
+            return Err(issue.clone());
+        }
+        if let Some(status) = approval_id
+            .and_then(|id| self.statuses.get(&id))
+            .filter(|status| status["state"] == "error")
+        {
+            return Err(text(status, "detail").into());
+        }
+        Ok(())
     }
 
     fn create(&mut self, request: &Value, region: Option<&Value>) -> Result<Value> {
@@ -1036,6 +1117,253 @@ mod tests {
         let scans = count("lan_scan");
         assert_eq!(snapshot(&mut hosting)["enabled"], false);
         assert_eq!(count("lan_scan"), scans, "nothing shared and Host closed");
+    }
+
+    #[test]
+    fn live_approval_uses_the_current_generation_and_restarts_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut hosting = Hosting::new(dir.path().join("hosting"));
+        let lock_path = hosting.dir.join("agent.lock");
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let calls = requests.clone();
+        let fail_allow = Rc::new(std::cell::Cell::new(false));
+        let reject_allow = fail_allow.clone();
+        let fail_stop = Rc::new(std::cell::Cell::new(false));
+        let reject_stop = fail_stop.clone();
+        let _fake = bridge::fake::install(move |request| {
+            let method = text(request, "method");
+            if matches!(method, "host_start" | "host_stop" | "host_allow") {
+                calls.borrow_mut().push(request.clone());
+            }
+            Ok(match method {
+                "host_generate" => {
+                    let secret = config::dispatch("config.new_id", Value::Null)?;
+                    json!({"privateKey":secret,"presharedKey":secret})
+                }
+                "host_allow" if reject_allow.get() => return Err("test allow failure".into()),
+                "host_stop" if reject_stop.get() => return Err("test stop failure".into()),
+                "host_stop" => {
+                    let lock = std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&lock_path)
+                        .unwrap();
+                    lock.try_lock().expect("held the config lock during stop");
+                    Value::Null
+                }
+                _ => Value::Null,
+            })
+        });
+        let game = hosting.command(
+            &json!({"method":"createHostedGame","game":"minecraft-java","name":"Game","port":25565}),
+            Some(&json!({"RegionID":1,"Nodes":[{}]})),
+        ).unwrap();
+        let id = text(&game, "id");
+        let approve = |key: &str| json!({"method":"approveHostedDevice","id":id,"publicKey":key,"label":"Friend"});
+        let alice = generated_public_key();
+        let bob = generated_public_key();
+        hosting.command(&approve(&alice), None).unwrap();
+        requests.borrow_mut().clear();
+        hosting.command(&approve(&bob), None).unwrap();
+        assert_eq!(
+            *requests.borrow(),
+            [json!({"method":"host_allow","id":id,"generation":2,"approved":[bob]})]
+        );
+        assert_eq!(hosting.view()[0]["state"], "serving");
+
+        requests.borrow_mut().clear();
+        fail_allow.set(true);
+        let carol = generated_public_key();
+        hosting.command(&approve(&carol), None).unwrap();
+        let observed = requests.borrow();
+        assert_eq!(observed.len(), 3);
+        assert_eq!(
+            observed[0],
+            json!({"method":"host_allow","id":id,"generation":2,"approved":[carol]})
+        );
+        assert_eq!(
+            observed[1],
+            json!({"method":"host_stop","id":id,"generation":2})
+        );
+        assert_eq!(observed[2]["method"], "host_start");
+        assert_eq!(observed[2]["generation"], 3);
+        assert_eq!(observed[2]["approved"], json!([alice, bob, carol]));
+        drop(observed);
+
+        requests.borrow_mut().clear();
+        fail_stop.set(true);
+        let saved = storage::read_bounded(&hosting.path()).unwrap();
+        assert_eq!(
+            hosting
+                .command(&approve(&generated_public_key()), None)
+                .unwrap_err(),
+            "test stop failure"
+        );
+        assert_eq!(requests.borrow().len(), 2);
+        // The failed update may have applied. Even reverting the config
+        // requires closing that generation before it can serve again.
+        storage::write_atomic(&hosting.path(), &saved).unwrap();
+        fail_stop.set(false);
+        hosting.reconcile().unwrap();
+        let observed = requests.borrow();
+        assert_eq!(observed.len(), 4);
+        assert_eq!(
+            observed[2],
+            json!({"method":"host_stop","id":id,"generation":3})
+        );
+        assert_eq!(observed[3]["method"], "host_start");
+        assert_eq!(observed[3]["generation"], 4);
+        assert_eq!(observed[3]["approved"], json!([alice, bob, carol]));
+    }
+
+    #[test]
+    fn revoked_hosted_device_is_never_added_from_a_stale_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut hosting = Hosting::new(dir.path().join("hosting"));
+        let path = hosting.path();
+        let revoke = Rc::new(RefCell::new(None));
+        let pending_revoke = revoke.clone();
+        let _fake = bridge::fake::install(move |request| match text(request, "method") {
+            "host_generate" => {
+                let secret = config::dispatch("config.new_id", Value::Null)?;
+                Ok(json!({"privateKey":secret,"presharedKey":secret}))
+            }
+            "host_peers" => {
+                // Peers are sampled after the config read and before applying effects.
+                if let Some(mutation) = pending_revoke.borrow_mut().take() {
+                    config::dispatch("config.agent_mutate", mutation)?;
+                }
+                Ok(Value::Null)
+            }
+            "host_allow" => panic!("allowed a device from a stale snapshot"),
+            _ => Ok(Value::Null),
+        });
+        let game = hosting.command(
+            &json!({"method":"createHostedGame","game":"minecraft-java","name":"Game","port":25565}),
+            Some(&json!({"RegionID":1,"Nodes":[{}]})),
+        ).unwrap();
+        let id = text(&game, "id");
+        let alice = generated_public_key();
+        let bob = generated_public_key();
+        hosting
+            .command(
+                &json!({"method":"approveHostedDevice","id":id,"publicKey":alice,"label":"Alice"}),
+                None,
+            )
+            .unwrap();
+
+        config::dispatch(
+            "config.agent_mutate",
+            json!({"path":path,"action":"approve","id":id,"publicKey":bob,"now":chrono::Utc::now()}),
+        )
+        .unwrap();
+        *revoke.borrow_mut() = Some(json!({"path":path,"action":"revoke","id":id,"publicKey":bob}));
+        hosting.reconcile().unwrap();
+
+        let view = hosting.view();
+        assert_eq!(view[0]["state"], "serving");
+        assert_eq!(rows(&view[0]["approved"]).len(), 1);
+        assert_eq!(view[0]["approved"][0]["publicKey"], alice);
+    }
+
+    #[test]
+    fn revoked_first_hosted_approval_is_never_started_from_a_stale_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut hosting = Hosting::new(dir.path().join("hosting"));
+        let path = hosting.path();
+        let revoke = Rc::new(RefCell::new(None));
+        let pending_revoke = revoke.clone();
+        let _fake = bridge::fake::install(move |request| match text(request, "method") {
+            "host_generate" => {
+                let secret = config::dispatch("config.new_id", Value::Null)?;
+                Ok(json!({"privateKey":secret,"presharedKey":secret}))
+            }
+            "host_peers" => {
+                if let Some(mutation) = pending_revoke.borrow_mut().take() {
+                    config::dispatch("config.agent_mutate", mutation)?;
+                }
+                Ok(Value::Null)
+            }
+            "host_start" => {
+                assert_eq!(request["approved"], json!([]));
+                Ok(Value::Null)
+            }
+            "host_allow" => panic!("allowed a device from a stale snapshot"),
+            _ => Ok(Value::Null),
+        });
+        let game = hosting.command(
+            &json!({"method":"createHostedGame","game":"minecraft-java","name":"Game","port":25565}),
+            Some(&json!({"RegionID":1,"Nodes":[{}]})),
+        ).unwrap();
+        let id = text(&game, "id");
+        let alice = generated_public_key();
+        config::dispatch(
+            "config.agent_mutate",
+            json!({"path":path,"action":"approve","id":id,"publicKey":alice,"now":chrono::Utc::now()}),
+        )
+        .unwrap();
+        *revoke.borrow_mut() =
+            Some(json!({"path":path,"action":"revoke","id":id,"publicKey":alice}));
+        hosting.reconcile().unwrap();
+
+        assert_eq!(hosting.view()[0]["state"], "inactive");
+        assert_eq!(hosting.view()[0]["approved"], json!([]));
+    }
+
+    #[test]
+    fn failed_live_approval_and_restart_report_an_error_and_keep_the_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut hosting = Hosting::new(dir.path().join("hosting"));
+        let batch = Rc::new(RefCell::new(Value::Null));
+        let knocks = batch.clone();
+        let fail = Rc::new(std::cell::Cell::new(false));
+        let reject = fail.clone();
+        let _fake = bridge::fake::install(move |request| match text(request, "method") {
+            "host_generate" => {
+                let secret = config::dispatch("config.new_id", Value::Null)?;
+                Ok(json!({"privateKey":secret,"presharedKey":secret}))
+            }
+            "host_peers" => Ok(std::mem::take(&mut *knocks.borrow_mut())),
+            "host_allow" | "host_start" if reject.get() => Err("test tunnel failure".into()),
+            _ => Ok(Value::Null),
+        });
+        let game = hosting.command(
+            &json!({"method":"createHostedGame","game":"minecraft-java","name":"Game","port":25565}),
+            Some(&json!({"RegionID":1,"Nodes":[{}]})),
+        ).unwrap();
+        let id = text(&game, "id");
+        hosting.command(
+            &json!({"method":"approveHostedDevice","id":id,"publicKey":generated_public_key(),"label":"Alice"}),
+            None,
+        ).unwrap();
+
+        let bob = generated_public_key();
+        let now = chrono::Utc::now();
+        *batch.borrow_mut() = json!({(id):{"connected":{},"requests":[{
+            "publicKey":bob,"firstSeen":now,"lastSeen":now,"attempts":1
+        }]}});
+        hosting.refresh();
+        let request = hosting.view()[0]["pending"][0]["id"].clone();
+        assert!(request.is_u64());
+
+        fail.set(true);
+        let error = hosting
+            .command(
+                &json!({"method":"approveHostedRequest","id":id,"requestId":request,"label":"Bob"}),
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(error, "Could not start the Tailcat game tunnel");
+        assert_eq!(hosting.view()[0]["state"], "error");
+        assert_eq!(
+            hosting.load_games().unwrap()[0]["devices"][1]["publicKey"],
+            bob
+        );
+
+        fail.set(false);
+        hosting.clock -= Duration::from_secs(11);
+        hosting.refresh();
+        assert_eq!(hosting.view()[0]["state"], "serving");
+        assert_eq!(hosting.view()[0]["approved"][1]["publicKey"], bob);
     }
 
     fn generated_public_key() -> String {

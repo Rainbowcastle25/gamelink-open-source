@@ -104,7 +104,19 @@ func TestDesktopHostAccessAndRevocation(t *testing.T) {
 			PreferPort: 25565,
 		})
 	}
-	echoThrough := func(device key.NodePrivate) net.Conn {
+	echoOn := func(c net.Conn) {
+		t.Helper()
+		c.SetDeadline(time.Now().Add(5 * time.Second))
+		payload := []byte("desktop-hosted echo")
+		if _, err := c.Write(payload); err != nil {
+			t.Fatal(err)
+		}
+		got := make([]byte, len(payload))
+		if _, err := io.ReadFull(c, got); err != nil || string(got) != string(payload) {
+			t.Fatalf("desktop host did not forward to the loopback game: %v", err)
+		}
+	}
+	echoThrough := func(device key.NodePrivate) (net.Conn, *transport.Tunnel) {
 		t.Helper()
 		tun, err := join(device)
 		if err != nil {
@@ -116,16 +128,8 @@ func TestDesktopHostAccessAndRevocation(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { c.Close() })
-		c.SetDeadline(time.Now().Add(5 * time.Second))
-		payload := []byte("desktop-hosted echo")
-		if _, err := c.Write(payload); err != nil {
-			t.Fatal(err)
-		}
-		got := make([]byte, len(payload))
-		if _, err := io.ReadFull(c, got); err != nil || string(got) != string(payload) {
-			t.Fatal("desktop host did not forward to the loopback game")
-		}
-		return c
+		echoOn(c)
+		return c, tun
 	}
 
 	noResponse := func(device key.NodePrivate) {
@@ -148,6 +152,12 @@ func TestDesktopHostAccessAndRevocation(t *testing.T) {
 			t.Fatal("missing refusal batch for the retrying device")
 		}
 	}
+	allow := func(generation uint64, approved ...key.NodePublic) map[string]any {
+		return map[string]any{"method": "host_allow", "id": "game", "generation": generation, "approved": approved}
+	}
+	if _, err := invoke(allow(1, alice.Public())); err == nil {
+		t.Fatal("knock-only server accepted an in-place approval")
+	}
 	noResponse(alice)
 	knocks := snapshot()
 	expectRequest(knocks, alice.Public())
@@ -158,15 +168,29 @@ func TestDesktopHostAccessAndRevocation(t *testing.T) {
 		t.Fatal("request batch was delivered twice")
 	}
 	must(map[string]any{"method": "host_stop", "id": "game", "generation": 1})
-	if _, err := start(2, echo.Addr().String(), alice.Public(), bob.Public()); err != nil {
+	if _, err := start(2, echo.Addr().String(), alice.Public()); err != nil {
 		t.Fatal(err)
 	}
-	aliceConn := echoThrough(alice)
+	aliceConn, _ := echoThrough(alice)
 	noResponse(stranger)
 	peers := snapshot()
 	expectRequest(peers, stranger.Public())
 	if peers.Connected[alice.Public().String()].IsZero() || !peers.Connected[stranger.Public().String()].IsZero() {
 		t.Fatal("incorrect authenticated gameplay timestamps")
+	}
+	if _, err := invoke(allow(1, bob.Public())); err == nil {
+		t.Fatal("approved a device against a stale generation")
+	}
+	if _, err := invoke(allow(2, bob.Public(), key.NodePublic{})); err == nil {
+		t.Fatal("accepted a batch containing an invalid key")
+	}
+	noResponse(bob)
+	must(allow(2, bob.Public()))
+	_, bobTunnel := echoThrough(bob)
+	bobTunnel.Stop()
+	echoOn(aliceConn)
+	if snapshot().Connected[bob.Public().String()].IsZero() {
+		t.Fatal("missing gameplay timestamp for the live-approved device")
 	}
 	must(map[string]any{"method": "host_stop", "id": "game", "generation": 2})
 	aliceConn.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -180,7 +204,8 @@ func TestDesktopHostAccessAndRevocation(t *testing.T) {
 	}
 	must(map[string]any{"method": "host_stop", "id": "game", "generation": 2}) // stale stop
 	noResponse(alice)
-	echoThrough(bob).Close()
+	_, bobTunnel = echoThrough(bob)
+	bobTunnel.Stop()
 	must(map[string]any{"method": "host_stop", "id": "game", "generation": 3})
 
 	t.Run("LANExpiryRefusesDialAfterSuspendBeforePoll", func(t *testing.T) {

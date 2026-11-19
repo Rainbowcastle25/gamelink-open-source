@@ -201,8 +201,73 @@ func TestEmptyAllowlistNeverExposesGame(t *testing.T) {
 	}
 }
 
-// Revocation: removing a device must end its live session and block new ones,
-// without disturbing other approved devices.
+func TestRustAgentSubprocessApprovalKeepsExistingTCPSession(t *testing.T) {
+	env := newAgentEnv(t, startRelay(t))
+	env.addGame("mc", games.MinecraftJava, games.TCP, 25565, tcpEcho(t))
+	alice, alicePub := newKey()
+	bob, bobPub := newKey()
+	env.approve("mc", alicePub, "alice")
+	env.serve()
+	addr := env.addr("mc")
+
+	connect := func(device key.NodePrivate) net.Conn {
+		t.Helper()
+		opts := joinOpts(addr, games.TCP, 25565, device)
+		opts.AutoReconnect = false
+		tun, err := transport.Join(context.Background(), opts)
+		if err != nil {
+			t.Fatalf("approved device could not join: %v", err)
+		}
+		t.Cleanup(tun.Stop)
+		c, err := net.DialTimeout("tcp", tun.Status().LocalAddr, 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	echo := func(c net.Conn, payload string) {
+		t.Helper()
+		c.SetDeadline(time.Now().Add(5 * time.Second))
+		if _, err := io.WriteString(c, payload); err != nil {
+			t.Fatalf("write %q: %v", payload, err)
+		}
+		got := make([]byte, len(payload))
+		if _, err := io.ReadFull(c, got); err != nil || string(got) != payload {
+			t.Fatalf("echo %q: got %q, err = %v", payload, got, err)
+		}
+	}
+	live := connect(alice)
+	echo(live, "alice before approval")
+
+	env.approve("mc", bobPub, "bob")
+	if env.addr("mc") != addr {
+		t.Fatal("approval changed the game's Tailcat address")
+	}
+	env.waitApproved("mc", 2)
+	echo(live, "alice after approval on the same connection")
+	bobConn := connect(bob)
+	echo(bobConn, "newly approved bob")
+
+	env.revoke("mc", bobPub)
+	bobConn.SetReadDeadline(time.Now().Add(20 * time.Second))
+	if _, err := bobConn.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("Bob's TCP session was still open after revocation: %v", err)
+	}
+	env.waitApproved("mc", 1)
+
+	opts := joinOpts(addr, games.TCP, 25565, bob)
+	opts.ConnectTimeout = 4 * time.Second
+	if tun, err := transport.Join(context.Background(), opts); err == nil {
+		tun.Stop()
+		t.Fatal("revoked Bob was able to rejoin the TCP game")
+	} else if !errors.Is(err, transport.ErrNoResponse) {
+		t.Fatalf("revoked Bob's TCP join: got %v, want ErrNoResponse", err)
+	}
+}
+
+// Revoking a device must end its live session and block new ones, while the
+// remaining approved devices can reconnect after the restart.
 func TestRevokedDeviceLosesAccess(t *testing.T) {
 	relay := startRelay(t)
 	echo := tcpEcho(t)

@@ -219,8 +219,10 @@ Give the owner:
 
 ## Updating and removing
 
-- **Update:** verify the new binary (step 2), install it over
-  `/usr/local/bin/gamelink-agent`, then `sudo systemctl restart gamelink-agent`.
+- **Update:** verify the new binary (step 2), run `sudo systemctl stop gamelink-agent`,
+  install it over `/usr/local/bin/gamelink-agent`, then run `sudo systemctl start gamelink-agent`.
+  Let any running agent CLI commands finish before the swap and wait until the
+  service is back up before running another.
   Approvals, invitations and game identities survive.
 - **Remove:** `sudo systemctl disable --now gamelink-agent`, then remove the
   unit and the binary. Deleting `/var/lib/gamelink-agent` destroys every game

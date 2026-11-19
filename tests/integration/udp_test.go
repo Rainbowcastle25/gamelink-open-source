@@ -3,6 +3,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -10,22 +11,6 @@ import (
 	"github.com/gamelink-project/gamelink/shim/games"
 	"github.com/gamelink-project/gamelink/shim/transport"
 )
-
-func joinUDP(t *testing.T, env *agentEnv, id string, port uint16) (*transport.Tunnel, *net.UDPAddr) {
-	t.Helper()
-	k, pub := newKey()
-	env.approve(id, pub, "udp-dev")
-	tun, err := transport.Join(context.Background(), joinOpts(env.addr(id), games.UDP, port, k))
-	if err != nil {
-		t.Fatalf("Join: %v", err)
-	}
-	t.Cleanup(tun.Stop)
-	ua, err := net.ResolveUDPAddr("udp", tun.Status().LocalAddr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return tun, ua
-}
 
 func newUDPEnv(t *testing.T, port uint16) (*agentEnv, *transport.Tunnel, *net.UDPAddr) {
 	t.Helper()
@@ -47,6 +32,74 @@ func newUDPEnv(t *testing.T, port uint16) (*agentEnv, *transport.Tunnel, *net.UD
 		t.Fatal(err)
 	}
 	return env, tun, ua
+}
+
+func TestRustAgentSubprocessApprovalKeepsExistingUDPFlow(t *testing.T) {
+	env, _, local := newUDPEnv(t, 34197)
+	dial := func(addr *net.UDPAddr) *net.UDPConn {
+		t.Helper()
+		c, err := net.DialUDP("udp", nil, addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	echo := func(c *net.UDPConn, payload string) {
+		t.Helper()
+		c.SetDeadline(time.Now().Add(5 * time.Second))
+		if _, err := c.Write([]byte(payload)); err != nil {
+			t.Fatal(err)
+		}
+		got := make([]byte, 64)
+		if n, err := c.Read(got); err != nil || string(got[:n]) != payload {
+			t.Fatalf("UDP echo %q: got %q, err = %v", payload, got[:n], err)
+		}
+	}
+	alice := dial(local)
+	echo(alice, "alice before approval")
+
+	bobKey, bobPub := newKey()
+	env.approve("fx", bobPub, "bob")
+	// Check before sending more traffic: a rebuilt flow would also echo.
+	if g := env.waitApproved("fx", 2); g.Stats.Active != 1 {
+		t.Fatal("the original UDP flow did not survive approval")
+	}
+	echo(alice, "alice after approval")
+
+	opts := joinOpts(env.addr("fx"), games.UDP, 34197, bobKey)
+	bobTunnel, err := transport.Join(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("newly approved Bob could not join: %v", err)
+	}
+	t.Cleanup(bobTunnel.Stop)
+	bobLocal, err := net.ResolveUDPAddr("udp", bobTunnel.Status().LocalAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob := dial(bobLocal)
+	echo(bob, "newly approved bob")
+
+	env.revoke("fx", bobPub)
+	if g := env.waitApproved("fx", 1); g.Stats.Active >= 2 {
+		t.Fatal("Bob's UDP flow was still active after revocation")
+	}
+	bob.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := bob.Write([]byte("bob after revocation")); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 64)
+	if n, err := bob.Read(got); err == nil {
+		t.Fatalf("Bob's UDP flow still echoed after revocation: %q", got[:n])
+	}
+
+	opts.ConnectTimeout = 4 * time.Second
+	if tun, err := transport.Join(context.Background(), opts); err == nil {
+		tun.Stop()
+		t.Fatal("revoked Bob was able to rejoin the UDP game")
+	} else if !errors.Is(err, transport.ErrNoResponse) {
+		t.Fatalf("revoked Bob's UDP join: got %v, want ErrNoResponse", err)
+	}
 }
 
 // UDP echo through the real tunnel, with datagram boundaries preserved: every

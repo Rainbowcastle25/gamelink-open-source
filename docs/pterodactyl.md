@@ -18,6 +18,8 @@ reports a running process, not proof that a game has finished loading.
 ## Configure one Wings node
 
 Install and initialize the agent as described in [getting started](getting-started.md).
+To upgrade, [stop the service, replace the binary, and start it again](agent-setup.md#updating-and-removing).
+Keep agent CLI commands idle during the swap.
 Keep its configuration and keys outside Pterodactyl's game-container volumes.
 The agent must reach the node's published gameplay allocations and the Panel
 over HTTPS. No Docker socket, container image changes, or Panel modifications

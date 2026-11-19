@@ -462,6 +462,20 @@ func (e *agentEnv) waitState(id, state string) {
 	e.t.Fatalf("game %q never reached state %q: %+v", id, state, e.lastState(id))
 }
 
+// waitApproved waits until a serving generation has applied the device change.
+func (e *agentEnv) waitApproved(id string, approved int) agentGameState {
+	e.t.Helper()
+	deadline := time.Now().Add(agentWait)
+	for time.Now().Before(deadline) {
+		if g, ok := e.gameState(id); ok && g.State == "serving" && g.Approved == approved {
+			return g
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	e.t.Fatalf("game %q never served with %d approved devices: %+v", id, approved, e.lastState(id))
+	return agentGameState{}
+}
+
 // statsAfter waits for a status publication that is certainly newer than t0
 // (runtime.json has one-second timestamps and is rewritten at least every five
 // seconds) and returns the game's row from it.
