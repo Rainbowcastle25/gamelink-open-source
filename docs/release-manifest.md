@@ -196,15 +196,19 @@ Minisign verifier pins for both versions while their packages remain in
 the repository.
 
 The same workflow runs weekly from `master` to rebuild and re-sign metadata
-from the published releases. The release index expires 60 days after its
-`Date`. The scheduled run only republishes the apt repository on Pages.
+from the published releases and republish the apt repository on Pages.
+GitHub disables scheduled workflows in public repositories after 60 days of
+repository inactivity. Open **Actions → Publish apt repository** and select
+**Enable workflow** to restore the weekly refresh. To refresh immediately,
+select **Run workflow** (`workflow_dispatch`) and choose `master`. The apt
+metadata expires 60 days after it was last signed, as recorded in the release
+index's `Date` and `Valid-Until` fields.
 
 Only the signing step receives the apt secret. It verifies `InRelease` and
 `Release.gpg` against the committed public key, then removes its temporary
 keyring. The deploy job receives the signed site and publishes it to Pages.
 Publishing requires the committed key to match the published fingerprint and
-both signatures to verify. To rebuild the repository, run the workflow
-manually from `master`. Renew the key and update the distributed keyring
+both signatures to verify. Renew the key and update the distributed keyring
 before its expiry.
 
 ## Rotate verification keys

@@ -9,6 +9,10 @@ esac
 for path in /usr/local/bin/gamelink-agent /etc/systemd/system/gamelink-agent.service \
     /etc/systemd/system/gamelink-agent-update.path /etc/systemd/system/gamelink-agent-update.service \
     /usr/local/bin/.gamelink-agent-update-helper; do
+    if [ "$path" = /etc/systemd/system/gamelink-agent.service ] &&
+        { [ "$1" = upgrade ] || [ -n "${2:-}" ]; }; then
+        continue
+    fi
     if [ -e "$path" ] || [ -L "$path" ]; then
         echo "GameLink manual installation found at $path. Migrate before installing the package:" >&2
         echo "https://github.com/Rainbowcastle25/gamelink-open-source/blob/master/docs/agent-setup.md#migrate-a-manual-install-to-apt" >&2
@@ -18,13 +22,22 @@ done
 
 if [ "$1" = upgrade ] && [ -d /run/systemd/system ]; then
     unit=gamelink-agent.service
-    case "$(systemctl show --property=ActiveState --value "$unit")" in
-        active|activating|reloading|refreshing)
-            install -m 0600 /dev/null /run/gamelink-agent-restart
-            systemctl stop "$unit"
-            ;;
-        deactivating) systemctl stop "$unit" ;;
-        inactive|failed) ;;
+    state=$(systemctl show --property=ActiveState --value "$unit") || state=
+    case "$state" in
+        inactive|failed) exit 0 ;;
+        active|activating|reloading|refreshing|deactivating) ;;
         *) echo "GameLink could not determine the service state before upgrading." >&2; exit 1 ;;
     esac
+    # deb-systemd-invoke returns success when policy-rc.d denies the stop.
+    if ! deb-systemd-invoke stop "$unit" ||
+        ! stopped=$(systemctl show --property=ActiveState --value "$unit") ||
+        { [ "$stopped" != inactive ] && [ "$stopped" != failed ]; }; then
+        echo "GameLink could not stop the service before upgrading. Check policy-rc.d and systemctl status $unit." >&2
+        exit 1
+    fi
+    if [ "$state" != deactivating ]; then
+        restart=/run/gamelink-agent-restart
+        install -m 0600 /dev/null "$restart"
+        printf '%s %s\n' "$2" "$3" > "$restart"
+    fi
 fi

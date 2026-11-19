@@ -22,17 +22,22 @@ system_id() {
 case "$1" in
     configure)
         state=/var/lib/gamelink-agent
-        if group=$(getent group gamelink); then
-            gid=$(printf '%s\n' "$group" | cut -d: -f3)
-            system_id GID "$gid" || account_collision
-        else
-            gid=
-        fi
         if account=$(getent passwd gamelink); then
+            group=$(getent group gamelink) || account_collision
             uid=$(printf '%s\n' "$account" | cut -d: -f3)
+            gid=$(printf '%s\n' "$group" | cut -d: -f3)
             system_id UID "$uid" || account_collision
-            [ -n "$gid" ] && [ "$(id -g gamelink)" = "$gid" ] && \
+            system_id GID "$gid" || account_collision
+            [ "$(id -g gamelink)" = "$gid" ] && \
                 [ "$(id -gn gamelink)" = gamelink ] || account_collision
+            case "${group##*:}" in
+                ''|gamelink) ;;
+                *) account_collision ;;
+            esac
+            accounts=$(getent passwd) || account_collision
+            printf '%s\n' "$accounts" | awk -F: -v gid="$gid" '
+                $4 == gid && $1 != "gamelink" { exit 1 }
+            ' || account_collision
             case "${account##*:}" in
                 /usr/sbin/nologin|/sbin/nologin) ;;
                 *) account_collision ;;
@@ -44,14 +49,13 @@ case "$1" in
                 esac
             done
         else
-            if [ -z "$gid" ]; then
-                groupadd --system gamelink
-                group=$(getent group gamelink)
-                gid=$(printf '%s\n' "$group" | cut -d: -f3)
+            if getent group gamelink >/dev/null; then
+                account_collision
             fi
-            useradd --system --gid gamelink --no-create-home \
+            useradd --system --user-group --no-create-home \
                 --home-dir "$state" --shell /usr/sbin/nologin gamelink
             uid=$(id -u gamelink)
+            gid=$(id -g gamelink)
         fi
         if [ ! -e "$state" ] && [ ! -L "$state" ]; then
             mkdir -m 0700 "$state"
@@ -68,15 +72,19 @@ case "$1" in
             chown -h gamelink:gamelink "$state"
         fi
         ;;
-    abort-upgrade) ;;
     *) exit 0 ;;
 esac
 
+restart=/run/gamelink-agent-restart
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload
-    restart=/run/gamelink-agent-restart
-    if [ -f "$restart" ]; then
-        systemctl start gamelink-agent.service
-        unlink "$restart"
+fi
+if [ -f "$restart" ]; then
+    if [ -d /run/systemd/system ] && read -r old new < "$restart" &&
+        [ "$old" = "${2:-}" ] &&
+        [ "$new" = "$(dpkg-query -W -f='${Version}' gamelink-agent)" ]; then
+        # The unit may have been started manually while disabled.
+        deb-systemd-invoke reload-or-restart gamelink-agent.service
     fi
+    unlink "$restart"
 fi

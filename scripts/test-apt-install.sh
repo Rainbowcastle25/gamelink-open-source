@@ -8,6 +8,8 @@ agent_version=$3
 state=/var/lib/gamelink-agent
 proof=$state/apt-proof
 unit=gamelink-agent.service
+restart=/run/gamelink-agent-restart
+current_deb=/proof/upgrade/pool/main/amd64/gamelink-agent_${agent_version}_amd64.deb
 export DEBIAN_FRONTEND=noninteractive
 install -m 0644 /proof/apt.gpg /usr/share/keyrings/gamelink.gpg
 printf '%s\n' 'deb [signed-by=/usr/share/keyrings/gamelink.gpg] file:/repo stable main' \
@@ -45,13 +47,10 @@ case "$*" in
     'stop gamelink-agent.service')
         if [ -e /run/gamelink-running ]; then
             stat -c %i /usr/bin/gamelink-agent > "$proof/stop-inode"
-            if [ -f /run/gamelink-agent-restart ]; then
-                test "$(stat -c '%u:%a' /run/gamelink-agent-restart)" = 0:600
-            fi
             unlink /run/gamelink-running
         fi
         ;;
-    'start gamelink-agent.service')
+    'start gamelink-agent.service'|'reload-or-restart gamelink-agent.service')
         stat -c %i /usr/bin/gamelink-agent > "$proof/start-inode"
         touch /run/gamelink-running
         ;;
@@ -62,8 +61,10 @@ SYSTEMCTL
 fi
 cat > /usr/sbin/policy-rc.d <<'POLICY'
 #!/bin/sh
-[ "$1" = gamelink-agent.service ] && exit 0
-exit 101
+[ "$1" = gamelink-agent.service ] || exit 101
+[ ! -e /run/gamelink-deny-service ] || exit 101
+if [ -e /run/gamelink-deny-start ] && [ "$2" != stop ]; then exit 101; fi
+exit 0
 POLICY
 chmod 0755 /usr/sbin/policy-rc.d
 
@@ -120,6 +121,13 @@ reject_install "$account_error"
 usermod --shell /usr/sbin/nologin --append --groups sudo gamelink
 reject_install "$account_error"
 gpasswd -d gamelink sudo
+useradd --system --no-create-home gamelink-collision
+gpasswd -a gamelink-collision gamelink
+reject_install "$account_error"
+gpasswd -d gamelink-collision gamelink
+usermod --gid gamelink gamelink-collision
+reject_install "$account_error"
+userdel gamelink-collision
 test "$(stat -c '%U:%G:%a' "$state")" = root:gamelink:1770
 
 # Reject a symlink in place of the state directory without touching its target.
@@ -134,7 +142,7 @@ mv "$state.manual" "$state"
 apt_get install -y gamelink-agent
 
 check_install() {
-    test "$(dpkg-query -W -f='${Version}' gamelink-agent)" = "$1"
+    test "$(dpkg-query -W -f='${db:Status-Status} ${Version}' gamelink-agent)" = "installed $1"
     test "$(command -v gamelink-agent)" = /usr/bin/gamelink-agent
     test "$(gamelink-agent --version)" = "gamelink-agent $agent_version"
     getent passwd gamelink
@@ -162,8 +170,13 @@ check_inactive
 ln -sfn /proof/upgrade /repo
 apt_get update
 state_before=$(stat -c '%i:%z' "$state")
+# An apt-managed unit can be customized with systemctl edit --full.
+cp "/lib/systemd/system/$unit" "/etc/systemd/system/$unit"
+printf '\n# Local full override\n' >> "/etc/systemd/system/$unit"
 apt_get install -y --only-upgrade gamelink-agent
 check_install "$current"
+grep -Fx '# Local full override' "/etc/systemd/system/$unit"
+unlink "/etc/systemd/system/$unit"
 check_inactive
 test ! -e "$proof/start-inode"
 test "$(stat -c '%i:%z' "$state")" = "$state_before"
@@ -178,24 +191,52 @@ systemctl start "$unit"
 systemctl is-active --quiet "$unit"
 before=$(stat -c %i /usr/bin/gamelink-agent)
 
-# Force dpkg's unpack rollback after preinst by adding a file from base-files.
-dpkg-deb -R "/proof/upgrade/pool/main/amd64/gamelink-agent_${agent_version}_amd64.deb" /tmp/gamelink-abort
-install -D /dev/null /tmp/gamelink-abort/etc/debian_version
-dpkg-deb --build --root-owner-group /tmp/gamelink-abort /tmp/gamelink-abort.deb
-if dpkg --unpack /tmp/gamelink-abort.deb > /tmp/gamelink-abort.log 2>&1; then
-    echo "Expected an unpack conflict" >&2
+touch /run/gamelink-deny-service
+if dpkg --unpack "$current_deb" > /tmp/gamelink-policy.log 2>&1; then
+    echo "Upgrade unexpectedly succeeded when policy blocked stopping GameLink" >&2
     exit 1
 fi
-grep -F "trying to overwrite '/etc/debian_version'" /tmp/gamelink-abort.log
+grep -F 'GameLink could not stop the service before upgrading' /tmp/gamelink-policy.log
+check_install "$previous"
+systemctl is-active --quiet "$unit"
+test "$(stat -c %i /usr/bin/gamelink-agent)" = "$before"
+test ! -e "$restart"
+unlink /run/gamelink-deny-service
+
+reject_unpack() {
+    if dpkg --unpack "$1" > /tmp/gamelink-abort.log 2>&1; then
+        echo "Expected an unpack conflict" >&2
+        exit 1
+    fi
+    grep -F "trying to overwrite '/etc/debian_version'" /tmp/gamelink-abort.log
+}
+
+# Force dpkg's unpack rollback after preinst by adding a file from base-files.
+dpkg-deb -R "$current_deb" /tmp/gamelink-abort
+install -D /dev/null /tmp/gamelink-abort/etc/debian_version
+dpkg-deb --build --root-owner-group /tmp/gamelink-abort /tmp/gamelink-abort.deb
+reject_unpack /tmp/gamelink-abort.deb
 check_install "$previous"
 systemctl is-active --quiet "$unit"
 test "$(cat "$proof/stop-inode")" = "$before"
 test "$(cat "$proof/start-inode")" = "$before"
-test ! -e /run/gamelink-agent-restart
+test ! -e "$restart"
 unlink "$proof/stop-inode"
 unlink "$proof/start-inode"
 
-apt_get install -y --only-upgrade gamelink-agent
+# Policy can allow the stop and block restoration, including during rollback.
+touch /run/gamelink-deny-start
+reject_unpack /tmp/gamelink-abort.deb
+check_install "$previous"
+check_inactive
+test ! -e "$proof/start-inode"
+test ! -e "$restart"
+unlink /run/gamelink-deny-start
+systemctl start "$unit"
+
+dpkg --unpack "$current_deb"
+test "$(stat -c '%u:%a' "$restart")" = 0:600
+dpkg --configure gamelink-agent
 check_install "$current"
 check_state
 systemctl is-active --quiet "$unit"
@@ -203,7 +244,18 @@ after=$(stat -c %i /usr/bin/gamelink-agent)
 test "$after" != "$before"
 test "$(cat "$proof/stop-inode")" = "$before"
 test "$(cat "$proof/start-inode")" = "$after"
-test ! -e /run/gamelink-agent-restart
+test ! -e "$restart"
+
+touch /run/gamelink-deny-service
+if dpkg --remove gamelink-agent > /tmp/gamelink-policy.log 2>&1; then
+    echo "Removal unexpectedly succeeded when policy blocked stopping GameLink" >&2
+    exit 1
+fi
+grep -F 'GameLink could not stop the service before removing' /tmp/gamelink-policy.log
+check_install "$current"
+systemctl is-active --quiet "$unit"
+test "$(stat -c %i /usr/bin/gamelink-agent)" = "$after"
+unlink /run/gamelink-deny-service
 
 apt_get remove -y gamelink-agent
 check_inactive
@@ -214,14 +266,48 @@ apt_get purge -y gamelink-agent
 check_inactive
 check_state
 
-# Check that a standalone group must also be a system group, and that a
-# fresh install creates the missing system account and group.
+# A standalone group is a collision even if it has a system GID.
 mv "$state" "$state.saved"
 userdel gamelink
 if getent group gamelink; then groupdel gamelink; fi
-groupadd --gid 42424 gamelink
+groupadd --system gamelink
 reject_install "$account_error"
 groupdel gamelink
 apt_get install -y gamelink-agent
 check_install "$current"
 check_inactive
+
+# v2 is still unpacked after v3 rolls back. v1's restart request
+# cannot restore v2 as part of v3's rollback or a later configure.
+apt_get install -y --allow-downgrades "gamelink-agent=$previous"
+runuser -u gamelink -- env GAMELINK_AGENT_DIR="$state/config" gamelink-agent init
+install -d -o gamelink -g gamelink -m 0700 "$proof"
+systemctl start "$unit"
+unlink "$proof/start-inode"
+dpkg --unpack "$current_deb"
+check_inactive
+test -f "$restart"
+sed -i "s/^Version:.*/Version: $current+rollback-test/" /tmp/gamelink-abort/DEBIAN/control
+dpkg-deb --build --root-owner-group /tmp/gamelink-abort /tmp/gamelink-abort-newer.deb
+reject_unpack /tmp/gamelink-abort-newer.deb
+test "$(dpkg-query -W -f='${db:Status-Status} ${Version}' gamelink-agent)" = "unpacked $current"
+check_inactive
+test ! -e "$proof/start-inode"
+test ! -e "$restart"
+dpkg --configure gamelink-agent
+check_install "$current"
+check_inactive
+
+# A matching configure request also obeys policy when restoring the service.
+systemctl start "$unit"
+unlink "$proof/start-inode"
+dpkg --unpack "$current_deb"
+check_inactive
+test -f "$restart"
+touch /run/gamelink-deny-start
+dpkg --configure gamelink-agent
+check_install "$current"
+check_inactive
+test ! -e "$proof/start-inode"
+test ! -e "$restart"
+unlink /run/gamelink-deny-start
