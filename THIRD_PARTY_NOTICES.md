@@ -223,6 +223,8 @@ prerequisites, not copied into the application artifact.
 Desktop presence notifications on Linux use `tauri-plugin-notification`
 and `notify-rust`, under their MIT or Apache-2.0 terms. The Windows
 notification area uses the existing MIT/Apache-2.0 `windows` bindings.
+The desktop installer updater uses `tauri-plugin-updater` under its MIT or
+Apache-2.0 terms.
 
 To refresh the conservative Rust inventory and copies:
 

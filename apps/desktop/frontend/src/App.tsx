@@ -44,12 +44,14 @@ export default function App({ backend, mock = isMock }: Props) {
         <NavProvider>
           <div className="flex h-full">
             <Sidebar />
-            <main className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
-              <div className="mx-auto w-full max-w-[1180px] px-8 py-8">
-                <ReleaseNotifications />
-                <Screen />
-              </div>
-            </main>
+            <div className="flex min-w-0 flex-1 flex-col">
+              <ReleaseNotifications />
+              <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+                <div className="mx-auto w-full max-w-[1180px] px-8 py-8">
+                  <Screen />
+                </div>
+              </main>
+            </div>
           </div>
           <Toaster />
           {mock && <MockRibbon />}

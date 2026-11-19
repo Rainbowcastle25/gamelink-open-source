@@ -18,7 +18,7 @@ const MAX_MANIFEST: usize = 64 * 1024;
 const MAX_SIGNATURE: usize = 4 * 1024;
 const MAX_REDIRECTS: usize = 5;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(8);
-const DAY: u64 = 24 * 60 * 60;
+const DESKTOP_CHECK_INTERVAL: u64 = 4 * 60 * 60;
 const CACHE: &str = "release-check.json";
 
 type Result<T> = std::result::Result<T, &'static str>;
@@ -101,16 +101,19 @@ fn https_url(value: &str) -> Result<Url> {
 }
 
 fn manifest_url() -> Result<Url> {
-    let configured = match std::env::var("GAMELINK_UPDATE_MANIFEST_URL") {
-        Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => DEFAULT_URL.to_owned(),
+    #[cfg(debug_assertions)]
+    match std::env::var("GAMELINK_UPDATE_MANIFEST_URL") {
+        Ok(value) => {
+            let url = https_url(&value)?;
+            if url.query().is_some() || url.fragment().is_some() {
+                return Err("manifest URL must not contain a query or fragment");
+            }
+            return Ok(url);
+        }
+        Err(std::env::VarError::NotPresent) => {}
         Err(_) => return Err("invalid manifest URL"),
-    };
-    let url = https_url(&configured)?;
-    if url.query().is_some() || url.fragment().is_some() {
-        return Err("manifest URL must not contain a query or fragment");
     }
-    Ok(url)
+    https_url(DEFAULT_URL)
 }
 
 fn verify(signed: &SignedRelease, keys: &[PublicKey]) -> Result<(Manifest, Version)> {
@@ -157,7 +160,7 @@ fn verify(signed: &SignedRelease, keys: &[PublicKey]) -> Result<(Manifest, Versi
     Ok((manifest, version))
 }
 
-fn fetch(agent: &ureq::Agent, mut url: Url, limit: usize) -> Result<String> {
+fn fetch(agent: &ureq::Agent, mut url: Url) -> Result<ureq::Body> {
     let start = Instant::now();
     for _ in 0..=MAX_REDIRECTS {
         let remaining = FETCH_TIMEOUT
@@ -171,7 +174,7 @@ fn fetch(agent: &ureq::Agent, mut url: Url, limit: usize) -> Result<String> {
             .call()
             .map_err(|_| "release metadata request failed")?;
         match response.status().as_u16() {
-            200 => return read_metadata(response.into_body().into_reader(), limit),
+            200 => return Ok(response.into_body()),
             301 | 302 | 303 | 307 | 308 => {
                 let location = response
                     .headers()
@@ -201,18 +204,32 @@ fn read_metadata(body: impl Read, limit: usize) -> Result<String> {
     String::from_utf8(bytes).map_err(|_| "release metadata is not UTF-8")
 }
 
-fn download(now: u64) -> Result<SignedRelease> {
-    let url = manifest_url()?;
-    let signature_url = https_url(&format!("{url}.minisig"))?;
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+fn metadata_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
         .https_only(true)
         .max_redirects(0)
         .proxy(None)
         .user_agent("GameLink")
         .build()
-        .into();
-    let manifest = fetch(&agent, url, MAX_MANIFEST)?;
-    let signature = fetch(&agent, signature_url, MAX_SIGNATURE)?;
+        .into()
+}
+
+/// Fetches the Tauri updater feed as untrusted metadata, with the same bound as the manifest.
+pub fn fetch_updater_feed(url: Url) -> Result<serde_json::Value> {
+    read_updater_feed(fetch(&metadata_agent(), url)?.into_reader())
+}
+
+fn read_updater_feed(body: impl Read) -> Result<serde_json::Value> {
+    let feed = read_metadata(body, MAX_MANIFEST)?;
+    serde_json::from_str(&feed).map_err(|_| "invalid updater feed")
+}
+
+fn download(now: u64) -> Result<SignedRelease> {
+    let url = manifest_url()?;
+    let signature_url = https_url(&format!("{url}.minisig"))?;
+    let agent = metadata_agent();
+    let manifest = read_metadata(fetch(&agent, url)?.into_reader(), MAX_MANIFEST)?;
+    let signature = read_metadata(fetch(&agent, signature_url)?.into_reader(), MAX_SIGNATURE)?;
     Ok(SignedRelease {
         checked_at: Some(now),
         manifest,
@@ -290,14 +307,14 @@ fn checked_result(
 
 fn due(last_attempt: Option<u64>, now: u64) -> bool {
     // A last attempt in the future came from a bad clock; do not wait for it.
-    last_attempt.is_none_or(|last| last > now || now - last >= DAY)
+    last_attempt.is_none_or(|last| last > now || now - last >= DESKTOP_CHECK_INTERVAL)
 }
 
 fn check_at(
     dir: &Path,
     installed: &Version,
     keys: &[PublicKey],
-    daily: bool,
+    automatic: bool,
     now: u64,
     debug: fn(&'static str),
     fetch: impl FnOnce(u64) -> Result<SignedRelease>,
@@ -326,7 +343,7 @@ fn check_at(
             None
         }
     };
-    if daily && !due(cache.last_attempt, now) {
+    if automatic && !due(cache.last_attempt, now) {
         let Some(signed) = cache.signed.as_ref() else {
             return Ok(None);
         };
@@ -340,7 +357,7 @@ fn check_at(
         }
     }
     // Record attempts before touching the network so failures and restarts
-    // count toward the same 24-hour limit.
+    // count toward the same four-hour limit.
     cache.last_attempt = Some(now);
     cache.last_attempt_succeeded = false;
     save_cache(dir, &cache)?;
@@ -381,7 +398,7 @@ pub fn can_check() -> bool {
 
 /// Desktop-only network entry point. Call after checking the user's setting.
 /// `debug` receives non-fatal problems, such as an ignored corrupt cache.
-pub fn check_daily(
+pub fn check_desktop(
     dir: &Path,
     installed: &str,
     debug: fn(&'static str),
@@ -397,7 +414,7 @@ pub fn check_now(dir: &Path, installed: &str) -> Result<CheckResult> {
 fn check(
     dir: &Path,
     installed: &str,
-    daily: bool,
+    automatic: bool,
     debug: fn(&'static str),
 ) -> Result<Option<CheckResult>> {
     let installed = Version::parse(installed).map_err(|_| "invalid installed version")?;
@@ -405,7 +422,7 @@ fn check(
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "invalid system clock")?
         .as_secs();
-    check_at(dir, &installed, &keys()?, daily, now, debug, download)
+    check_at(dir, &installed, &keys()?, automatic, now, debug, download)
 }
 
 /// The agent's last verified check. Reads local state only.

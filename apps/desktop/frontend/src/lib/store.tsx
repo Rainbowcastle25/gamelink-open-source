@@ -348,7 +348,9 @@ export class GameLinkStore {
     const before = this.state.settings;
     if (!before) return false;
     const next: SettingsView = { ...before, ...patch };
-    this.set({ settings: next });
+    // An update check starts as soon as this becomes true. Wait for the host
+    // to save the opt-in before the updater's first request.
+    this.set({ settings: { ...next, checkForUpdates: before.checkForUpdates && next.checkForUpdates } });
     try {
       const saved = await this.backend.updateSettings(next);
       this.set({ settings: saved });

@@ -28,7 +28,7 @@ protect, what it assumes, and what it does not defend against.
 | No general LAN access or exit node | No route forwarding is enabled. The optional Console Bridge only accepts traffic for the selected Bedrock server and configured media range; it does not expose other host or LAN ports |
 | Secrets are not logged | A redactor scrubs private keys, PSKs, Tailcat addresses and invitations from logs and diagnostics. Verbose Tailcat output is off by default and redacted when on |
 | Secrets are not committed | `.gitignore` excludes key material; `config/examples` contain placeholders only; CI scans for key-shaped strings |
-| No telemetry | The apps make no analytics calls. Release checks are off by default on desktop and are manual on the Linux agent. The HTTPS GETs carry a generic User-Agent and no cookies, credentials, installed version or device identifiers |
+| No telemetry | The apps make no analytics calls. Release checks are on by default for new desktop installs and are manual on the Linux agent. The GitHub HTTPS GETs carry a generic User-Agent and no cookies, credentials, installed version or device identifiers |
 
 Desktop presence notifications are off by default. With the setting enabled,
 checks go through the same Tailcat probe as **Check** and reveal to the host's
@@ -170,13 +170,15 @@ Invitation holder (not approved) ──X─►   (handshake gets no reply)
 11. **Android API 37 local-network permission.** Android API 37 prompts for
     `ACCESS_LOCAL_NETWORK`. iOS is not supported; its local-network and
     background-operation permissions require a separate design and validation.
-12. **Windows binaries are unsigned,** so SmartScreen will warn. Users download
-    and install fixes manually. The optional
-    [release notifications](release-manifest.md) verify an Ed25519 signature
-    against a build-time Minisign pin before using the manifest. A release host
-    can withhold a manifest or replay one on a first check. Once a release is
-    verified and cached, checks reject versions older than that verified version.
-    The release host and its CDN see the IP address and timing of requests.
+12. **Desktop updates.** [The release checker](release-manifest.md) verifies
+    the manifest's Ed25519 signature against a build-time Minisign pin. The
+    installer must match the signed manifest's SHA-256 digest and pass the
+    pinned Tauri signature and signed-version checks before GameLink installs
+    it. Windows installers lack Authenticode signing and can trigger
+    SmartScreen. The release host can withhold a manifest or replay one on a
+    first check. After GameLink verifies and caches a release, checks reject
+    older versions. The release host and its CDN see the IP address and
+    timing of requests.
 13. **Dependency risk.** The Windows/Linux builds include Go packages; Android
     also includes pinned Rust/JNI and AndroidX/Kotlin libraries. The desktop
     ships a small React stack. Versions and license notices are in
@@ -219,8 +221,9 @@ See [SECURITY.md](../SECURITY.md).
   diagnostics.
 - Atomic, owner-only writes of key files; crash-safe replacement.
 - Release metadata verification rejects changed bytes, wrong keys, malformed
-  manifests and versions older than the last verified release. Desktop retries
-  respect the persisted 24-hour interval even after a failed attempt.
+  manifests and versions older than the last verified release. Automatic
+  desktop manifest checks respect the persisted four-hour interval, including
+  after a failed attempt.
 - Disconnect releases ports, connections and goroutines.
 - Relay-only fallback works and is reported as "relay", not "direct".
 - Console Bridge framing, candidate pinning, subnet/source filtering,

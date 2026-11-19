@@ -78,6 +78,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `cssparser-0.37.0` | MPL-2.0 | [texts](cssparser-0.37.0/) |
 | `cssparser-0.38.0` | MPL-2.0 | [texts](cssparser-0.38.0/) |
 | `cssparser-macros-0.7.1` | MPL-2.0 | [texts](cssparser-macros-0.7.1/) |
+| `ct-codecs-1.1.8` | MIT | [texts](ct-codecs-1.1.8/) |
 | `ctor-1.0.14` | Apache-2.0 OR MIT | [texts](ctor-1.0.14/) |
 | `darling-0.23.0` | MIT | [texts](darling-0.23.0/) |
 | `darling_core-0.23.0` | MIT | [texts](darling_core-0.23.0/) |
@@ -116,6 +117,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `fax-0.2.7` | MIT | [texts](fax-0.2.7/) |
 | `fdeflate-0.3.7` | MIT OR Apache-2.0 | [texts](fdeflate-0.3.7/) |
 | `field-offset-0.3.6` | MIT OR Apache-2.0 | [texts](field-offset-0.3.6/) |
+| `filetime-0.2.30` | MIT/Apache-2.0 | [texts](filetime-0.2.30/) |
 | `find-msvc-tools-0.1.15` | MIT OR Apache-2.0 | [texts](find-msvc-tools-0.1.15/) |
 | `fixedbitset-0.5.9` | MIT OR Apache-2.0 | [texts](fixedbitset-0.5.9/) |
 | `flate2-1.1.11` | MIT OR Apache-2.0 | [texts](flate2-1.1.11/) |
@@ -173,6 +175,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `http-body-util-0.1.5` | MIT | [texts](http-body-util-0.1.5/) |
 | `httparse-1.10.1` | MIT OR Apache-2.0 | [texts](httparse-1.10.1/) |
 | `hyper-1.12.0` | MIT | [texts](hyper-1.12.0/) |
+| `hyper-rustls-0.27.10` | Apache-2.0 OR ISC OR MIT | [texts](hyper-rustls-0.27.10/) |
 | `hyper-util-0.1.21` | MIT | [texts](hyper-util-0.1.21/) |
 | `iana-time-zone-0.1.65` | MIT OR Apache-2.0 | [texts](iana-time-zone-0.1.65/) |
 | `iana-time-zone-haiku-0.1.2` | MIT OR Apache-2.0 | [texts](iana-time-zone-haiku-0.1.2/) |
@@ -204,6 +207,8 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `jiff-tzdb-0.1.10` | Unlicense OR MIT | [texts](jiff-tzdb-0.1.10/) |
 | `jiff-tzdb-platform-0.1.3` | Unlicense OR MIT | [texts](jiff-tzdb-platform-0.1.3/) |
 | `jni-0.21.1` | MIT/Apache-2.0 | [texts](jni-0.21.1/) |
+| `jni-0.22.4` | MIT OR Apache-2.0 | [texts](jni-0.22.4/) |
+| `jni-macros-0.22.4` | MIT OR Apache-2.0 | [texts](jni-macros-0.22.4/) |
 | `jni-sys-0.3.1` | MIT OR Apache-2.0 | [texts](jni-sys-0.3.1/) |
 | `jni-sys-0.4.1` | MIT OR Apache-2.0 | [texts](jni-sys-0.4.1/) |
 | `jni-sys-macros-0.4.1` | MIT OR Apache-2.0 | [texts](jni-sys-macros-0.4.1/) |
@@ -228,6 +233,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `memchr-2.8.3` | Unlicense OR MIT | [texts](memchr-2.8.3/) |
 | `memoffset-0.9.1` | MIT | [texts](memoffset-0.9.1/) |
 | `mime-0.3.18` | MIT OR Apache-2.0 | [texts](mime-0.3.18/) |
+| `minisign-0.10.0` | MIT | [texts](minisign-0.10.0/) |
 | `minisign-verify-0.3.0` | MIT | [texts](minisign-verify-0.3.0/) |
 | `miniz_oxide-0.8.9` | MIT OR Zlib OR Apache-2.0 | [texts](miniz_oxide-0.8.9/) |
 | `miniz_oxide-0.9.1` | MIT OR Zlib OR Apache-2.0 | [texts](miniz_oxide-0.9.1/) |
@@ -257,20 +263,24 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `objc2-exception-helper-0.1.1` | Zlib OR Apache-2.0 OR MIT | [texts](objc2-exception-helper-0.1.1/) |
 | `objc2-foundation-0.3.2` | MIT | [texts](objc2-foundation-0.3.2/) |
 | `objc2-io-surface-0.3.2` | Zlib OR Apache-2.0 OR MIT | [texts](objc2-io-surface-0.3.2/) |
+| `objc2-osa-kit-0.3.2` | Zlib OR Apache-2.0 OR MIT | [texts](objc2-osa-kit-0.3.2/) |
 | `objc2-quartz-core-0.3.2` | Zlib OR Apache-2.0 OR MIT | [texts](objc2-quartz-core-0.3.2/) |
 | `objc2-ui-kit-0.3.2` | Zlib OR Apache-2.0 OR MIT | [texts](objc2-ui-kit-0.3.2/) |
 | `objc2-user-notifications-0.3.2` | Zlib OR Apache-2.0 OR MIT | [texts](objc2-user-notifications-0.3.2/) |
 | `objc2-web-kit-0.3.2` | Zlib OR Apache-2.0 OR MIT | [texts](objc2-web-kit-0.3.2/) |
 | `once_cell-1.21.4` | MIT OR Apache-2.0 | [texts](once_cell-1.21.4/) |
 | `open-5.4.5` | MIT | [texts](open-5.4.5/) |
+| `openssl-probe-0.2.2` | MIT OR Apache-2.0 | [texts](openssl-probe-0.2.2/) |
 | `option-ext-0.2.0` | MPL-2.0 | [texts](option-ext-0.2.0/) |
 | `ordered-stream-0.2.0` | MIT OR Apache-2.0 | [texts](ordered-stream-0.2.0/) |
 | `os_pipe-1.2.3` | MIT | [texts](os_pipe-1.2.3/) |
+| `osakit-0.3.1` | MIT OR Apache-2.0 | [texts](osakit-0.3.1/) |
 | `pango-0.18.3` | MIT | [texts](pango-0.18.3/) |
 | `pango-sys-0.18.0` | MIT | [texts](pango-sys-0.18.0/) |
 | `parking-2.2.1` | Apache-2.0 OR MIT | [texts](parking-2.2.1/) |
 | `parking_lot-0.12.5` | MIT OR Apache-2.0 | [texts](parking_lot-0.12.5/) |
 | `parking_lot_core-0.9.12` | MIT OR Apache-2.0 | [texts](parking_lot_core-0.9.12/) |
+| `pbkdf2-0.12.2` | MIT OR Apache-2.0 | [texts](pbkdf2-0.12.2/) |
 | `percent-encoding-2.3.2` | MIT OR Apache-2.0 | [texts](percent-encoding-2.3.2/) |
 | `petgraph-0.8.3` | MIT OR Apache-2.0 | [texts](petgraph-0.8.3/) |
 | `phf-0.13.1` | MIT | [texts](phf-0.13.1/) |
@@ -320,19 +330,29 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `reqwest-0.13.5` | MIT OR Apache-2.0 | [texts](reqwest-0.13.5/) |
 | `rfd-0.17.2` | MIT | [texts](rfd-0.17.2/) |
 | `ring-0.17.14` | Apache-2.0 AND ISC | [texts](ring-0.17.14/) |
+| `rpassword-7.5.5` | Apache-2.0 | [texts](rpassword-7.5.5/) |
+| `rtoolbox-0.0.6` | Apache-2.0 | [texts](rtoolbox-0.0.6/) |
 | `rustc-hash-2.1.3` | Apache-2.0 OR MIT | [texts](rustc-hash-2.1.3/) |
 | `rustc_version-0.4.1` | MIT OR Apache-2.0 | [texts](rustc_version-0.4.1/) |
 | `rustix-1.1.6` | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | [texts](rustix-1.1.6/) |
 | `rustls-0.23.46` | Apache-2.0 OR ISC OR MIT | [texts](rustls-0.23.46/) |
+| `rustls-native-certs-0.8.5` | Apache-2.0 OR ISC OR MIT | [texts](rustls-native-certs-0.8.5/) |
 | `rustls-pki-types-1.16.0` | MIT OR Apache-2.0 | [texts](rustls-pki-types-1.16.0/) |
+| `rustls-platform-verifier-0.7.1` | MIT OR Apache-2.0 | [texts](rustls-platform-verifier-0.7.1/) |
+| `rustls-platform-verifier-android-0.2.0` | MIT OR Apache-2.0 | [texts](rustls-platform-verifier-android-0.2.0/) |
 | `rustls-webpki-0.103.17` | ISC | [texts](rustls-webpki-0.103.17/) |
 | `rustversion-1.0.23` | MIT OR Apache-2.0 | [texts](rustversion-1.0.23/) |
+| `salsa20-0.10.2` | MIT OR Apache-2.0 | [texts](salsa20-0.10.2/) |
 | `same-file-1.0.6` | Unlicense/MIT | [texts](same-file-1.0.6/) |
+| `schannel-0.1.30` | MIT | [texts](schannel-0.1.30/) |
 | `schemars-0.8.22` | MIT | [texts](schemars-0.8.22/) |
 | `schemars-0.9.0` | MIT | [texts](schemars-0.9.0/) |
 | `schemars-1.2.3` | MIT | [texts](schemars-1.2.3/) |
 | `schemars_derive-0.8.22` | MIT | [texts](schemars_derive-0.8.22/) |
 | `scopeguard-1.2.0` | MIT OR Apache-2.0 | [texts](scopeguard-1.2.0/) |
+| `scrypt-0.11.0` | MIT OR Apache-2.0 | [texts](scrypt-0.11.0/) |
+| `security-framework-3.7.0` | MIT OR Apache-2.0 | [texts](security-framework-3.7.0/) |
+| `security-framework-sys-2.17.0` | MIT OR Apache-2.0 | [texts](security-framework-sys-2.17.0/) |
 | `selectors-0.38.0` | MPL-2.0 | [texts](selectors-0.38.0/) |
 | `selectors-0.41.0` | MPL-2.0 | [texts](selectors-0.41.0/) |
 | `semver-1.0.28` | MIT OR Apache-2.0 | [texts](semver-1.0.28/) |
@@ -355,6 +375,8 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `shlex-2.0.1` | MIT OR Apache-2.0 | [texts](shlex-2.0.1/) |
 | `signal-hook-registry-1.4.8` | MIT OR Apache-2.0 | [texts](signal-hook-registry-1.4.8/) |
 | `simd-adler32-0.3.10` | MIT | [texts](simd-adler32-0.3.10/) |
+| `simd_cesu8-1.2.0` | Apache-2.0 OR MIT | [texts](simd_cesu8-1.2.0/) |
+| `simdutf8-0.1.5` | MIT OR Apache-2.0 | [texts](simdutf8-0.1.5/) |
 | `siphasher-1.0.4` | MIT OR Apache-2.0 | [texts](siphasher-1.0.4/) |
 | `slab-0.4.12` | MIT | [texts](slab-0.4.12/) |
 | `smallvec-1.16.5` | MIT OR Apache-2.0 | [texts](smallvec-1.16.5/) |
@@ -379,6 +401,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `system-deps-6.2.2` | MIT OR Apache-2.0 | [texts](system-deps-6.2.2/) |
 | `tao-0.37.2` | Apache-2.0 | [texts](tao-0.37.2/) |
 | `tao-macros-0.1.4` | MIT OR Apache-2.0 | [texts](tao-macros-0.1.4/) |
+| `tar-0.4.46` | MIT OR Apache-2.0 | [texts](tar-0.4.46/) |
 | `target-lexicon-0.12.16` | Apache-2.0 WITH LLVM-exception | [texts](target-lexicon-0.12.16/) |
 | `tauri-2.12.5` | Apache-2.0 OR MIT | [texts](tauri-2.12.5/) |
 | `tauri-build-2.7.4` | Apache-2.0 OR MIT | [texts](tauri-build-2.7.4/) |
@@ -391,6 +414,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `tauri-plugin-notification-2.8.1` | Apache-2.0 OR MIT | [texts](tauri-plugin-notification-2.8.1/) |
 | `tauri-plugin-opener-2.7.3` | Apache-2.0 OR MIT | [texts](tauri-plugin-opener-2.7.3/) |
 | `tauri-plugin-single-instance-2.5.5` | Apache-2.0 OR MIT | [texts](tauri-plugin-single-instance-2.5.5/) |
+| `tauri-plugin-updater-2.14.1` | Apache-2.0 OR MIT | [texts](tauri-plugin-updater-2.14.1/) |
 | `tauri-runtime-2.12.2` | Apache-2.0 OR MIT | [texts](tauri-runtime-2.12.2/) |
 | `tauri-runtime-wry-2.12.3` | Apache-2.0 OR MIT | [texts](tauri-runtime-wry-2.12.3/) |
 | `tauri-utils-2.10.2` | Apache-2.0 OR MIT | [texts](tauri-utils-2.10.2/) |
@@ -409,6 +433,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `tinystr-0.8.5` | Unicode-3.0 | [texts](tinystr-0.8.5/) |
 | `tinyvec-1.13.3` | Zlib OR Apache-2.0 OR MIT | [texts](tinyvec-1.13.3/) |
 | `tokio-1.54.1` | MIT | [texts](tokio-1.54.1/) |
+| `tokio-rustls-0.26.6` | MIT OR Apache-2.0 | [texts](tokio-rustls-0.26.6/) |
 | `tokio-util-0.7.20` | MIT | [texts](tokio-util-0.7.20/) |
 | `toml-0.8.2` | MIT OR Apache-2.0 | [texts](toml-0.8.2/) |
 | `toml-1.2.1+spec-1.1.0` | MIT OR Apache-2.0 | [texts](toml-1.2.1+spec-1.1.0/) |
@@ -469,6 +494,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `web_atoms-0.3.0` | MIT OR Apache-2.0 | [texts](web_atoms-0.3.0/) |
 | `webkit2gtk-2.0.2` | MIT | [texts](webkit2gtk-2.0.2/) |
 | `webkit2gtk-sys-2.0.2` | MIT | [texts](webkit2gtk-sys-2.0.2/) |
+| `webpki-root-certs-1.0.12` | CDLA-Permissive-2.0 | [texts](webpki-root-certs-1.0.12/) |
 | `webpki-roots-1.0.12` | CDLA-Permissive-2.0 | [texts](webpki-roots-1.0.12/) |
 | `webview2-com-0.39.1` | MIT | [texts](webview2-com-0.39.1/) |
 | `webview2-com-macros-0.8.1` | MIT | [texts](webview2-com-macros-0.8.1/) |
@@ -522,6 +548,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `x11-dl-2.21.0` | MIT | [texts](x11-dl-2.21.0/) |
 | `x11rb-0.13.2` | MIT OR Apache-2.0 | [texts](x11rb-0.13.2/) |
 | `x11rb-protocol-0.13.2` | MIT OR Apache-2.0 | [texts](x11rb-protocol-0.13.2/) |
+| `xattr-1.7.0` | MIT OR Apache-2.0 | [texts](xattr-1.7.0/) |
 | `yoke-0.8.4` | Unicode-3.0 | [texts](yoke-0.8.4/) |
 | `yoke-derive-0.8.4` | Unicode-3.0 | [texts](yoke-derive-0.8.4/) |
 | `zbus-5.19.0` | MIT | [texts](zbus-5.19.0/) |

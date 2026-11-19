@@ -94,13 +94,18 @@ For desktop Bedrock, update both app and agent and configure the BDS media range
 see [desktop NetherNet setup](docs/bedrock-research.md#desktop-manual-server-connections).
 GameLink reports agent connectivity separately from game endpoint availability.
 
-## Release notifications
+## Updates
 
-On desktop, turn on **Check for updates** under **Settings → About** to see
-signed release notices, including security updates. This is off by default.
+New desktop installs check GitHub for signed releases at startup and every
+four hours while GameLink is open. You can turn checks off under
+**Settings → About → Check for updates**. When a release is available,
+**Update** in the app header downloads, verifies and installs it, then
+restarts GameLink. The Windows installer and Linux AppImage support this
+flow. Other builds with a release verification key show a release notes link.
+Checks use HTTPS GETs with a generic `GameLink` User-Agent.
 The Linux agent checks only when you run `gamelink-agent update check [--json]`.
 Its `status` command can show the last verified check without contacting the
-release host. You download and install updates yourself. See the
+release host. Agent updates are installed manually. See the
 [release manifest guide](docs/release-manifest.md) for feed and signing details.
 
 ## Quick start

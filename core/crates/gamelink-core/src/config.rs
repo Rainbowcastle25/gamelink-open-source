@@ -72,7 +72,7 @@ pub fn bedrock(v: &Value) -> Result<(), String> {
     Ok(())
 }
 fn default_client() -> Value {
-    json!({"version":1,"servers":null,"settings":{"demoMode":false,"autoReconnect":true,"checkOnStartup":true,"checkForUpdates":false,"verboseLogging":false,"allowLocalRelay":false}})
+    json!({"version":1,"servers":null,"settings":{"demoMode":false,"autoReconnect":true,"checkOnStartup":true,"checkForUpdates":true,"verboseLogging":false,"allowLocalRelay":false}})
 }
 // serde_json::Value sorts object keys and collapses exact duplicates. Retain
 // every member until typed decoding, as encoding/json processes them in wire order.
@@ -1268,7 +1268,7 @@ mod tests {
                 "slug" => assert_eq!(json!(slugify(f["input"].as_str().unwrap())), f["output"]),
                 "settings" => {
                     let mut expected = f["output"].clone();
-                    expected["checkForUpdates"] = json!(false);
+                    expected["checkForUpdates"] = json!(true);
                     assert_eq!(default_client()["settings"], expected);
                 }
                 "unseal" => {
@@ -1477,6 +1477,7 @@ mod behaviour {
         let cfg = open_client(dir.path()).unwrap();
         assert_eq!(cfg["settings"]["autoReconnect"], true);
         assert_eq!(cfg["settings"]["demoMode"], false);
+        assert_eq!(cfg["settings"]["checkForUpdates"], true);
         assert!(!client_path(dir.path()).exists(), "open must not write");
 
         let added = client_mutate(dir.path(), &cfg, "add", "", server_value()).unwrap();
@@ -1485,6 +1486,7 @@ mod behaviour {
 
         let mut settings = cfg["settings"].clone();
         settings["demoMode"] = json!(true);
+        settings["checkForUpdates"] = json!(false);
         settings["gameExecutables"] = json!({"factorio": "C:\\games\\factorio.exe"});
         cfg = client_mutate(dir.path(), &cfg, "settings", "", settings).unwrap()["config"].clone();
 
@@ -1500,6 +1502,7 @@ mod behaviour {
         assert_eq!(reopened["servers"][0]["name"], "Survival");
         assert_eq!(reopened["servers"][0]["port"], 25565);
         assert_eq!(reopened["settings"]["demoMode"], true);
+        assert_eq!(reopened["settings"]["checkForUpdates"], false);
         assert_eq!(
             storage::unseal(reopened["servers"][0]["addr"].as_str().unwrap()).unwrap(),
             "tcSECRETADDRESSVALUE"

@@ -30,6 +30,50 @@ fn verifier(key: &KeyPair) -> PublicKey {
     PublicKey::from_base64(&key.pk.to_base64()).unwrap()
 }
 
+#[test]
+fn manifest_url_override_is_only_enabled_in_debug_builds() {
+    const IN_CHILD: &str = "GAMELINK_TEST_MANIFEST_URL_OVERRIDE";
+    const OVERRIDE: &str = "https://example.org/custom-manifest.json";
+    if std::env::var_os(IN_CHILD).is_some() {
+        let expected = if cfg!(debug_assertions) {
+            OVERRIDE
+        } else {
+            DEFAULT_URL
+        };
+        assert_eq!(manifest_url().unwrap().as_str(), expected);
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "update::tests::manifest_url_override_is_only_enabled_in_debug_builds",
+        ])
+        .env(IN_CHILD, "1")
+        .env("GAMELINK_UPDATE_MANIFEST_URL", OVERRIDE)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+}
+
+#[test]
+fn oversized_feed_is_rejected_while_reading_even_when_json_is_valid() {
+    let mut json = String::from("{}");
+    json.extend(std::iter::repeat_n(' ', MAX_MANIFEST - json.len()));
+    assert_eq!(read_updater_feed(json.as_bytes()), Ok(json!({})));
+    json.extend([' ', ' ']);
+    let mut body = std::io::Cursor::new(json);
+    assert_eq!(
+        read_updater_feed(&mut body),
+        Err("release metadata exceeds size limit")
+    );
+    assert_eq!(body.position(), MAX_MANIFEST as u64 + 1);
+}
+
 fn corrupt_attempt_metadata(dir: &Path) {
     let path = dir.join(CACHE);
     let mut cache: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -172,7 +216,7 @@ fn replay_below_last_verified_version_is_rejected() {
 }
 
 #[test]
-fn automatic_checks_keep_a_24_hour_limit_even_after_failed_attempts() {
+fn automatic_checks_keep_a_four_hour_limit_even_after_failed_attempts() {
     let dir = tempfile::tempdir().unwrap();
     let key = KeyPair::generate_unencrypted_keypair().unwrap();
     let keys = &[verifier(&key)];
@@ -184,8 +228,11 @@ fn automatic_checks_keep_a_24_hour_limit_even_after_failed_attempts() {
     };
     assert_eq!(check(10).unwrap_err(), "network failure");
     assert!(check(11).unwrap().is_none());
-    assert!(check(10 + DAY - 1).unwrap().is_none());
-    assert_eq!(check(10 + DAY).unwrap_err(), "network failure");
+    assert!(check(10 + DESKTOP_CHECK_INTERVAL - 1).unwrap().is_none());
+    assert_eq!(
+        check(10 + DESKTOP_CHECK_INTERVAL).unwrap_err(),
+        "network failure"
+    );
 }
 
 #[test]
@@ -248,15 +295,27 @@ fn failed_attempt_keeps_returning_the_verified_notice() {
     })
     .unwrap();
     assert_eq!(
-        check_at(dir.path(), &installed, keys, true, 1 + DAY, quiet, |_| Err(
-            "offline"
-        ))
+        check_at(
+            dir.path(),
+            &installed,
+            keys,
+            true,
+            1 + DESKTOP_CHECK_INTERVAL,
+            quiet,
+            |_| Err("offline")
+        )
         .unwrap_err(),
         "offline"
     );
-    let reused = check_at(dir.path(), &installed, keys, true, 2 + DAY, quiet, |_| {
-        panic!("not due")
-    })
+    let reused = check_at(
+        dir.path(),
+        &installed,
+        keys,
+        true,
+        2 + DESKTOP_CHECK_INTERVAL,
+        quiet,
+        |_| panic!("not due"),
+    )
     .unwrap()
     .unwrap();
     assert!(reused.available);
@@ -281,9 +340,12 @@ fn last_attempt_in_the_future_is_due() {
             |_| Err("network failure"),
         )
     };
-    assert_eq!(check(10 * DAY).unwrap_err(), "network failure");
     assert_eq!(
-        check(DAY).unwrap_err(),
+        check(10 * DESKTOP_CHECK_INTERVAL).unwrap_err(),
+        "network failure"
+    );
+    assert_eq!(
+        check(DESKTOP_CHECK_INTERVAL).unwrap_err(),
         "network failure",
         "clock moved back"
     );

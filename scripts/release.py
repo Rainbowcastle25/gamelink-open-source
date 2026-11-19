@@ -21,6 +21,8 @@ from release_tools import bundle_environment, install_signers, sha256, verify_si
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / "apps/desktop-tauri"
 KEYS = ROOT / "release/keys"
+SOURCE_TAG = "refs/gamelink/release-tag"
+SUMMARY_ASSET = "release-summary.txt"
 SECRET_NAMES = (
     "GAMELINK_RELEASE_SIGNING_KEY",
     "TAURI_SIGNING_PRIVATE_KEY",
@@ -90,12 +92,16 @@ def release_metadata(tag, env):
     return desktop, tag_severity(ref, env)
 
 
-def tag_severity(ref, env):
-    severity = run(
+def tag_trailer(ref, key, env):
+    return run(
         "git", "for-each-ref",
-        "--format=%(trailers:key=GameLink-Release-Severity,valueonly)",
+        f"--format=%(trailers:key={key},valueonly)",
         ref, env=env, capture_output=True, text=True,
-    ).stdout.strip() or "normal"
+    ).stdout.strip()
+
+
+def tag_severity(ref, env):
+    severity = tag_trailer(ref, "GameLink-Release-Severity", env) or "normal"
     if severity not in ("normal", "security"):
         raise ValueError("GameLink-Release-Severity must be normal or security")
     return severity
@@ -111,7 +117,7 @@ def release_source(tag, commit, env):
     version = release_version(tag)
     if not commit or not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("expected the full build commit SHA")
-    current_tag = "refs/gamelink/release-tag"
+    current_tag = SOURCE_TAG
     master = "refs/remotes/origin/master"
     # Fetch an explicit live tag ref, independent of any tag in checkout.
     run("git", "fetch", "--no-tags", "origin", f"+refs/heads/master:{master}",
@@ -233,7 +239,19 @@ def check_staging(version, linux_only, work, out, tools, pins, env):
         check_bundle_pins(bundle, installers[platform], work, pins, env)
 
 
-def sign_release(version, severity, linux_only, work, out, tools, pins, keys, repository, env):
+def add_release_summary(summary, out, payloads):
+    summary = " ".join(summary.split())
+    if summary:
+        content = summary.encode("utf-8")
+        if len(content) > 512:
+            raise ValueError("GameLink-Release-Summary must fit in 512 UTF-8 bytes")
+        path = out / SUMMARY_ASSET
+        path.write_bytes(content)
+        payloads.append(path)
+    return summary
+
+
+def sign_release(version, severity, summary, linux_only, work, out, tools, pins, keys, repository, env):
     verify_signers(tools)
     installers, agents, payloads = unsigned_assets(version, linux_only, out)
 
@@ -249,6 +267,7 @@ def sign_release(version, severity, linux_only, work, out, tools, pins, keys, re
         }
 
     now = datetime.now(timezone.utc)
+    summary = add_release_summary(summary, out, payloads)
     manifest = out / "release-manifest.json"
     write_json(manifest, {
         "schemaVersion": 1,
@@ -258,11 +277,14 @@ def sign_release(version, severity, linux_only, work, out, tools, pins, keys, re
         "releaseNotesUrl": f"{releases}/tag/v{version}",
         "artifacts": [{"name": path.name, "sha256": sha256(path)} for path in payloads],
     })
-    write_json(out / "latest.json", {
+    latest = {
         "version": version,
         "pub_date": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "platforms": platforms,
-    })
+    }
+    if summary:
+        latest["notes"] = summary
+    write_json(out / "latest.json", latest)
     # Send the private key on stdin. Do not write it to disk or put it in argv.
     minisign = tools / "minisign"
     run(minisign, "-S", "-s", "/dev/stdin", "-m", manifest, *agents,
@@ -343,7 +365,9 @@ def prepare_release(args):
     if args.preflight or args.validate:
         check_staging(version, args.linux_only, work, out, tools, pins, env)
     if args.sign or args.validate:
-        sign_release(version, severity, args.linux_only, work, out, tools, pins, keys,
+        summary = ("Validate the GameLink installer and signed update feeds." if args.validate else
+                   tag_trailer(SOURCE_TAG, "GameLink-Release-Summary", env))
+        sign_release(version, severity, summary, args.linux_only, work, out, tools, pins, keys,
                      args.repository, env)
     if args.validate:
         verify_release(out, pins, env)
