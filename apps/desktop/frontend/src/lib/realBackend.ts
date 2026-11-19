@@ -1,5 +1,5 @@
 import type { Backend } from "./backend";
-import type { UpdateProgress, UpdateTopic } from "./types";
+import type { AgentUpdateProgress, UpdateProgress, UpdateTopic } from "./types";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -23,6 +23,10 @@ export const realBackend: Backend = {
   settings: async () => call("settings"),
   gameIcons: async () => (await call<Record<string, string> | null>("gameIcons")) ?? {},
   checkRelease: async () => invoke("check_release"),
+  updateLinkedAgent: async (version, onProgress) => {
+    const progress = new Channel<AgentUpdateProgress>(onProgress);
+    await invoke("update_linked_agent", { version, progress });
+  },
   installUpdate: async (version, onProgress) => {
     const progress = new Channel<UpdateProgress>(onProgress);
     await invoke("install_update", { version, progress });

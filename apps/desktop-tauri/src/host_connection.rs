@@ -2,13 +2,18 @@
 //! host. This module deliberately runs outside the main app mutex so bounded
 //! host requests cannot block the desktop's existing transport state updates.
 use crate::{bridge, host};
-use gamelink_core::{requests::server_fingerprint, storage};
+use gamelink_core::{
+    requests::server_fingerprint,
+    storage,
+    update::{release_is_newer, valid_release_version},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     sync::Mutex,
+    time::{Duration, Instant},
 };
 use url::Url;
 
@@ -16,6 +21,13 @@ const FILE_NAME: &str = "host-connection.json";
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const UPDATE_AGENT: &str =
     "Update the GameLink agent on this node to manage access from the desktop app.";
+const MANUAL_AGENT_UPDATE: &str =
+    "Update the GameLink agent on your server with the setup guide or your package manager.";
+const AGENT_UPDATE_TIMEOUT: Duration = Duration::from_secs(4 * 60);
+const AGENT_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const AGENT_STATUS_TIMEOUT: u64 = 5;
+const AGENT_TIMEOUT_MESSAGE: &str =
+    "Timed out waiting for your server to finish updating. This app has not been updated.";
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -138,7 +150,7 @@ fn refresh(saved: &SavedConnection) -> Result<Value> {
     request_snapshot(saved, "POST", "/v1/host/refresh", json!({}), 95)
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SavedConnection {
     endpoint: String,
@@ -331,6 +343,292 @@ fn host_request(
     }))
 }
 
+pub enum LinkedAgent {
+    Available(LinkedAgentUpdate),
+    Manual,
+    Unreachable,
+}
+
+#[derive(Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum LinkedAgentNotice {
+    Available { node_name: String },
+    Manual,
+    Unreachable,
+}
+
+impl LinkedAgent {
+    pub fn notice(&self) -> LinkedAgentNotice {
+        match self {
+            Self::Available(update) => LinkedAgentNotice::Available {
+                node_name: update.node_name.clone(),
+            },
+            Self::Manual => LinkedAgentNotice::Manual,
+            Self::Unreachable => LinkedAgentNotice::Unreachable,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct LinkedAgentUpdate {
+    connection: SavedConnection,
+    node_name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum LinkedUpdateError {
+    Manual { message: &'static str },
+    Failed { message: String },
+}
+
+impl LinkedUpdateError {
+    pub fn failed(message: impl Into<String>) -> Self {
+        Self::Failed {
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentUpdateProgress {
+    Preparing,
+    Installing,
+    Restarting,
+    CheckingHealth,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentStatus {
+    agent_version: Option<String>,
+    update: Option<AgentUpdateStatus>,
+}
+
+#[derive(Deserialize)]
+struct AgentUpdateStatus {
+    state: AgentUpdateState,
+    supported: Option<bool>,
+    version: Option<String>,
+    reason: Option<String>,
+}
+
+#[derive(Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum AgentUpdateState {
+    Idle,
+    Checking,
+    Downloading,
+    Staged,
+    StagingFailed,
+    Installing,
+    Succeeded,
+    RolledBack,
+    Failed,
+    #[serde(other)]
+    Unknown,
+}
+
+fn agent_status(saved: &SavedConnection, timeout: u64) -> Result<AgentStatus> {
+    let value = host_request(saved, "GET", "/v1/host/status", Value::Null, timeout)?;
+    serde_json::from_value(value)
+        .map_err(|_| "The server returned an invalid agent update status.".into())
+}
+
+fn supports_update(status: &AgentStatus) -> bool {
+    // The first agents with the update route report phases without the flag.
+    status
+        .update
+        .as_ref()
+        .is_some_and(|update| update.supported != Some(false))
+}
+
+pub fn linked_agent(version: &str) -> Result<Option<LinkedAgent>> {
+    linked_agent_in(&config_dir()?, version)
+}
+
+fn linked_agent_in(dir: &Path, version: &str) -> Result<Option<LinkedAgent>> {
+    if !file_path(dir)
+        .try_exists()
+        .map_err(|_| "could not read host connection")?
+    {
+        return Ok(None);
+    }
+    let connection = read_configured(dir)?;
+    let status = agent_status(&connection, AGENT_STATUS_TIMEOUT)?;
+    let newer = status
+        .agent_version
+        .as_deref()
+        .and_then(|installed| release_is_newer(version, installed));
+    if newer == Some(false) {
+        return Ok(None);
+    }
+    if !supports_update(&status) {
+        return Ok(Some(LinkedAgent::Manual));
+    }
+    if newer.is_none() {
+        return Ok(Some(LinkedAgent::Unreachable));
+    }
+    let url = Url::parse(&connection.endpoint).map_err(|_| "invalid linked server endpoint")?;
+    let node_name = url
+        .host_str()
+        .ok_or("invalid linked server hostname")?
+        .to_owned();
+    Ok(Some(LinkedAgent::Available(LinkedAgentUpdate {
+        connection,
+        node_name,
+    })))
+}
+
+enum AgentPoll {
+    Pending(AgentUpdateProgress),
+    Succeeded,
+}
+
+impl AgentStatus {
+    fn outcome(&self, version: &str) -> std::result::Result<AgentPoll, LinkedUpdateError> {
+        use AgentUpdateProgress as Progress;
+        use AgentUpdateState as Phase;
+
+        let Some(update) = &self.update else {
+            return Err(LinkedUpdateError::Manual {
+                message: MANUAL_AGENT_UPDATE,
+            });
+        };
+        let running_target = self.agent_version.as_deref() == Some(version);
+        match update.state {
+            Phase::Succeeded if running_target && update.version.as_deref() == Some(version) => {
+                Ok(AgentPoll::Succeeded)
+            }
+            Phase::StagingFailed | Phase::RolledBack | Phase::Failed => {
+                let message = if update.state == Phase::RolledBack {
+                    "The server rolled back the agent update."
+                } else {
+                    "The server agent update failed."
+                };
+                let reason = update
+                    .reason
+                    .as_deref()
+                    .filter(|reason| !reason.trim().is_empty());
+                Err(LinkedUpdateError::failed(match reason {
+                    Some(reason) => format!("{message} {reason}"),
+                    None => message.to_owned(),
+                }))
+            }
+            Phase::Installing if !running_target => Ok(AgentPoll::Pending(Progress::Installing)),
+            Phase::Installing | Phase::Succeeded => {
+                Ok(AgentPoll::Pending(Progress::CheckingHealth))
+            }
+            _ => Ok(AgentPoll::Pending(Progress::Preparing)),
+        }
+    }
+}
+
+fn request_agent_update(
+    saved: &SavedConnection,
+    version: &str,
+) -> std::result::Result<(), LinkedUpdateError> {
+    let response = host_request(
+        saved,
+        "POST",
+        "/v2/host/update",
+        json!({ "version": version }),
+        AGENT_STATUS_TIMEOUT,
+    );
+    match response {
+        Ok(response) if response["accepted"] == true => Ok(()),
+        Err(error) if matches!(error.as_str(), "HTTP transport returned status 404" | "HTTP transport returned status 503") => {
+            Err(LinkedUpdateError::Manual { message: MANUAL_AGENT_UPDATE })
+        }
+        Err(error) if error == "HTTP transport returned status 429" => {
+            Err(LinkedUpdateError::failed("Try again in a few minutes."))
+        }
+        Err(error) if error == "HTTP transport returned status 409" => {
+            Err(LinkedUpdateError::failed("An agent update is already running on your server. Try again in a few minutes."))
+        }
+        _ => Err(LinkedUpdateError::failed("Could not request the agent update on your server. Check the host connection and try again.")),
+    }
+}
+
+fn restarting(error: &str) -> bool {
+    matches!(
+        error,
+        "HTTP transport request failed"
+            | "HTTP transport response exceeded its limit or could not be read"
+            | "HTTP transport returned status 502"
+            | "HTTP transport returned status 503"
+            | "HTTP transport returned status 504"
+    )
+}
+
+impl LinkedAgentUpdate {
+    pub fn run(
+        &self,
+        version: &str,
+        progress: impl FnMut(AgentUpdateProgress),
+    ) -> std::result::Result<(), LinkedUpdateError> {
+        let saved = config_dir().and_then(|dir| read_configured(&dir));
+        if saved.as_ref() != Ok(&self.connection) {
+            return Err(LinkedUpdateError::failed(
+                "The linked server changed. Check for updates again.",
+            ));
+        }
+        self.run_update(version, AGENT_UPDATE_TIMEOUT, AGENT_POLL_INTERVAL, progress)
+    }
+
+    fn run_update(
+        &self,
+        version: &str,
+        timeout: Duration,
+        poll_interval: Duration,
+        mut progress: impl FnMut(AgentUpdateProgress),
+    ) -> std::result::Result<(), LinkedUpdateError> {
+        if !valid_release_version(version) {
+            return Err(LinkedUpdateError::failed("Invalid agent release version."));
+        }
+
+        request_agent_update(&self.connection, version)?;
+        let started = Instant::now();
+        let mut last_progress = AgentUpdateProgress::Preparing;
+        progress(last_progress);
+        loop {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                break;
+            }
+            let request_timeout = (remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0))
+                .min(AGENT_STATUS_TIMEOUT);
+            let status = agent_status(&self.connection, request_timeout);
+            if started.elapsed() >= timeout {
+                break;
+            }
+            let phase = match status {
+                Ok(status) => match status.outcome(version)? {
+                    AgentPoll::Succeeded => return Ok(()),
+                    AgentPoll::Pending(phase) => phase,
+                },
+                Err(error) if restarting(&error) => AgentUpdateProgress::Restarting,
+                Err(_) => {
+                    return Err(LinkedUpdateError::failed(
+                        "Could not read the agent update status from your server.",
+                    ))
+                }
+            };
+            if phase != last_progress {
+                progress(phase);
+                last_progress = phase;
+            }
+            std::thread::sleep(poll_interval.min(timeout.saturating_sub(started.elapsed())));
+        }
+        Err(LinkedUpdateError::failed(AGENT_TIMEOUT_MESSAGE))
+    }
+}
+
 fn game_request(saved: &SavedConnection, path: &str, body: Value) -> Result<Value> {
     host_request(saved, "POST", path, body, 15).map_err(|error| {
         if error == "HTTP transport returned status 404" {
@@ -386,6 +684,177 @@ fn import_game(saved: &SavedConnection, game_id: &str, fingerprint: &Value) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TARGET: &str = "0.3.0";
+
+    fn status_json(
+        running: &str,
+        phase: &str,
+        version: Option<&str>,
+        reason: Option<&str>,
+    ) -> Value {
+        json!({
+            "agentVersion": running,
+            "update": {"state":phase,"version":version,"reason":reason}
+        })
+    }
+
+    #[test]
+    fn finds_an_older_linked_agent_with_semver_and_reads_support() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(linked_agent_in(dir.path(), TARGET).unwrap().is_none());
+        configure(dir.path(), "https://node.example/admin", "test-token").unwrap();
+        let replies = [
+            status_json("0.3.0-rc.1", "idle", None, None),
+            status_json("0.3.0", "idle", None, None),
+            status_json("0.10.0", "idle", None, None),
+            json!({"agentVersion":"0.2.0","update":{"state":"idle","supported":false}}),
+            json!({"games":[],"refreshedAt":""}),
+        ];
+        let mut replies = replies.into_iter();
+        let _fake = bridge::fake::install(move |request| {
+            assert_eq!(request["url"], "https://node.example/admin/v1/host/status");
+            assert_eq!(request["verb"], "GET");
+            assert_eq!(request["body"], Value::Null);
+            Ok(replies.next().expect("unexpected status request"))
+        });
+        let agent = linked_agent_in(dir.path(), TARGET).unwrap().unwrap();
+        assert_eq!(
+            json!(agent.notice()),
+            json!({"kind":"available","nodeName":"node.example"})
+        );
+        assert!(linked_agent_in(dir.path(), TARGET).unwrap().is_none());
+        assert!(linked_agent_in(dir.path(), TARGET).unwrap().is_none());
+        for _ in 0..2 {
+            assert!(matches!(
+                linked_agent_in(dir.path(), TARGET).unwrap(),
+                Some(LinkedAgent::Manual)
+            ));
+        }
+    }
+
+    #[test]
+    fn update_sends_only_the_expected_version_and_maps_unavailable_and_cooldown() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = configure(dir.path(), "https://node.example", "test-token").unwrap();
+        for code in [404, 503, 429] {
+            let _fake = bridge::fake::install(move |request| {
+                assert_eq!(request["url"], "https://node.example/v2/host/update");
+                assert_eq!(request["verb"], "POST");
+                assert_eq!(request["token"], "test-token");
+                assert_eq!(request["body"], json!({"version": TARGET}));
+                Err(format!("HTTP transport returned status {code}"))
+            });
+            let error = request_agent_update(&saved, TARGET).unwrap_err();
+            if code == 429 {
+                assert_eq!(
+                    json!(error),
+                    json!({"kind":"failed","message":"Try again in a few minutes."})
+                );
+            } else {
+                assert_eq!(
+                    json!(error),
+                    json!({"kind":"manual","message":MANUAL_AGENT_UPDATE})
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn polls_through_restart_and_requires_success_for_the_exact_running_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let connection = configure(dir.path(), "https://node.example", "test-token").unwrap();
+        let agent = LinkedAgentUpdate {
+            connection,
+            node_name: "node.example".into(),
+        };
+        let responses = [
+            Ok(json!({"accepted":true})),
+            Ok(status_json("0.2.0", "checking", Some(TARGET), None)),
+            Ok(status_json("0.2.0", "installing", Some(TARGET), None)),
+            Err("HTTP transport request failed".into()),
+            Err("HTTP transport returned status 502".into()),
+            Ok(status_json(TARGET, "installing", Some(TARGET), None)),
+            Ok(status_json(TARGET, "succeeded", Some("0.2.0"), None)),
+            Ok(status_json("0.2.0", "succeeded", Some(TARGET), None)),
+            Ok(status_json(TARGET, "succeeded", Some(TARGET), None)),
+        ];
+        let requests = std::rc::Rc::new(std::cell::Cell::new(0));
+        let calls = requests.clone();
+        let mut responses = responses.into_iter();
+        let _fake = bridge::fake::install(move |request| {
+            let (verb, path) = if calls.get() == 0 {
+                ("POST", "v2/host/update")
+            } else {
+                ("GET", "v1/host/status")
+            };
+            assert_eq!(request["verb"], verb);
+            assert_eq!(request["url"], format!("https://node.example/{path}"));
+            calls.set(calls.get() + 1);
+            responses.next().expect("unexpected update request")
+        });
+        let mut phases = Vec::new();
+        agent
+            .run_update(TARGET, Duration::from_secs(1), Duration::ZERO, |phase| {
+                phases.push(phase)
+            })
+            .unwrap();
+        assert_eq!(requests.get(), 9);
+        assert_eq!(
+            phases,
+            [
+                AgentUpdateProgress::Preparing,
+                AgentUpdateProgress::Installing,
+                AgentUpdateProgress::Restarting,
+                AgentUpdateProgress::CheckingHealth,
+            ]
+        );
+    }
+
+    #[test]
+    fn stops_on_a_terminal_failure_and_preserves_the_reason() {
+        for (phase, message) in [
+            ("stagingFailed", "The server agent update failed."),
+            ("failed", "The server agent update failed."),
+            ("rolledBack", "The server rolled back the agent update."),
+        ] {
+            let status: AgentStatus = serde_json::from_value(status_json(
+                "0.2.0",
+                phase,
+                Some(TARGET),
+                Some("The service failed its health check."),
+            ))
+            .unwrap();
+            assert!(matches!(
+                status.outcome(TARGET),
+                Err(LinkedUpdateError::Failed { message: actual }) if actual == format!("{message} The service failed its health check.")
+            ));
+        }
+    }
+
+    #[test]
+    fn polling_times_out_after_the_update_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let connection = configure(dir.path(), "https://node.example", "test-token").unwrap();
+        let agent = LinkedAgentUpdate {
+            connection,
+            node_name: "node.example".into(),
+        };
+        let _fake = bridge::fake::install(|request| match request["verb"].as_str() {
+            Some("POST") => Ok(json!({"accepted":true})),
+            Some("GET") => Err("HTTP transport request failed".into()),
+            _ => panic!("unexpected update request"),
+        });
+        let error = agent
+            .run_update(
+                TARGET,
+                Duration::from_millis(10),
+                Duration::from_millis(2),
+                |_| {},
+            )
+            .unwrap_err();
+        assert_eq!(json!(error)["message"], AGENT_TIMEOUT_MESSAGE);
+    }
 
     #[test]
     fn endpoint_requires_https_except_literal_loopback_http() {

@@ -111,6 +111,14 @@ impl Paths {
         Ok(lock)
     }
 
+    fn staging_lock(&self, owner: u32) -> Result<File> {
+        let lock = self.update_dir()?;
+        self.swap_lock()
+            .map_err(|_| "agent update requires a valid swap lock")?;
+        self.staging_dir(owner)?;
+        Ok(lock)
+    }
+
     fn staging_status(&self, owner: u32) -> Option<Status> {
         self.staging_dir(owner).ok()?;
         let bytes = read_file(&self.staged().join(STAGE_STATUS), 4096, owner).ok()?;
@@ -205,8 +213,17 @@ struct Status {
 }
 
 pub fn status() -> serde_json::Value {
-    let status = Paths::system().status(effective_uid());
-    serde_json::json!({"state":status.state,"version":status.version,"reason":status.reason})
+    let paths = Paths::system();
+    let owner = effective_uid();
+    let supported = can_stage(owner) && paths.staging_lock(owner).is_ok();
+    let status = paths.status(owner);
+    serde_json::json!({
+        "supported":supported,"state":status.state,"version":status.version,"reason":status.reason
+    })
+}
+
+fn can_stage(owner: u32) -> bool {
+    owner != 0 && update::can_check()
 }
 
 fn effective_uid() -> u32 {
@@ -272,10 +289,8 @@ fn now_seconds() -> u64 {
 impl Stage {
     fn acquire(paths: Paths, now: u64) -> std::result::Result<Self, QueueError> {
         let owner = effective_uid();
-        let lock = paths.update_dir().map_err(|_| QueueError::Unavailable)?;
-        paths.swap_lock().map_err(|_| QueueError::Unavailable)?;
-        paths
-            .staging_dir(owner)
+        let lock = paths
+            .staging_lock(owner)
             .map_err(|_| QueueError::Unavailable)?;
         let check_cooldown = || {
             let status = paths.status(owner);
@@ -320,7 +335,7 @@ impl Stage {
 
     fn system() -> std::result::Result<Self, QueueError> {
         let paths = Paths::system();
-        if effective_uid() == 0 || !update::can_check() {
+        if !can_stage(effective_uid()) {
             return Err(QueueError::Unavailable);
         }
         Self::acquire(paths, now_seconds())

@@ -333,6 +333,12 @@ pub fn valid_release_version(version: &str) -> bool {
         && Version::parse(version).is_ok_and(|version| version.build.is_empty())
 }
 
+pub fn release_is_newer(release: &str, installed: &str) -> Option<bool> {
+    let release = Version::parse(release).ok()?;
+    let installed = Version::parse(installed).ok()?;
+    Some(release.cmp_precedence(&installed).is_gt())
+}
+
 /// Signed metadata for an agent upgrade, tied to a version and architecture.
 pub struct AgentRelease {
     signed: SignedRelease,

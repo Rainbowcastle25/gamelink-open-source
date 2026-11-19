@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import App from "../App";
 import { createMockBackend } from "../lib/mockBackend";
-import type { ReleaseNotice } from "../lib/types";
+import type { AgentUpdateProgress, ReleaseNotice } from "../lib/types";
 
 const update: ReleaseNotice = {
   version: "0.3.0",
@@ -12,12 +12,29 @@ const update: ReleaseNotice = {
   summary: "Improves connection recovery.",
   canInstall: true,
   installerError: null,
+  linkedAgent: null,
 };
 
+const linkedUpdate: ReleaseNotice = {
+  ...update,
+  linkedAgent: { kind: "available", nodeName: "games.example.org" },
+};
+const manualAgentUpdate = "Update the GameLink agent on your server with the setup guide or your package manager.";
+
+function setupLinkedUpdate(notice = linkedUpdate) {
+  const backend = createMockBackend({ delayMs: 0 });
+  vi.spyOn(backend, "checkRelease").mockResolvedValue(notice);
+  const server = vi.spyOn(backend, "updateLinkedAgent");
+  const app = vi.spyOn(backend, "installUpdate").mockResolvedValue(undefined);
+  const relaunch = vi.spyOn(backend, "relaunch");
+  return { backend, server, app, relaunch, user: userEvent.setup() };
+}
+
 describe("Release notifications", () => {
-  it("shows the update from startup, tracks installation, and relaunches", async () => {
+  it("shows plain Update when no node is linked, tracks installation, and relaunches", async () => {
     const backend = createMockBackend({ delayMs: 0 });
     vi.spyOn(backend, "checkRelease").mockResolvedValue(update);
+    const server = vi.spyOn(backend, "updateLinkedAgent");
     let finish!: () => void;
     const install = vi.spyOn(backend, "installUpdate").mockImplementation((_version, onProgress) => {
       onProgress({ stage: "downloading", downloaded: 25, total: 100 });
@@ -34,16 +51,132 @@ describe("Release notifications", () => {
     render(<App backend={backend} />);
     const button = await screen.findByRole("button", { name: "Update" });
     expect(button.closest("main")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Update all" })).not.toBeInTheDocument();
     expect(screen.getByText("Update available · GameLink 0.3.0")).toBeInTheDocument();
     expect(screen.getByText(update.summary!)).toBeInTheDocument();
     await user.click(button);
     expect(install).toHaveBeenCalledWith(update.version, expect.any(Function));
+    expect(server).not.toHaveBeenCalled();
     expect(screen.getByRole("progressbar", { name: "Downloading update" })).toHaveAttribute("value", "25");
     expect(screen.getByRole("button", { name: "Updating…" })).toBeDisabled();
     expect(relaunch).not.toHaveBeenCalled();
     await act(async () => finish());
     expect(relaunch).toHaveBeenCalledOnce();
     expect(screen.getByText("Restarting GameLink…")).toBeInTheDocument();
+  });
+
+  it("updates the linked server first and installs the app only after server success", async () => {
+    const { backend, server, app, relaunch, user } = setupLinkedUpdate();
+    let progress!: (phase: AgentUpdateProgress) => void;
+    let succeed!: () => void;
+    server.mockImplementation((_version, onProgress) => {
+      progress = onProgress;
+      return new Promise<void>((resolve) => { succeed = resolve; });
+    });
+
+    render(<App backend={backend} />);
+    const button = await screen.findByRole("button", { name: "Update all" });
+    expect(screen.getByText("Update this PC and your server games.example.org.")).toBeInTheDocument();
+    expect(server).not.toHaveBeenCalled();
+    expect(app).not.toHaveBeenCalled();
+
+    await user.click(button);
+    expect(server).toHaveBeenCalledWith(update.version, expect.any(Function));
+    expect(screen.getByText("Preparing the server update…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update this app only" })).toBeDisabled();
+    for (const [phase, text] of [
+      ["installing", "Installing the server update…"],
+      ["restarting", "Waiting for your server agent to restart…"],
+      ["checkingHealth", "Checking server agent health…"],
+    ] as const) {
+      act(() => progress(phase));
+      expect(screen.getByText(text)).toBeInTheDocument();
+      expect(app).not.toHaveBeenCalled();
+      expect(relaunch).not.toHaveBeenCalled();
+    }
+
+    await act(async () => succeed());
+    expect(app).toHaveBeenCalledExactlyOnceWith(update.version, expect.any(Function));
+    expect(relaunch).toHaveBeenCalledOnce();
+    act(() => progress("checkingHealth"));
+    expect(screen.getByText("Restarting GameLink…")).toBeInTheDocument();
+  });
+
+  it("stops on server rollback, shows its reason, and lets the user retry", async () => {
+    const { backend, server, app, relaunch, user } = setupLinkedUpdate();
+    const rollback = "The server rolled back the agent update. The service failed its health check.";
+    server.mockRejectedValueOnce({ kind: "failed", message: rollback }).mockResolvedValueOnce(undefined);
+
+    render(<App backend={backend} />);
+    await user.click(await screen.findByRole("button", { name: "Update all" }));
+    expect(await screen.findByText(rollback)).toHaveAttribute("role", "alert");
+    expect(app).not.toHaveBeenCalled();
+    expect(relaunch).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Update this app only" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(server).toHaveBeenCalledTimes(2);
+    expect(app).toHaveBeenCalledOnce();
+  });
+
+  it("updates only the app when selected", async () => {
+    const { backend, server, app, relaunch, user } = setupLinkedUpdate();
+    render(<App backend={backend} />);
+    await user.click(await screen.findByRole("button", { name: "Update this app only" }));
+    expect(server).not.toHaveBeenCalled();
+    expect(app).toHaveBeenCalledExactlyOnceWith(update.version, expect.any(Function));
+    expect(relaunch).toHaveBeenCalledOnce();
+  });
+
+  it("retries the desktop installer without requesting a second server update", async () => {
+    const { backend, server, app, user } = setupLinkedUpdate();
+    server.mockResolvedValueOnce(undefined);
+    app.mockRejectedValueOnce("Could not download the installer.");
+    render(<App backend={backend} />);
+    await user.click(await screen.findByRole("button", { name: "Update all" }));
+    expect(await screen.findByText("Could not download the installer.")).toHaveAttribute("role", "alert");
+    await user.click(screen.getByRole("button", { name: "Retry update" }));
+    expect(server).toHaveBeenCalledOnce();
+    expect(app).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    "Try again in a few minutes.",
+    "Timed out waiting for your server to finish updating. This app has not been updated.",
+  ])("leaves the app untouched when the server reports %s", async (message) => {
+    const { backend, server, app, relaunch, user } = setupLinkedUpdate();
+    server.mockRejectedValue({ kind: "failed", message });
+    render(<App backend={backend} />);
+    await user.click(await screen.findByRole("button", { name: "Update all" }));
+    expect(await screen.findByText(message)).toHaveAttribute("role", "alert");
+    expect(screen.queryByText("Preparing the server update…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(server).toHaveBeenCalledOnce();
+    expect(app).not.toHaveBeenCalled();
+    expect(relaunch).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Update this app only" }));
+    expect(server).toHaveBeenCalledOnce();
+    expect(app).toHaveBeenCalledOnce();
+  });
+
+  it("shows manual guidance when the linked agent lacks self-update support", async () => {
+    const { backend, server } = setupLinkedUpdate({ ...update, linkedAgent: { kind: "manual" } });
+    render(<App backend={backend} />);
+    expect(await screen.findByText(manualAgentUpdate)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update this app only" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Update all" })).not.toBeInTheDocument();
+    expect(server).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the manual guidance when the update route becomes unavailable", async () => {
+    const { backend, server, app, user } = setupLinkedUpdate();
+    server.mockRejectedValue({ kind: "manual", message: manualAgentUpdate });
+    render(<App backend={backend} />);
+    await user.click(await screen.findByRole("button", { name: "Update all" }));
+    expect(await screen.findByText(manualAgentUpdate)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update this app only" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(app).not.toHaveBeenCalled();
   });
 
   it("stays quiet when no verified release is returned", async () => {

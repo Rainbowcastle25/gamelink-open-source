@@ -293,6 +293,12 @@ then run `sudo /usr/local/bin/.gamelink-agent-update-helper update install-stage
 the unit's sandbox. Enable the path unit again if you want automatic handoff
 on later requests.
 
+With host administration linked to the desktop app, **Update all** asks the
+server to stage the same signed release offered to the PC. The app waits for
+the agent to restart, pass its health check and report the expected version
+before installing the desktop update. Choose **Update this app only** to skip
+the server. Release checks only display the available update.
+
 The root-owned helper is a separate hard link to the trusted binary. Its
 path stays executable if the candidate fails to launch. The helper advances
 the link only after the replacement passes its health check and commits.

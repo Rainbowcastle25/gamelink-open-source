@@ -1,4 +1,10 @@
-use crate::{host, VERSION};
+use crate::{
+    host,
+    host_connection::{
+        self, AgentUpdateProgress, LinkedAgent, LinkedAgentNotice, LinkedUpdateError,
+    },
+    VERSION,
+};
 use gamelink_core::update::{self, CheckResult, Manifest};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -23,6 +29,8 @@ const INSTALLER_UNAVAILABLE: &str =
     "The installer is unavailable. Try again or open the release notes.";
 const INSTALL_FAILED: &str =
     "Could not install the update. Check installation permissions or open the release notes.";
+const UPDATE_BUSY: &str = "An update check or installation is already running. Try again shortly.";
+const UPDATE_CHANGED: &str = "The available update changed. Check again for the current version.";
 
 #[derive(Default)]
 pub struct UpdateState(Mutex<Option<PreparedUpdate>>);
@@ -30,6 +38,7 @@ pub struct UpdateState(Mutex<Option<PreparedUpdate>>);
 struct PreparedUpdate {
     update: Update,
     artifact_digest: String,
+    linked_agent: Option<host_connection::LinkedAgentUpdate>,
 }
 
 #[derive(Serialize)]
@@ -41,6 +50,7 @@ pub struct ReleaseNotice {
     summary: Option<String>,
     can_install: bool,
     installer_error: Option<&'static str>,
+    linked_agent: Option<LinkedAgentNotice>,
 }
 
 #[derive(Serialize)]
@@ -192,9 +202,22 @@ pub async fn check_release(
                 *prepared = Some(PreparedUpdate {
                     update,
                     artifact_digest: digest.to_owned(),
+                    linked_agent: None,
                 });
             }
             _ => installer_error = Some(INSTALLER_UNAVAILABLE),
+        }
+    }
+    let mut linked_agent = None;
+    if let Some(prepared) = prepared.as_mut() {
+        let version = release.version.clone();
+        let linked = spawn_blocking(move || host_connection::linked_agent(&version))
+            .await
+            .unwrap_or_else(|_| Err("Could not check the linked server.".into()))
+            .unwrap_or(Some(LinkedAgent::Unreachable));
+        linked_agent = linked.as_ref().map(LinkedAgent::notice);
+        if let Some(LinkedAgent::Available(agent)) = linked {
+            prepared.linked_agent = Some(agent);
         }
     }
     if enabled_dir().is_none() {
@@ -211,6 +234,7 @@ pub async fn check_release(
         summary,
         can_install: prepared.is_some(),
         installer_error,
+        linked_agent,
     }))
 }
 
@@ -223,8 +247,43 @@ fn ensure_install_allowed(
     if cached_notice(dir).is_some_and(|notice| notice.release.version == version) {
         Ok(())
     } else {
-        Err("The available update changed. Check again for the current version.")
+        Err(UPDATE_CHANGED)
     }
+}
+
+fn verify_install_version(version: &str) -> Result<(), &'static str> {
+    ensure_install_allowed(version, enabled_dir().as_deref(), |dir| {
+        update::cached_notice(dir, VERSION)
+    })
+}
+
+#[tauri::command]
+pub async fn update_linked_agent(
+    state: State<'_, UpdateState>,
+    version: String,
+    progress: Channel<AgentUpdateProgress>,
+) -> Result<(), LinkedUpdateError> {
+    let state = state
+        .0
+        .try_lock()
+        .map_err(|_| LinkedUpdateError::failed(UPDATE_BUSY))?;
+    let prepared = state
+        .as_ref()
+        .filter(|prepared| prepared.update.version == version)
+        .ok_or_else(|| LinkedUpdateError::failed(UPDATE_CHANGED))?;
+    let agent = prepared.linked_agent.clone().ok_or_else(|| {
+        LinkedUpdateError::failed(
+            "The linked server update is unavailable. Check for updates again.",
+        )
+    })?;
+    verify_install_version(&version).map_err(LinkedUpdateError::failed)?;
+    spawn_blocking(move || {
+        agent.run(&version, |phase| {
+            let _ = progress.send(phase);
+        })
+    })
+    .await
+    .map_err(|_| LinkedUpdateError::failed("Could not update the GameLink agent on your server."))?
 }
 
 fn download_error(error: Error) -> &'static str {
@@ -348,19 +407,12 @@ pub async fn install_update(
     version: String,
     progress: Channel<UpdateProgress>,
 ) -> Result<(), String> {
-    let mut state = state
-        .0
-        .try_lock()
-        .map_err(|_| "An update check or installation is already running. Try again shortly.")?;
+    let mut state = state.0.try_lock().map_err(|_| UPDATE_BUSY)?;
     let prepared = state
         .as_ref()
         .filter(|prepared| prepared.update.version == version)
-        .ok_or("The available update changed. Check again for the current version.")?;
-    let verify_current = move || {
-        ensure_install_allowed(&version, enabled_dir().as_deref(), |dir| {
-            update::cached_notice(dir, VERSION)
-        })
-    };
+        .ok_or(UPDATE_CHANGED)?;
+    let verify_current = move || verify_install_version(&version);
     verify_current()?;
 
     let _ = progress.send(UpdateProgress::Downloading {
