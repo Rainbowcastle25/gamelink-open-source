@@ -21,6 +21,7 @@ export const realBackend: Backend = {
   overview: async () => call("overview"),
   servers: async () => (await call<Awaited<ReturnType<Backend["servers"]>>>("servers")) ?? [],
   settings: async () => call("settings"),
+  gameIcons: async () => (await call<Record<string, string> | null>("gameIcons")) ?? {},
   checkRelease: async () => call("checkRelease"),
   openReleaseNotes: async () => call("openReleaseNotes"),
   activity: async (limit) => (await call<Awaited<ReturnType<Backend["activity"]>>>("activity", { limit })) ?? [],

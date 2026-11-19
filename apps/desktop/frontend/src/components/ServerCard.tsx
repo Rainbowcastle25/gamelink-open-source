@@ -17,6 +17,7 @@ export interface ManageActions {
 
 interface Props {
   server: ServerView;
+  gameIcon?: string;
   busy?: BusyKind;
   hosted?: ReactNode;
   onJoin: () => void;
@@ -62,7 +63,7 @@ function Detail({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-export function ServerCard({ server, busy, hosted, onJoin, onPlay, onDisconnect, onCheck, onLaunch, onOpenRequests, manage }: Props) {
+export function ServerCard({ server, gameIcon, busy, hosted, onJoin, onPlay, onDisconnect, onCheck, onLaunch, onOpenRequests, manage }: Props) {
   const [open, setOpen] = useState(false);
   const detailsId = useId();
   const status = serverStatus(server, busy);
@@ -132,7 +133,7 @@ export function ServerCard({ server, busy, hosted, onJoin, onPlay, onDisconnect,
       )}
     >
       <div className="flex items-center gap-4 p-4">
-        <GameThumb game={server.game} />
+        <GameThumb game={server.game} src={gameIcon} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <h3 className="truncate text-[15px] font-semibold">{server.name}</h3>

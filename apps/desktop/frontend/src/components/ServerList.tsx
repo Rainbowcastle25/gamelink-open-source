@@ -19,7 +19,7 @@ export interface ManageHandlers {
 
 /** The vertical list of server cards, wired to the store. Also owns the loading / error / empty states. */
 export function ServerList({ manage }: { manage?: ManageHandlers }) {
-  const { ready, loadError, servers, busy } = useAppState();
+  const { ready, loadError, servers, busy, gameIcons } = useAppState();
   const store = useStore();
   const { go } = useNav();
   const local = useHostedGames(store.backend);
@@ -107,7 +107,7 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
       {hostedOnly.map((game) => (
         <li key={game.key} className="min-w-0">
           <article aria-label={game.name} className="flex min-w-0 items-start gap-4 rounded-xl border border-line bg-surface p-4 shadow-card">
-            <GameThumb game={game.game} />
+            <GameThumb game={game.game} src={gameIcons[game.game]} />
             <div className="min-w-0 flex-1">
               <h3 className="text-[15px] font-semibold [overflow-wrap:anywhere]">{game.name}</h3>
               <HostedCardDetails name={game.name} detail={game.detail} copy={game.copy} legacyAgent={game.legacyAgent} />
@@ -122,6 +122,7 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
           <li key={s.id} className="min-w-0">
             <ServerCard
               server={s}
+              gameIcon={gameIcons[s.game]}
               busy={busy[s.id]}
               hosted={(game || stale) && <>
                 {game && <HostedCardDetails name={s.name} detail={game.detail} copy={game.copy} legacyAgent={game.legacyAgent} />}

@@ -144,6 +144,8 @@ describe.each([
 ] as const)("%s hosted server cards", (_screen, Screen) => {
   it("copies the selected local and linked games and gives a saved game one card", async () => {
     const backend = createMockBackend({ delayMs: 0 });
+    const factorioIcon = "data:image/png;base64,AA==";
+    vi.spyOn(backend, "gameIcons").mockResolvedValue({ factorio: factorioIcon });
     const local = await backend.createHostedGame({ name: "Local Bedrock", game: Type.MinecraftBedrock, port: 19132 });
     await backend.configureHost("http://127.0.0.1:8467", "test");
     const snapshot = await backend.refreshHost();
@@ -165,6 +167,9 @@ describe.each([
     await user.click(within(localCard).getByRole("button", { name: "Copy invitation" }));
     expect(await screen.findByText("Invitation copied for Local Bedrock. Share it privately.")).toBeInTheDocument();
     expect(copyLocal.mock.calls).toEqual([[local.id]]);
+    const factoryCard = await screen.findByRole("article", { name: "Demo: Factory" });
+    const factoryTile = within(factoryCard).getByRole("img", { name: "Factorio" });
+    await waitFor(() => expect(factoryTile.querySelector("img")).toHaveAttribute("src", factorioIcon));
     const guestCard = screen.getByRole("article", { name: "Friends Survival" });
     expect(within(guestCard).queryByRole("button", { name: "Copy invitation" })).not.toBeInTheDocument();
   });

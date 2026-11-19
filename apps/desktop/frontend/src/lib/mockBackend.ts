@@ -487,6 +487,9 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
       await wait();
       return clone(allServers());
     },
+    async gameIcons() {
+      return {};
+    },
     async settings() {
       await wait();
       return clone(settings);

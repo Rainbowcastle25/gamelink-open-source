@@ -138,7 +138,12 @@ they then select **Our Minecraft (GameLink)** in Minecraft's multiplayer list;
 with it off, they use the local address shown on the server card
 (normally `127.0.0.1:25565`).
 
-**One-click Play.** In Settings, under *Local game executables*, pick the
+**One-click Play.** GameLink tries to use local Factorio and Minecraft icons
+when it finds them. On Windows it tries the selected executable, standard
+install paths, and Microsoft Store registrations; icon extraction has not been
+tested on a running Windows system. On Linux it uses registered desktop icons
+or the artwork from your selected Factorio install.
+In Settings, under *Local game executables*, pick the
 game's program. The server card then shows **Play**. It joins, waits until the
 tunnel is up, and starts the game:
 

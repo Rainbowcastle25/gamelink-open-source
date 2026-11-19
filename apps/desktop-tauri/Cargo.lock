@@ -1269,8 +1269,11 @@ dependencies = [
 name = "gamelink-desktop"
 version = "0.2.0-alpha"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "gamelink-core",
+ "gtk",
+ "png",
  "serde",
  "serde_json",
  "tauri",

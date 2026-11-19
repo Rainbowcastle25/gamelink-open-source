@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod bridge;
+mod game_icons;
 mod host;
 mod host_connection;
 mod hosting;
@@ -56,6 +57,7 @@ fn public_method(method: &str) -> bool {
             | "overview"
             | "servers"
             | "settings"
+            | "gameIcons"
             | "activity"
             | "clearActivity"
             | "join"
@@ -206,6 +208,13 @@ fn native_or_manager(app: &tauri::AppHandle, request: Value) -> Result<Value, St
                 .map_err(|_| "could not open configuration folder")?;
             Ok(Value::Null)
         }
+        "gameIcons" => {
+            let settings = host::call(json!({"method":"settings"}))?;
+            let executables = &settings["gameExecutables"];
+            Ok(app
+                .state::<game_icons::Cache>()
+                .get_or_load(executables, || game_icons::load(app, executables)))
+        }
         _ => host::call(request),
     }
 }
@@ -257,6 +266,7 @@ fn main() {
         .setup(move |app| {
             let session = bridge::Session::open().map_err(std::io::Error::other)?;
             app.manage(session);
+            app.manage(game_icons::Cache::default());
             let handle = app.handle().clone();
             let worker = std::thread::spawn(move || {
                 while active.load(Ordering::Acquire) {
