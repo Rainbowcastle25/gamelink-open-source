@@ -37,7 +37,7 @@ export interface Backend {
   gameIcons(): Promise<Record<string, string>>;
   checkRelease(): Promise<ReleaseNotice | null>;
   updateLinkedAgent(version: string, offerId: string, onProgress: (progress: AgentUpdateProgress) => void): Promise<void>;
-  installUpdate(version: string, onProgress: (progress: UpdateProgress) => void): Promise<void>;
+  installUpdate(version: string, onProgress: (progress: UpdateProgress) => void, offerId?: string): Promise<void>;
   relaunch(): Promise<void>;
   openReleaseNotes(): Promise<void>;
   activity(limit: number): Promise<ActivityEvent[]>;

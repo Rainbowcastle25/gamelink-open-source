@@ -57,7 +57,7 @@ describe("Release notifications", () => {
     expect(screen.getByText("Update available · GameLink 0.3.0")).toBeInTheDocument();
     expect(screen.getByText(update.summary!)).toBeInTheDocument();
     await user.click(button);
-    expect(install).toHaveBeenCalledWith(update.version, expect.any(Function));
+    expect(install).toHaveBeenCalledWith(update.version, expect.any(Function), undefined);
     expect(server).not.toHaveBeenCalled();
     expect(screen.getByRole("progressbar", { name: "Downloading update" })).toHaveAttribute("value", "25");
     expect(screen.getByRole("button", { name: "Updating…" })).toBeDisabled();
@@ -98,7 +98,7 @@ describe("Release notifications", () => {
     }
 
     await act(async () => succeed());
-    expect(app).toHaveBeenCalledExactlyOnceWith(update.version, expect.any(Function));
+    expect(app).toHaveBeenCalledExactlyOnceWith(update.version, expect.any(Function), "old-offer");
     expect(relaunch).toHaveBeenCalledOnce();
     act(() => progress("checkingHealth"));
     expect(screen.getByText("Restarting GameLink…")).toBeInTheDocument();
@@ -121,11 +121,13 @@ describe("Release notifications", () => {
     expect(app).toHaveBeenCalledOnce();
   });
 
-  it("refreshes a relinked server after the pending update settles and waits for a fresh click", async () => {
-    const { backend, server, app, user } = setupLinkedUpdate();
+  it.each(["succeeds", "fails"])("refreshes a relinked server and waits for a fresh click when the old update %s", async (outcome) => {
+    const { backend, server, app, relaunch, user } = setupLinkedUpdate();
     const check = vi.mocked(backend.checkRelease).mockResolvedValueOnce(linkedUpdate);
-    let fail!: (error: unknown) => void;
-    server.mockResolvedValue(undefined).mockImplementationOnce(() => new Promise<void>((_, reject) => { fail = reject; }));
+    let finish!: () => void;
+    server.mockResolvedValue(undefined).mockImplementationOnce(() => new Promise<void>((resolve, reject) => {
+      finish = () => outcome === "succeeds" ? resolve() : reject({ kind: "failed", message: "Old server failed." });
+    }));
     function Relink() {
       const store = useStore();
       return <button onClick={() => void store.configureHost("https://new.example.org", "test-token")}>
@@ -141,12 +143,13 @@ describe("Release notifications", () => {
 
     await user.click(screen.getByRole("button", { name: "Relink" }));
     expect(check).toHaveBeenCalledOnce();
-    await act(async () => fail({ kind: "failed", message: "Old server failed." }));
+    await act(async () => finish());
 
+    expect(app).not.toHaveBeenCalled();
+    expect(relaunch).not.toHaveBeenCalled();
     expect(await screen.findByText("Update this PC and your server new.example.org.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
     expect(server).toHaveBeenCalledOnce();
-    expect(app).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Update all" }));
     expect(server).toHaveBeenCalledTimes(2);
     expect(server).toHaveBeenLastCalledWith(update.version, "new-offer", expect.any(Function));
@@ -157,7 +160,7 @@ describe("Release notifications", () => {
     render(<App backend={backend} />);
     await user.click(await screen.findByRole("button", { name: "Update this app only" }));
     expect(server).not.toHaveBeenCalled();
-    expect(app).toHaveBeenCalledExactlyOnceWith(update.version, expect.any(Function));
+    expect(app).toHaveBeenCalledExactlyOnceWith(update.version, expect.any(Function), undefined);
     expect(relaunch).toHaveBeenCalledOnce();
   });
 
@@ -171,6 +174,7 @@ describe("Release notifications", () => {
     await user.click(screen.getByRole("button", { name: "Retry update" }));
     expect(server).toHaveBeenCalledOnce();
     expect(app).toHaveBeenCalledTimes(2);
+    expect(app).toHaveBeenNthCalledWith(2, update.version, expect.any(Function), "old-offer");
   });
 
   it.each([

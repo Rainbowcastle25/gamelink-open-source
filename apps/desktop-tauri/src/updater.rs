@@ -407,13 +407,24 @@ pub async fn install_update(
     state: State<'_, UpdateState>,
     version: String,
     progress: Channel<UpdateProgress>,
+    offer_id: Option<String>,
 ) -> Result<(), String> {
     let mut state = state.0.try_lock().map_err(|_| UPDATE_BUSY)?;
     let prepared = state
         .as_ref()
         .filter(|prepared| prepared.update.version == version)
         .ok_or(UPDATE_CHANGED)?;
-    let verify_current = move || verify_install_version(&version);
+    let linked_agent = prepared.linked_agent.clone();
+    let verify_current = move || {
+        verify_install_version(&version)?;
+        if let Some(offer_id) = offer_id.as_deref() {
+            linked_agent
+                .as_ref()
+                .ok_or(host_connection::LINKED_SERVER_CHANGED)?
+                .verify_offer(offer_id)?;
+        }
+        Ok(())
+    };
     verify_current()?;
 
     let _ = progress.send(UpdateProgress::Downloading {

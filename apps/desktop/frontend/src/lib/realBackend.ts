@@ -27,9 +27,9 @@ export const realBackend: Backend = {
     const progress = new Channel<AgentUpdateProgress>(onProgress);
     await invoke("update_linked_agent", { version, offerId, progress });
   },
-  installUpdate: async (version, onProgress) => {
+  installUpdate: async (version, onProgress, offerId) => {
     const progress = new Channel<UpdateProgress>(onProgress);
-    await invoke("install_update", { version, progress });
+    await invoke("install_update", { version, progress, offerId });
   },
   // Windows hands off to the NSIS installer, which relaunches after installation.
   relaunch: async () => invoke("restart_game_link"),

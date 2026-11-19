@@ -31,6 +31,7 @@ const AGENT_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const AGENT_STATUS_TIMEOUT: u64 = 5;
 const AGENT_TIMEOUT_MESSAGE: &str =
     "Timed out waiting for your server to finish updating. This app has not been updated.";
+pub const LINKED_SERVER_CHANGED: &str = "The linked server changed. Check for updates again.";
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -629,6 +630,26 @@ impl LinkedAgentUpdate {
         self.run_in(&dir, version, offer_id, progress)
     }
 
+    pub fn verify_offer(&self, offer_id: &str) -> std::result::Result<(), &'static str> {
+        let dir = config_dir().map_err(|_| LINKED_SERVER_CHANGED)?;
+        self.verify_offer_in(&dir, offer_id)
+    }
+
+    fn verify_offer_in(&self, dir: &Path, offer_id: &str) -> std::result::Result<(), &'static str> {
+        if self.offer_id != offer_id {
+            return Err(LINKED_SERVER_CHANGED);
+        }
+        self.verify_connection(dir)
+    }
+
+    fn verify_connection(&self, dir: &Path) -> std::result::Result<(), &'static str> {
+        if read_configured(dir).as_ref() == Ok(&self.connection) {
+            Ok(())
+        } else {
+            Err(LINKED_SERVER_CHANGED)
+        }
+    }
+
     fn run_in(
         &self,
         dir: &Path,
@@ -636,16 +657,20 @@ impl LinkedAgentUpdate {
         offer_id: &str,
         progress: impl FnMut(AgentUpdateProgress),
     ) -> std::result::Result<(), LinkedUpdateError> {
-        if self.offer_id != offer_id || read_configured(dir).as_ref() != Ok(&self.connection) {
-            return Err(LinkedUpdateError::failed(
-                "The linked server changed. Check for updates again.",
-            ));
-        }
-        self.run_update(version, AGENT_UPDATE_TIMEOUT, AGENT_POLL_INTERVAL, progress)
+        self.verify_offer_in(dir, offer_id)
+            .map_err(LinkedUpdateError::failed)?;
+        self.run_update(
+            dir,
+            version,
+            AGENT_UPDATE_TIMEOUT,
+            AGENT_POLL_INTERVAL,
+            progress,
+        )
     }
 
     fn run_update(
         &self,
+        dir: &Path,
         version: &str,
         timeout: Duration,
         poll_interval: Duration,
@@ -664,6 +689,8 @@ impl LinkedAgentUpdate {
             if remaining.is_zero() {
                 break;
             }
+            self.verify_connection(dir)
+                .map_err(LinkedUpdateError::failed)?;
             let request_timeout = (remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0))
                 .min(AGENT_STATUS_TIMEOUT);
             let status = agent_status(&self.connection, request_timeout);
@@ -672,7 +699,11 @@ impl LinkedAgentUpdate {
             }
             let phase = match status {
                 Ok(status) => match status.outcome(version, &attempt_id)? {
-                    AgentPoll::Succeeded => return Ok(()),
+                    AgentPoll::Succeeded => {
+                        return self
+                            .verify_connection(dir)
+                            .map_err(LinkedUpdateError::failed);
+                    }
                     AgentPoll::Pending(phase) => phase,
                 },
                 Err(error) if restarting(&error) => AgentUpdateProgress::Restarting,
@@ -831,6 +862,55 @@ mod tests {
     }
 
     #[test]
+    fn relink_during_successful_poll_blocks_the_desktop_handoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_owned();
+        let connection = configure(&path, "https://node.example", "test-token").unwrap();
+        let agent = LinkedAgentUpdate::new(connection, "node.example".into());
+        let _fake = bridge::fake::install(move |request| match request["verb"].as_str() {
+            Some("POST") => Ok(json!({"accepted":true,"attemptId":"current-attempt"})),
+            Some("GET") => {
+                // Saving the same endpoint and token still creates a new binding.
+                configure(&path, "https://node.example", "").unwrap();
+                Ok(status_json(TARGET, "succeeded", Some(TARGET), None))
+            }
+            _ => panic!("unexpected update request"),
+        });
+
+        let error = agent
+            .run_in(dir.path(), TARGET, &agent.offer_id, |_| {})
+            .unwrap_err();
+        assert_eq!(
+            json!(error)["message"],
+            "The linked server changed. Check for updates again."
+        );
+    }
+
+    #[test]
+    fn relink_before_polling_stops_requests_to_the_old_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let connection = configure(dir.path(), "https://node.example", "test-token").unwrap();
+        let agent = LinkedAgentUpdate::new(connection, "node.example".into());
+        let _fake = bridge::fake::install(|request| {
+            assert_eq!(
+                request["verb"], "POST",
+                "polled the old server after relinking"
+            );
+            Ok(json!({"accepted":true,"attemptId":"current-attempt"}))
+        });
+
+        let error = agent
+            .run_in(dir.path(), TARGET, &agent.offer_id, |_| {
+                configure(dir.path(), "https://new.example", "test-token").unwrap();
+            })
+            .unwrap_err();
+        assert_eq!(
+            json!(error)["message"],
+            "The linked server changed. Check for updates again."
+        );
+    }
+
+    #[test]
     fn update_eligibility_rejects_legacy_games_and_accepts_empty_inventory() {
         let dir = tempfile::tempdir().unwrap();
         configure(dir.path(), "https://node.example", "test-token").unwrap();
@@ -879,7 +959,13 @@ mod tests {
         .into_iter();
         let _fake = bridge::fake::install(move |_| Ok(replies.next().unwrap()));
         let error = agent
-            .run_update(TARGET, Duration::from_secs(1), Duration::ZERO, |_| {})
+            .run_update(
+                dir.path(),
+                TARGET,
+                Duration::from_secs(1),
+                Duration::ZERO,
+                |_| {},
+            )
             .unwrap_err();
         assert_eq!(
             json!(error)["message"],
@@ -957,9 +1043,13 @@ mod tests {
         });
         let mut phases = Vec::new();
         agent
-            .run_update(TARGET, Duration::from_secs(1), Duration::ZERO, |phase| {
-                phases.push(phase)
-            })
+            .run_update(
+                dir.path(),
+                TARGET,
+                Duration::from_secs(1),
+                Duration::ZERO,
+                |phase| phases.push(phase),
+            )
             .unwrap();
         assert_eq!(requests.get(), 9);
         assert_eq!(
@@ -1010,6 +1100,7 @@ mod tests {
         });
         let error = agent
             .run_update(
+                dir.path(),
                 TARGET,
                 Duration::from_millis(10),
                 Duration::from_millis(2),

@@ -23,7 +23,8 @@ export function ReleaseNotifications() {
 }
 
 function EnabledNotifications() {
-  const { backend } = useStore();
+  const store = useStore();
+  const { backend } = store;
   const { hostConnection } = useAppState();
   const [notice, setNotice] = useState<ReleaseNotice | null>(null);
   const [retry, setRetry] = useState(0);
@@ -34,6 +35,7 @@ function EnabledNotifications() {
   const [installed, setInstalled] = useState(false);
   const busy = useRef(false);
   const refreshAfterUpdate = useRef(false);
+  const completedServerOffer = useRef<string | undefined>(undefined);
   const version = notice?.version;
   const linkedAgent = notice?.canInstall && !installed ? notice.linkedAgent : null;
   const updateAll = linkedAgent?.kind === "available";
@@ -45,6 +47,7 @@ function EnabledNotifications() {
       try {
         const result = await backend.checkRelease();
         if (!active) return;
+        completedServerOffer.current = undefined;
         setNotice(result);
         setCheckError(result?.installerError ?? null);
         setServerError(null);
@@ -73,6 +76,7 @@ function EnabledNotifications() {
     setServerError(null);
     try {
       if (!installed && version) {
+        const installOfferId = offerId ?? completedServerOffer.current;
         if (offerId) {
           let receivingServerProgress = true;
           setProgress({ stage: "server", phase: "preparing" });
@@ -80,6 +84,7 @@ function EnabledNotifications() {
             await backend.updateLinkedAgent(version, offerId, (phase) => {
               if (receivingServerProgress) setProgress({ stage: "server", phase });
             });
+            completedServerOffer.current = offerId;
             setNotice((current) => current?.linkedAgent?.kind === "available" && current.linkedAgent.offerId === offerId
               ? { ...current, linkedAgent: null }
               : current);
@@ -97,8 +102,12 @@ function EnabledNotifications() {
             receivingServerProgress = false;
           }
         }
+        if (installOfferId && store.getState().hostConnection !== hostConnection) {
+          setProgress(null);
+          return;
+        }
         setProgress({ stage: "downloading", downloaded: 0, total: null });
-        await backend.installUpdate(version, setProgress);
+        await backend.installUpdate(version, setProgress, installOfferId);
         setInstalled(true);
       }
       setProgress({ stage: "restarting" });
