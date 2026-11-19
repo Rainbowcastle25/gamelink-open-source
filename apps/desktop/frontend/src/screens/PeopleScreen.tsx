@@ -11,7 +11,7 @@ import { Skeleton } from "../components/Skeleton";
 import { useNav } from "../lib/nav";
 import { useAppState, useStore } from "../lib/store";
 import type { HostedDevice, HostedGame, PendingDevice } from "../lib/types";
-import { hostingError, useHostedGames, useLinkedGames } from "../lib/useHostedGames";
+import { hostingError, LEGACY_AGENT_UPDATE, useHostedGames, useLinkedGames } from "../lib/useHostedGames";
 
 function shortKey(publicKey: string) {
   return publicKey.replace(/^nodekey:/, "").slice(0, 12) + "…";
@@ -54,8 +54,9 @@ export function PeopleScreen() {
   const { go } = useNav();
   const hosted = useHostedGames(backend);
   const linked = useLinkedGames(backend, 5000);
-  const linkedGames = (linked.games ?? []).filter((game) => game.serverFingerprint);
+  const linkedGames = (linked.games ?? []).filter((game) => game.serverFingerprint || game.legacyAgent);
   const [approval, setApproval] = useState<{ game: GameForApproval; request?: PendingDevice; serverFingerprint?: string }>();
+  const legacyApproval = Boolean(approval?.serverFingerprint) && linkedGames.some((game) => game.id === approval?.game.id && game.legacyAgent);
   const [publicKey, setPublicKey] = useState("");
   const [label, setLabel] = useState("");
   const [revoking, setRevoking] = useState<{ game: HostedGame; device: HostedDevice }>();
@@ -87,7 +88,7 @@ export function PeopleScreen() {
   }
 
   function approve() {
-    if (busy || !approval || !publicKey.trim()) return;
+    if (busy || !approval || legacyApproval || !publicKey.trim()) return;
     const { game, request, serverFingerprint } = approval;
     void act(async () => {
       if (request && serverFingerprint) {
@@ -159,7 +160,8 @@ export function PeopleScreen() {
                 <article key={game.id} aria-labelledby={`linked-access-${game.id}`} className="py-4">
                   <h3 id={`linked-access-${game.id}`} className="font-medium [overflow-wrap:anywhere]">{game.name}</h3>
                   <p className="mt-1 text-xs text-muted">{game.approvedDevices} approved {game.approvedDevices === 1 ? "device" : "devices"}</p>
-                  <PendingRequests pending={game.pending ?? []} busy={busy}
+                  {game.legacyAgent && <p className="mt-1 text-sm text-muted">{LEGACY_AGENT_UPDATE}</p>}
+                  <PendingRequests pending={game.pending ?? []} busy={busy || Boolean(game.legacyAgent)}
                     onReview={(request) => askApproval(game, request, game.serverFingerprint ?? undefined)}
                     onDismiss={(request) => void act(() => backend.dismissLinkedRequest(game.id, game.serverFingerprint ?? "", request), "Join request dismissed.", linked.refresh)}
                   />
@@ -191,7 +193,7 @@ export function PeopleScreen() {
         <Modal title={`Approve a device for ${approval.game.name}`} onClose={() => { if (!busy) setApproval(undefined); }} footer={
           <>
             <Button variant="ghost" disabled={busy} onClick={() => setApproval(undefined)}>Cancel</Button>
-            <Button variant="primary" loading={busy} disabled={!publicKey.trim()} onClick={approve}>Approve device</Button>
+            <Button variant="primary" loading={busy} disabled={legacyApproval || !publicKey.trim()} onClick={approve}>Approve device</Button>
           </>
         }>
           <div className="space-y-4">
@@ -202,6 +204,7 @@ export function PeopleScreen() {
               {({ id }) => <input id={id} className={inputCls} value={label} onChange={(e) => setLabel(e.target.value)} disabled={busy} maxLength={64} />}
             </Field>
             {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+            {legacyApproval && <p className="text-sm text-muted">{LEGACY_AGENT_UPDATE}</p>}
           </div>
         </Modal>
       )}

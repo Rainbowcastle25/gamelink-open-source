@@ -2,11 +2,13 @@ import { useState } from "react";
 import { Button } from "./Button";
 import { errorMessage } from "../lib/format";
 import { toast } from "../lib/toast";
+import { LEGACY_AGENT_UPDATE } from "../lib/useHostedGames";
 
-export function HostedCardDetails({ name, detail, copy }: {
+export function HostedCardDetails({ name, detail, copy, legacyAgent }: {
   name: string;
   detail: string;
   copy?: () => Promise<void>;
+  legacyAgent?: boolean;
 }) {
   const [copying, setCopying] = useState(false);
 
@@ -27,6 +29,7 @@ export function HostedCardDetails({ name, detail, copy }: {
     <div className="flex flex-wrap items-center justify-between gap-2">
       <p className="text-[13px] text-muted">{detail}</p>
       {copy && <Button size="sm" loading={copying} disabled={copying} onClick={() => void copyInvitation()}>Copy invitation</Button>}
+      {legacyAgent && <p className="w-full text-[13px] text-muted">{LEGACY_AGENT_UPDATE}</p>}
     </div>
   );
 }

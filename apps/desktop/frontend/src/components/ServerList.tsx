@@ -28,17 +28,19 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
     ...(local.games ?? []).map((game) => ({
       key: `local-${game.id}`, name: game.name, game: game.game, serverFingerprint: game.serverFingerprint,
       tunnel: undefined,
+      legacyAgent: false,
       detail: `Hosted on this PC · Port ${game.port} · ${game.enabled ? game.state === "serving" ? "Tunnel active" : game.detail : "Sharing paused"}`,
       copy: game.enabled ? () => store.backend.copyHostedInvitation(game.id) : undefined,
     })),
     ...(linked.games ?? []).flatMap((game) => {
       const { serverFingerprint } = game;
-      if (!serverFingerprint) return [];
+      if (!serverFingerprint && !game.legacyAgent) return [];
       return [{
         key: `linked-${game.id}`, name: game.name, game: game.type, serverFingerprint,
         tunnel: game.proto && game.port !== undefined ? { proto: game.proto, port: game.port } : undefined,
+        legacyAgent: game.legacyAgent,
         detail: `Hosted on your linked node${game.port ? ` · Port ${game.port}` : ""} · ${game.disabled ? "Disabled" : game.detail || game.state}`,
-        copy: game.canCopyInvitation ? () => store.backend.copyLinkedInvitation(game.id, serverFingerprint) : undefined,
+        copy: serverFingerprint && !game.legacyAgent && game.canCopyInvitation ? () => store.backend.copyLinkedInvitation(game.id, serverFingerprint) : undefined,
       }];
     }),
   ];
@@ -108,7 +110,7 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
             <GameThumb game={game.game} />
             <div className="min-w-0 flex-1">
               <h3 className="text-[15px] font-semibold [overflow-wrap:anywhere]">{game.name}</h3>
-              <HostedCardDetails name={game.name} detail={game.detail} copy={game.copy} />
+              <HostedCardDetails name={game.name} detail={game.detail} copy={game.copy} legacyAgent={game.legacyAgent} />
             </div>
           </article>
         </li>
@@ -122,7 +124,7 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
               server={s}
               busy={busy[s.id]}
               hosted={(game || stale) && <>
-                {game && <HostedCardDetails name={s.name} detail={game.detail} copy={game.copy} />}
+                {game && <HostedCardDetails name={s.name} detail={game.detail} copy={game.copy} legacyAgent={game.legacyAgent} />}
                 {stale && <p className="text-[13px] text-warn">Saved connection settings are out of date. Add this game again from Host admin.</p>}
               </>}
               onJoin={() => void store.join(s.id)}

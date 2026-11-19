@@ -233,6 +233,7 @@ export interface HostGame {
   proto?: Proto;
   port?: number;
   serverFingerprint?: string | null;
+  legacyAgent?: boolean;
   canCopyInvitation?: boolean;
   pending?: PendingDevice[];
   state: string;

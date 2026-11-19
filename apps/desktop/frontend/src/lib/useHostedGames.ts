@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Backend } from "./backend";
 import type { HostGame, HostedGame } from "./types";
 
+export const LEGACY_AGENT_UPDATE = "Update the GameLink agent on this node to manage access from the desktop app.";
+
 export function hostingError(error: unknown) {
   if (typeof error === "string") return error;
   return error instanceof Error ? error.message : "The hosting request failed";

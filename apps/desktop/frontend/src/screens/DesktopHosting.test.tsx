@@ -7,6 +7,7 @@ import { Type } from "../lib/types";
 import { createMockBackend } from "../lib/mockBackend";
 import { renderApp } from "../test/utils";
 import { DashboardScreen } from "./DashboardScreen";
+import { HostScreen } from "./HostScreen";
 import { ServersScreen } from "./ServersScreen";
 import { LocalHostScreen } from "./LocalHostScreen";
 import { PeopleScreen } from "./PeopleScreen";
@@ -270,6 +271,42 @@ it("shows a linked node with no cached games as refreshing in People", async () 
   const linked = await screen.findByRole("region", { name: "Access to games on your linked node" });
   expect(within(linked).getByRole("status")).toHaveTextContent("Refreshing…");
   expect(within(linked).queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("shows legacy linked games with an update message and no available access actions", async () => {
+  const backend = createMockBackend({ delayMs: 0, seed: false });
+  await backend.configureHost("http://127.0.0.1:8467", "test");
+  const snapshot = await backend.refreshHost();
+  const game = {
+    ...snapshot.games[0],
+    legacyAgent: true,
+    pending: [{ id: 21, publicKey: "nodekey:" + "e".repeat(64), lastSeen: new Date().toISOString() }],
+  };
+  const legacy = { ...snapshot, games: [game] };
+  vi.spyOn(backend, "hostStatus").mockResolvedValue(legacy);
+  vi.spyOn(backend, "refreshHost").mockResolvedValue(legacy);
+  const message = "Update the GameLink agent on this node to manage access from the desktop app.";
+
+  const people = renderApp(<PeopleScreen />, { backend });
+  const accessCard = await screen.findByRole("article", { name: game.name });
+  expect.soft(accessCard).toHaveTextContent(message);
+  expect.soft(within(accessCard).getByRole("button", { name: "Review request" })).toBeDisabled();
+  expect.soft(within(accessCard).getByRole("button", { name: "Dismiss" })).toBeDisabled();
+  people.unmount();
+
+  const servers = renderApp(<ServersScreen />, { backend });
+  const hostedCard = await screen.findByRole("article", { name: game.name });
+  expect.soft(hostedCard).toHaveTextContent(message);
+  expect.soft(within(hostedCard).queryByRole("button", { name: "Copy invitation" })).not.toBeInTheDocument();
+  servers.unmount();
+
+  const { user } = renderApp(<HostScreen />, { backend });
+  const refresh = screen.getByRole("button", { name: "Refresh games" });
+  await waitFor(() => expect(refresh).toBeEnabled());
+  await user.click(refresh);
+  const importCard = (await screen.findByRole("heading", { name: game.name })).closest("article")!;
+  expect.soft(importCard).toHaveTextContent(message);
+  expect(within(importCard).getByRole("button", { name: "Add to GameLink" })).toBeDisabled();
 });
 
 it("reviews and explicitly approves the selected device for a linked game in People", async () => {

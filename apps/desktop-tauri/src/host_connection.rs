@@ -14,6 +14,8 @@ use url::Url;
 
 const FILE_NAME: &str = "host-connection.json";
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+const UPDATE_AGENT: &str =
+    "Update the GameLink agent on this node to manage access from the desktop app.";
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -40,6 +42,8 @@ struct HostGame {
     state: String,
     detail: String,
     server_fingerprint: Option<String>,
+    #[serde(skip_deserializing)]
+    legacy_agent: bool,
     #[serde(rename = "serverPublicKey", skip_serializing)]
     legacy_server_key: Option<String>,
     #[serde(default)]
@@ -57,9 +61,16 @@ struct PendingDevice {
 }
 
 fn project_snapshot(raw: Value) -> Result<Value> {
+    // Current agents include the field even when a game has no readable keys.
+    let legacy_agent = raw["games"].as_array().is_some_and(|games| {
+        games
+            .iter()
+            .any(|game| game.get("serverFingerprint").is_none())
+    });
     let mut snapshot: HostSnapshot =
         serde_json::from_value(raw).map_err(|_| "host returned an invalid status")?;
     for game in &mut snapshot.games {
+        game.legacy_agent = legacy_agent;
         if game.server_fingerprint.is_none() {
             game.server_fingerprint = game.legacy_server_key.as_deref().map(server_fingerprint);
         }
@@ -142,19 +153,21 @@ struct ConnectionView {
 }
 
 pub fn call(request: Value) -> Result<Value> {
+    call_in(request, &config_dir()?)
+}
+
+fn call_in(request: Value, dir: &Path) -> Result<Value> {
     match request["method"].as_str().unwrap_or("") {
         "hostConnection" => {
-            let dir = config_dir()?;
-            let saved = read_saved(&dir).unwrap_or_default();
+            let saved = read_saved(dir).unwrap_or_default();
             Ok(json!(ConnectionView {
                 configured: !saved.endpoint.is_empty() && !saved.token.is_empty(),
                 endpoint: saved.endpoint,
             }))
         }
         "configureHost" => {
-            let dir = config_dir()?;
             let saved = configure(
-                &dir,
+                dir,
                 request["endpoint"].as_str().unwrap_or(""),
                 request["token"].as_str().unwrap_or(""),
             )?;
@@ -164,29 +177,29 @@ pub fn call(request: Value) -> Result<Value> {
             }))
         }
         "hostStatus" => {
-            let dir = config_dir()?;
-            if !file_path(&dir)
+            if !file_path(dir)
                 .try_exists()
                 .map_err(|_| "could not read host connection")?
             {
                 return Ok(json!({"games":[],"refreshedAt":""}));
             }
-            status(&read_configured(&dir)?)
+            status(&read_configured(dir)?)
         }
-        "refreshHost" => refresh(&read_configured(&config_dir()?)?),
+        "refreshHost" => refresh(&read_configured(dir)?),
         "approveLinkedRequest" | "dismissLinkedRequest" => {
             let path = if request["method"] == "approveLinkedRequest" {
                 "/v1/host/requests/approve"
             } else {
                 "/v1/host/requests/dismiss"
             };
-            game_request(path, json!({
+            game_request(&game_connection(dir)?, path, json!({
                 "gameId":request["id"],"serverFingerprint":request["serverFingerprint"],
                 "requestId":request["requestId"],"publicKey":request["publicKey"],"label":request["label"]
             }))
             .map(|_| Value::Null)
         }
         "importHostGame" => import_game(
+            &game_connection(dir)?,
             request["gameID"].as_str().unwrap_or(""),
             &request["serverFingerprint"],
         ),
@@ -220,6 +233,22 @@ fn read_saved(dir: &Path) -> Result<SavedConnection> {
 
 fn read_configured(dir: &Path) -> Result<SavedConnection> {
     read_saved(dir).map_err(|_| "configure a host connection first".into())
+}
+
+fn game_connection(dir: &Path) -> Result<SavedConnection> {
+    let saved = read_configured(dir)?;
+    let cache = endpoints();
+    // A caller-supplied fingerprint does not establish agent compatibility.
+    let games = cache
+        .get(&saved.endpoint)
+        .and_then(|entry| entry.last.as_ref())
+        .and_then(|snapshot| snapshot["games"].as_array())
+        .filter(|games| !games.is_empty())
+        .ok_or("Refresh the linked games before managing access.")?;
+    if games.iter().any(|game| game["legacyAgent"] == true) {
+        return Err(UPDATE_AGENT.into());
+    }
+    Ok(saved)
 }
 
 fn configure(dir: &Path, endpoint: &str, token: &str) -> Result<SavedConnection> {
@@ -302,13 +331,17 @@ fn host_request(
     }))
 }
 
-fn game_request(path: &str, body: Value) -> Result<Value> {
-    let saved = read_configured(&config_dir()?)?;
-    host_request(&saved, "POST", path, body, 15)
+fn game_request(saved: &SavedConnection, path: &str, body: Value) -> Result<Value> {
+    host_request(saved, "POST", path, body, 15)
 }
 
 pub fn invitation(request: &Value) -> Result<String> {
+    invitation_from(request, &config_dir()?)
+}
+
+fn invitation_from(request: &Value, dir: &Path) -> Result<String> {
     let result = game_request(
+        &game_connection(dir)?,
         "/v1/host/invitation",
         json!({
             "gameId":request["id"],"serverFingerprint":request["serverFingerprint"]
@@ -324,7 +357,7 @@ fn invitation_text(result: &Value) -> Result<&str> {
         .ok_or_else(|| "host returned an invalid invitation".into())
 }
 
-fn import_game(game_id: &str, fingerprint: &Value) -> Result<Value> {
+fn import_game(saved: &SavedConnection, game_id: &str, fingerprint: &Value) -> Result<Value> {
     if game_id.is_empty() || game_id.len() > 128 {
         return Err("select a game to import".into());
     }
@@ -334,6 +367,7 @@ fn import_game(game_id: &str, fingerprint: &Value) -> Result<Value> {
         .filter(|key| !key.is_empty())
         .ok_or("could not read this device's public key")?;
     let result = game_request(
+        saved,
         "/v1/host/import",
         json!({"gameId":game_id,"serverFingerprint":fingerprint,"publicKey":public_key}),
     )?;
@@ -422,6 +456,7 @@ mod tests {
                 "{path}"
             );
             assert_eq!(output["games"][0]["serverFingerprint"], fingerprint);
+            assert_eq!(output["games"][0]["legacyAgent"], true);
             assert_eq!(output["games"][0]["pending"][0]["publicKey"], "device-key");
             assert!(output.get("extra").is_none());
             assert!(output["games"][0].get("extra").is_none());
@@ -430,6 +465,60 @@ mod tests {
             let _busy = Refreshing::begin(&saved.endpoint);
             assert_eq!(status(&saved).unwrap(), output);
         }
+    }
+
+    #[test]
+    fn legacy_snapshot_refuses_linked_actions_without_http() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = configure(dir.path(), "https://legacy-actions.example", "admin").unwrap();
+        let server_key = format!("nodekey:{}", "cd".repeat(32));
+        let snapshot = {
+            let _fake = bridge::fake::install(move |request| {
+                assert_eq!(
+                    request["url"],
+                    "https://legacy-actions.example/v1/host/status"
+                );
+                Ok(json!({"games":[{
+                    "id":"legacy-game","name":"Legacy Game","type":"factorio","serverPublicKey":server_key,
+                    "disabled":false,"approvedDevices":0,"state":"running","detail":"",
+                    "canCopyInvitation":true
+                }],"refreshedAt":""}))
+            });
+            status(&saved).unwrap()
+        };
+        let fingerprint = &snapshot["games"][0]["serverFingerprint"];
+
+        let http_calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let calls = http_calls.clone();
+        let _fake = bridge::fake::install(move |_| {
+            calls.set(calls.get() + 1);
+            Err("unexpected bridge call".into())
+        });
+        let mut request = json!({
+            "id":"legacy-game","gameID":"legacy-game","serverFingerprint":fingerprint,
+            "requestId":1,"publicKey":"device-key","label":""
+        });
+        let mut results = vec![invitation_from(&request, dir.path()).map(Value::from)];
+        for method in [
+            "approveLinkedRequest",
+            "dismissLinkedRequest",
+            "importHostGame",
+        ] {
+            request["method"] = json!(method);
+            results.push(call_in(request.clone(), dir.path()));
+        }
+
+        assert_eq!(
+            results,
+            vec![
+                Err(
+                    "Update the GameLink agent on this node to manage access from the desktop app."
+                        .into()
+                );
+                4
+            ]
+        );
+        assert_eq!(http_calls.get(), 0);
     }
 
     #[test]
@@ -458,11 +547,12 @@ mod tests {
             } else {
                 Ok(json!({"games":[{
                     "id":"cached","name":"Cached Game","type":"factorio",
-                    "disabled":false,"approvedDevices":0,"state":"running","detail":""
+                    "disabled":false,"approvedDevices":0,"state":"running","detail":"","serverFingerprint":null
                 }],"refreshedAt":""}))
             }
         });
         let cached = status(&saved).unwrap();
+        assert_eq!(cached["games"][0]["legacyAgent"], false);
         fail.set(true);
         assert!(status(&saved).is_err());
         {
