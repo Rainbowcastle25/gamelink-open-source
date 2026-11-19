@@ -176,6 +176,16 @@ func dispatch(data []byte) (any, error) {
 		}
 		owner.running[id] = server
 		return nil, nil
+	case "allow":
+		server := owner.running[resourceID{r.ID, r.Generation}]
+		if server == nil {
+			return nil, errors.New("game resource is unavailable")
+		}
+		approved, err := gamehost.ParseApproved(r.Approved)
+		if err != nil {
+			return nil, err
+		}
+		return nil, server.AddApproved(approved)
 	case "stop":
 		id := resourceID{r.ID, r.Generation}
 		if server := owner.running[id]; server != nil {

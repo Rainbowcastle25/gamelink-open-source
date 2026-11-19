@@ -261,24 +261,7 @@ impl Hosting {
         // identity across approval, revocation and destination changes.
         let sampled = self.sample_peers();
         let change = supervisor::reduce(self.state.clone(), event)?;
-        // All old generations complete closure before any replacement starts.
-        self.stop_generations(&change.effects)?;
-        self.state = change.state;
-        for effect in change.effects {
-            if let Effect::Start { id, generation } = effect {
-                let error = self.start(&games, &id, generation).err();
-                self.state = supervisor::reduce(
-                    self.state.clone(),
-                    Event::StartCompleted {
-                        id,
-                        generation,
-                        error,
-                        now_ns: self.now_ns(),
-                    },
-                )?
-                .state;
-            }
-        }
+        self.apply_effects(change, &games)?;
         let current = supervisor::reduce(self.state.clone(), Event::Commit)?;
         self.state = current.state;
         self.statuses = current
@@ -296,6 +279,44 @@ impl Hosting {
         self.lan_live = lan_live;
         self.save_connections();
         sampled
+    }
+
+    fn apply_effects(&mut self, change: supervisor::Reduction, games: &Value) -> Result<()> {
+        // All old generations complete closure before any replacement starts.
+        self.stop_generations(&change.effects)?;
+        self.state = change.state;
+        for effect in change.effects {
+            let completed = match effect {
+                Effect::Start { id, generation } => {
+                    let error = self.start(games, &id, generation).err();
+                    Event::StartCompleted {
+                        id,
+                        generation,
+                        error,
+                        now_ns: self.now_ns(),
+                    }
+                }
+                Effect::Allow {
+                    id,
+                    generation,
+                    approved,
+                } => {
+                    let error = bridge::call(
+                        json!({"method":"host_allow","id":id,"generation":generation,"approved":approved}),
+                    )
+                    .err();
+                    Event::AllowCompleted {
+                        id,
+                        generation,
+                        error,
+                    }
+                }
+                Effect::Stop { .. } | Effect::Log { .. } => continue,
+            };
+            let next = supervisor::reduce(self.state.clone(), completed)?;
+            self.apply_effects(next, games)?;
+        }
+        Ok(())
     }
 
     fn stop_generations(&mut self, effects: &[Effect]) -> Result<()> {
@@ -1036,6 +1057,93 @@ mod tests {
         let scans = count("lan_scan");
         assert_eq!(snapshot(&mut hosting)["enabled"], false);
         assert_eq!(count("lan_scan"), scans, "nothing shared and Host closed");
+    }
+
+    #[test]
+    fn live_approval_uses_the_current_generation_and_restarts_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let calls = requests.clone();
+        let fail_allow = Rc::new(std::cell::Cell::new(false));
+        let reject_allow = fail_allow.clone();
+        let fail_stop = Rc::new(std::cell::Cell::new(false));
+        let reject_stop = fail_stop.clone();
+        let _fake = bridge::fake::install(move |request| {
+            let method = text(request, "method");
+            if matches!(method, "host_start" | "host_stop" | "host_allow") {
+                calls.borrow_mut().push(request.clone());
+            }
+            Ok(match method {
+                "host_generate" => {
+                    let secret = config::dispatch("config.new_id", Value::Null)?;
+                    json!({"privateKey":secret,"presharedKey":secret})
+                }
+                "host_allow" if reject_allow.get() => return Err("test allow failure".into()),
+                "host_stop" if reject_stop.get() => return Err("test stop failure".into()),
+                _ => Value::Null,
+            })
+        });
+        let mut hosting = Hosting::new(dir.path().join("hosting"));
+        let game = hosting.command(
+            &json!({"method":"createHostedGame","game":"minecraft-java","name":"Game","port":25565}),
+            Some(&json!({"RegionID":1,"Nodes":[{}]})),
+        ).unwrap();
+        let id = text(&game, "id");
+        let approve = |key: &str| json!({"method":"approveHostedDevice","id":id,"publicKey":key,"label":"Friend"});
+        let alice = generated_public_key();
+        let bob = generated_public_key();
+        hosting.command(&approve(&alice), None).unwrap();
+        requests.borrow_mut().clear();
+        hosting.command(&approve(&bob), None).unwrap();
+        assert_eq!(
+            *requests.borrow(),
+            [json!({"method":"host_allow","id":id,"generation":2,"approved":[bob]})]
+        );
+        assert_eq!(hosting.view()[0]["state"], "serving");
+
+        requests.borrow_mut().clear();
+        fail_allow.set(true);
+        let carol = generated_public_key();
+        hosting.command(&approve(&carol), None).unwrap();
+        let observed = requests.borrow();
+        assert_eq!(observed.len(), 3);
+        assert_eq!(
+            observed[0],
+            json!({"method":"host_allow","id":id,"generation":2,"approved":[carol]})
+        );
+        assert_eq!(
+            observed[1],
+            json!({"method":"host_stop","id":id,"generation":2})
+        );
+        assert_eq!(observed[2]["method"], "host_start");
+        assert_eq!(observed[2]["generation"], 3);
+        assert_eq!(observed[2]["approved"], json!([alice, bob, carol]));
+        drop(observed);
+
+        requests.borrow_mut().clear();
+        fail_stop.set(true);
+        let saved = storage::read_bounded(&hosting.path()).unwrap();
+        assert_eq!(
+            hosting
+                .command(&approve(&generated_public_key()), None)
+                .unwrap_err(),
+            "test stop failure"
+        );
+        assert_eq!(requests.borrow().len(), 2);
+        // The failed update may have applied. Even reverting the config
+        // requires closing that generation before it can serve again.
+        storage::write_atomic(&hosting.path(), &saved).unwrap();
+        fail_stop.set(false);
+        hosting.reconcile().unwrap();
+        let observed = requests.borrow();
+        assert_eq!(observed.len(), 4);
+        assert_eq!(
+            observed[2],
+            json!({"method":"host_stop","id":id,"generation":3})
+        );
+        assert_eq!(observed[3]["method"], "host_start");
+        assert_eq!(observed[3]["generation"], 4);
+        assert_eq!(observed[3]["approved"], json!([alice, bob, carol]));
     }
 
     fn generated_public_key() -> String {

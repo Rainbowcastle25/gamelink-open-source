@@ -49,6 +49,33 @@ func newUDPEnv(t *testing.T, port uint16) (*agentEnv, *transport.Tunnel, *net.UD
 	return env, tun, ua
 }
 
+func TestRustAgentSubprocessApprovalKeepsExistingUDPFlow(t *testing.T) {
+	env, _, local := newUDPEnv(t, 34197)
+	alice, err := net.DialUDP("udp", nil, local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer alice.Close()
+	echo := func(payload string) {
+		t.Helper()
+		alice.SetDeadline(time.Now().Add(5 * time.Second))
+		if _, err := alice.Write([]byte(payload)); err != nil {
+			t.Fatal(err)
+		}
+		got := make([]byte, 64)
+		if n, err := alice.Read(got); err != nil || string(got[:n]) != payload {
+			t.Fatalf("UDP echo %q: got %q, err = %v", payload, got[:n], err)
+		}
+	}
+	echo("alice before approval")
+	joinUDP(t, env, "fx", 34197)
+	// Check before sending more traffic: a rebuilt flow would also echo.
+	if g, ok := env.gameState("fx"); !ok || g.Stats.Active != 1 {
+		t.Fatal("the original UDP flow did not survive approval")
+	}
+	echo("alice after approval")
+}
+
 // UDP echo through the real tunnel, with datagram boundaries preserved: every
 // datagram comes back as exactly one datagram with identical content.
 func TestUDPEchoPreservesDatagramBoundaries(t *testing.T) {

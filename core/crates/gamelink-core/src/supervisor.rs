@@ -26,6 +26,10 @@ pub struct State {
 struct Active {
     generation: u64,
     fingerprint: String,
+    // None means the running allowlist is unconfirmed and must be replaced
+    // unless the in-flight Allow effect completes successfully.
+    #[serde(default)]
+    approved: Option<BTreeMap<String, usize>>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -132,6 +136,11 @@ pub enum Event {
         error: Option<String>,
         now_ns: i64,
     },
+    AllowCompleted {
+        id: String,
+        generation: u64,
+        error: Option<String>,
+    },
     Commit,
     Shutdown,
 }
@@ -143,9 +152,22 @@ pub enum Event {
     rename_all_fields = "camelCase"
 )]
 pub enum Effect {
-    Stop { id: String, generation: u64 },
-    Start { id: String, generation: u64 },
-    Log { message: String },
+    Stop {
+        id: String,
+        generation: u64,
+    },
+    Start {
+        id: String,
+        generation: u64,
+    },
+    Allow {
+        id: String,
+        generation: u64,
+        approved: Vec<String>,
+    },
+    Log {
+        message: String,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -181,6 +203,25 @@ fn stop(state: &mut State, id: &str, effects: &mut Vec<Effect>) {
             generation: active.generation,
         });
     }
+}
+
+fn start(
+    state: &mut State,
+    id: String,
+    mut desired: Active,
+    effects: &mut Vec<Effect>,
+) -> Result<(), String> {
+    state.generation = state
+        .generation
+        .checked_add(1)
+        .ok_or("supervisor generation exhausted")?;
+    desired.generation = state.generation;
+    state.pending.insert(id.clone(), desired);
+    effects.push(Effect::Start {
+        id,
+        generation: state.generation,
+    });
+    Ok(())
 }
 
 pub fn reduce(mut state: State, event: Event) -> Result<Reduction, String> {
@@ -229,16 +270,52 @@ pub fn reduce(mut state: State, event: Event) -> Result<Reduction, String> {
                     st.state = "inactive".into();
                     st.detail = "no approved devices; the game is not reachable".into();
                 } else {
-                    let fingerprint = format!(
-                        "{}|{}",
-                        fingerprint(g, observed.key_mtime_ns)?,
-                        observed.key_identity
-                    );
-                    if let Some(active) = state.active.get(&g.id) {
-                        if active.fingerprint == fingerprint {
-                            set_running_state(&mut st);
-                            state.states.insert(g.id.clone(), st);
-                            continue;
+                    // Saved configurations can contain repeated device keys.
+                    let mut approved = BTreeMap::new();
+                    for device in &g.devices {
+                        *approved.entry(device.public_key.clone()).or_insert(0) += 1;
+                    }
+                    let mut desired = Active {
+                        generation: 0,
+                        // Serving games already collect requests. Knock mode
+                        // only matters when there are no approved devices.
+                        fingerprint: format!(
+                            "{}|{}",
+                            fingerprint(g, observed.key_mtime_ns, "")?,
+                            observed.key_identity
+                        ),
+                        approved: None,
+                    };
+                    if let Some(active) = state.active.get_mut(&g.id) {
+                        if active.fingerprint == desired.fingerprint {
+                            if let Some(current) = &active.approved {
+                                if *current == approved {
+                                    set_running_state(&mut st);
+                                    state.states.insert(g.id.clone(), st);
+                                    continue;
+                                }
+                                if !current.is_empty()
+                                    && current.iter().all(|(key, count)| {
+                                        approved.get(key).is_some_and(|next| next >= count)
+                                    })
+                                {
+                                    effects.push(Effect::Allow {
+                                        id: g.id.clone(),
+                                        generation: active.generation,
+                                        approved: approved
+                                            .keys()
+                                            .filter(|key| !current.contains_key(*key))
+                                            .cloned()
+                                            .collect(),
+                                    });
+                                    desired.generation = active.generation;
+                                    desired.approved = Some(approved);
+                                    active.approved = None;
+                                    state.pending.insert(g.id.clone(), desired);
+                                    state.states.insert(g.id.clone(), st);
+                                    continue;
+                                }
+                            }
                         }
                         log(&mut effects, format!("game {:?}: identity, approved devices or settings changed; restarting its Tailcat server and ending existing sessions", g.id));
                         stop(&mut state, &g.id, &mut effects);
@@ -255,21 +332,8 @@ pub fn reduce(mut state: State, event: Event) -> Result<Reduction, String> {
                             .map(|old| old.detail.clone())
                             .unwrap_or_default();
                     } else {
-                        state.generation = state
-                            .generation
-                            .checked_add(1)
-                            .ok_or("supervisor generation exhausted")?;
-                        state.pending.insert(
-                            g.id.clone(),
-                            Active {
-                                generation: state.generation,
-                                fingerprint,
-                            },
-                        );
-                        effects.push(Effect::Start {
-                            id: g.id.clone(),
-                            generation: state.generation,
-                        });
+                        desired.approved = Some(approved);
+                        start(&mut state, g.id.clone(), desired, &mut effects)?;
                     }
                 }
                 state.states.insert(g.id.clone(), st);
@@ -306,10 +370,15 @@ pub fn reduce(mut state: State, event: Event) -> Result<Reduction, String> {
             error,
             now_ns,
         } => {
-            if state
-                .pending
+            let already_active = state
+                .active
                 .get(&id)
-                .is_some_and(|p| p.generation == generation)
+                .is_some_and(|a| a.generation == generation);
+            if !already_active
+                && state
+                    .pending
+                    .get(&id)
+                    .is_some_and(|p| p.generation == generation)
             {
                 let pending = state.pending.remove(&id).expect("matching pending start");
                 let st = state.states.get_mut(&id).ok_or("missing pending game")?;
@@ -345,9 +414,37 @@ pub fn reduce(mut state: State, event: Event) -> Result<Reduction, String> {
                         );
                     }
                 }
-            } else if error.is_none() {
+            } else if !already_active && error.is_none() {
                 // Host must dispose of resources returned by obsolete starts.
                 effects.push(Effect::Stop { id, generation });
+            }
+        }
+        Event::AllowCompleted {
+            id,
+            generation,
+            error,
+        } => {
+            if state
+                .active
+                .get(&id)
+                .is_some_and(|a| a.generation == generation && a.approved.is_none())
+                && state
+                    .pending
+                    .get(&id)
+                    .is_some_and(|p| p.generation == generation)
+            {
+                let desired = state.pending.remove(&id).expect("matching pending allow");
+                if let Some(error) = error {
+                    log(
+                        &mut effects,
+                        format!("game {id:?} could not update its allowlist: {error}; restarting its Tailcat server"),
+                    );
+                    stop(&mut state, &id, &mut effects);
+                    start(&mut state, id, desired, &mut effects)?;
+                } else {
+                    set_running_state(state.states.get_mut(&id).ok_or("missing pending game")?);
+                    state.active.insert(id, desired);
+                }
             }
         }
         Event::Commit => {}
@@ -383,18 +480,11 @@ fn set_running_state(st: &mut GameState) {
     }
 }
 
-fn fingerprint(game: &Game, key_mtime_ns: i64) -> Result<String, String> {
-    let mut keys: Vec<_> = game.devices.iter().map(|d| d.public_key.as_str()).collect();
-    keys.sort_unstable();
+fn fingerprint(game: &Game, key_mtime_ns: i64, keys: &str) -> Result<String, String> {
     let bridge = serde_json::to_string(&game.console_bridge).map_err(|_| "cannot encode bridge")?;
     let mut material = format!(
         "{}|{}|{}|{}|{}|{}",
-        game.protocol,
-        game.tunnel_port,
-        game.dest,
-        key_mtime_ns,
-        keys.join(","),
-        bridge
+        game.protocol, game.tunnel_port, game.dest, key_mtime_ns, keys, bridge
     );
     if !game.game_type.is_empty() {
         material.push_str("|type=");
@@ -465,8 +555,10 @@ mod tests {
         .unwrap();
         for fixture in fixtures {
             let g: Game = serde_json::from_value(fixture["game"].clone()).unwrap();
+            let mut keys: Vec<_> = g.devices.iter().map(|d| d.public_key.as_str()).collect();
+            keys.sort_unstable();
             assert_eq!(
-                fingerprint(&g, fixture["keyMtimeNs"].as_i64().unwrap()).unwrap(),
+                fingerprint(&g, fixture["keyMtimeNs"].as_i64().unwrap(), &keys.join(",")).unwrap(),
                 fixture["fingerprint"].as_str().unwrap(),
                 "{}",
                 fixture["name"]
@@ -488,10 +580,107 @@ mod tests {
         assert_eq!(renamed.games[0].state, "serving");
     }
 
+    fn add_device() -> serde_json::Value {
+        let mut g = game();
+        g["devices"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"publicKey":"nodekey:new"}));
+        g
+    }
+
+    fn assert_restart(out: &Reduction) {
+        assert!(
+            matches!(
+                out.effects.as_slice(),
+                [
+                    Effect::Log { .. },
+                    Effect::Stop { generation: 1, .. },
+                    Effect::Start { generation: 2, .. }
+                ]
+            ),
+            "{:?}",
+            out.effects
+        );
+    }
+
+    #[test]
+    fn added_devices_grow_the_live_generation() {
+        let g = add_device();
+        let out = step(
+            started().state,
+            json!({"type":"observe","games":[{"game":g,"keyMtimeNs":0,"knockEnabled":true}],"nowNs":1}),
+        );
+        assert_eq!(
+            out.effects,
+            vec![Effect::Allow {
+                id: "x".into(),
+                generation: 1,
+                approved: vec!["nodekey:new".into()],
+            }]
+        );
+        let stale = step(
+            out.state,
+            json!({"type":"start_completed","id":"x","generation":1,"nowNs":2}),
+        );
+        assert!(stale.effects.is_empty());
+        assert!(stale.state.active["x"].approved.is_none());
+        let allowed = step(
+            stale.state,
+            json!({"type":"allow_completed","id":"x","generation":1}),
+        );
+        assert_eq!(allowed.games[0].state, "serving");
+        assert_eq!(allowed.games[0].approved, 2);
+        let steady = observe(allowed.state, g, 3);
+        assert!(steady.effects.is_empty());
+        assert_restart(&observe(steady.state, game(), 4));
+    }
+
+    #[test]
+    fn first_approval_replaces_the_knock_only_generation() {
+        let mut empty = game();
+        empty["devices"] = json!([]);
+        let observe_knocks = |state, game| {
+            step(
+                state,
+                json!({
+                    "type":"observe","games":[{"game":game,"keyMtimeNs":0,"knockEnabled":true}],"nowNs":0
+                }),
+            )
+        };
+        let pending = observe_knocks(State::default(), empty);
+        let running = step(
+            pending.state,
+            json!({"type":"start_completed","id":"x","generation":1,"nowNs":0}),
+        );
+        assert_restart(&observe_knocks(running.state, game()));
+    }
+
+    #[test]
+    fn additions_with_other_tunnel_changes_restart() {
+        for (field, value) in [
+            ("tunnelPort", json!(25566)),
+            ("protocol", json!("udp")),
+            ("dest", json!("127.0.0.1:25566")),
+        ] {
+            let mut g = add_device();
+            g[field] = value;
+            assert_restart(&observe(started().state, g, 1));
+        }
+        for (field, value) in [("keyMtimeNs", json!(1)), ("keyIdentity", json!("rotated"))] {
+            let mut observation = json!({"game":add_device(),"keyMtimeNs":0});
+            observation[field] = value;
+            assert_restart(&step(
+                started().state,
+                json!({"type":"observe","games":[observation],"nowNs":1}),
+            ));
+        }
+    }
+
     #[test]
     fn disabled_managed_game_stops_and_reenabled_game_starts() {
         let serving = started().state;
-        let mut g = game();
+        let mut g = add_device();
         g["disabled"] = serde_json::json!(true);
         let disabled = observe(serving, g.clone(), 1);
         assert!(disabled
@@ -523,7 +712,7 @@ mod tests {
     #[test]
     fn revocation_stops_before_start_and_stale_success_stops_exact_generation() {
         let mut g = game();
-        g["devices"] = json!([{"publicKey":"nodekey:replacement"}]);
+        g["devices"] = json!([{"publicKey":"nodekey:replacement"},{"publicKey":"nodekey:new"}]);
         let out = observe(started().state, g, 1);
         assert!(matches!(&out.effects[0], Effect::Log { .. }));
         assert_eq!(
@@ -551,6 +740,18 @@ mod tests {
             }]
         );
         assert_eq!(stale.state.pending["x"].generation, 2);
+    }
+
+    #[test]
+    fn removing_a_repeated_device_entry_restarts_even_with_an_addition() {
+        let mut old = game();
+        old["devices"] = json!([{"publicKey":"nodekey:approved"},{"publicKey":"nodekey:approved"}]);
+        let starting = observe(State::default(), old, 0);
+        let running = step(
+            starting.state,
+            json!({"type":"start_completed","id":"x","generation":1,"nowNs":0}),
+        );
+        assert_restart(&observe(running.state, add_device(), 1));
     }
 
     #[test]

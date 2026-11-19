@@ -136,6 +136,16 @@ func dispatch(input []byte) (any, error) {
 		return r.Keys.Address(false)
 	case "host_start":
 		return nil, startHost(resourceID{r.ID, r.Generation}, r.Game, r.Keys, r.Approved)
+	case "host_allow":
+		host, ok := owner.hosts[resourceID{r.ID, r.Generation}]
+		if !ok {
+			return nil, errors.New("host resource is unavailable")
+		}
+		approved, err := gamehost.ParseApproved(r.Approved)
+		if err != nil {
+			return nil, err
+		}
+		return nil, host.server.AddApproved(approved)
 	case "host_stop":
 		return stopHost(resourceID{r.ID, r.Generation})
 	case "host_peers":

@@ -87,6 +87,7 @@ type ServerStats struct {
 type GameServer struct {
 	opts    ServerOptions
 	srv     *tailcat.Server
+	allowMu sync.RWMutex
 	allowed map[netip.Addr]key.NodePublic
 	conns   *connSet
 	logf    func(kind, msg string)
@@ -244,13 +245,40 @@ func (g *GameServer) Stats() ServerStats {
 	}
 }
 
+// AddApproved grows the allowlist of a serving game. The first approval still
+// requires a fresh server with game ports and handlers enabled.
+func (g *GameServer) AddApproved(keys []key.NodePublic) error {
+	for _, k := range keys {
+		if k.IsZero() {
+			return errors.New("approved list contains a zero key")
+		}
+	}
+	g.allowMu.Lock()
+	defer g.allowMu.Unlock()
+	select {
+	case <-g.stopping:
+		return errors.New("game server is stopping")
+	default:
+	}
+	if g.expired() || len(g.allowed) == 0 {
+		return errors.New("game server is not serving")
+	}
+	for _, k := range keys {
+		g.allowed[PeerAddr(k)] = k
+		g.srv.AddAllowedClient(k)
+	}
+	return nil
+}
+
 // Close shuts the Tailcat server down and terminates every live session.
 // Removing an approved device requires a new GameServer; Tailcat has no way to
 // remove a client from a running server, and Close is what makes a revocation
 // take effect on sessions that are already open.
 func (g *GameServer) Close() {
 	g.closeOnce.Do(func() {
+		g.allowMu.Lock()
 		close(g.stopping)
+		g.allowMu.Unlock()
 		g.conns.closeAll()
 		if g.bedrockHost != nil {
 			g.bedrockHost.Close()
@@ -282,13 +310,22 @@ func (g *GameServer) authorize(remote net.Addr) bool {
 	}
 	ip, ok := addrOf(remote)
 	if ok {
-		if _, allowed := g.allowed[ip]; allowed {
+		g.allowMu.RLock()
+		_, allowed := g.allowed[ip]
+		g.allowMu.RUnlock()
+		if allowed {
 			return true
 		}
 	}
 	g.denied.Add(1)
 	g.logRefusal()
 	return false
+}
+
+func (g *GameServer) recordSession(remote net.Addr) {
+	g.allowMu.RLock()
+	defer g.allowMu.RUnlock()
+	g.opts.Peers.recordSession(g.allowed, remote)
 }
 
 func (g *GameServer) logRefusal() {
@@ -339,7 +376,7 @@ func (g *GameServer) onTCP(port uint16) func(net.Conn) {
 			return
 		}
 		if g.bedrockHost != nil {
-			g.opts.Peers.recordSession(g.allowed, c.RemoteAddr())
+			g.recordSession(c.RemoteAddr())
 			g.bedrockHost.Handle(c)
 			return
 		}
@@ -359,7 +396,7 @@ func (g *GameServer) onTCP(port uint16) func(net.Conn) {
 			return
 		}
 		defer g.conns.remove(dst)
-		g.opts.Peers.recordSession(g.allowed, c.RemoteAddr())
+		g.recordSession(c.RemoteAddr())
 		tailcat.ProxyConns(c, dst) // closes both when finished
 	}
 }
@@ -471,7 +508,7 @@ func (g *GameServer) handleUDP(c tailcat.ConnPacketConn) {
 	defer g.conns.remove(dst)
 
 	if !probe {
-		g.opts.Peers.recordSession(g.allowed, c.RemoteAddr())
+		g.recordSession(c.RemoteAddr())
 	}
 	done := make(chan struct{})
 	go func() { // game server -> client
@@ -522,7 +559,7 @@ func (g *GameServer) handleUDP(c tailcat.ConnPacketConn) {
 				probe = false
 				g.probes.Add(-1)
 				_ = c.SetReadDeadline(time.Time{})
-				g.opts.Peers.recordSession(g.allowed, c.RemoteAddr())
+				g.recordSession(c.RemoteAddr())
 			}
 		}
 		if _, err := dst.Write(buf[:n]); err != nil && !isTransientUDPErr(err) {

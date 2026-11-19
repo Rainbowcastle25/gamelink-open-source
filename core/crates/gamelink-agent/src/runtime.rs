@@ -181,6 +181,22 @@ impl Runtime<'_> {
                     })?;
                     self.effects(next.effects, games)?;
                 }
+                Effect::Allow {
+                    id,
+                    generation,
+                    approved,
+                } => {
+                    let error = bridge::call(
+                        json!({"method":"allow","id":id,"generation":generation,"approved":approved}),
+                    )
+                    .err();
+                    let next = self.reduce(Event::AllowCompleted {
+                        id,
+                        generation,
+                        error,
+                    })?;
+                    self.effects(next.effects, games)?;
+                }
             }
         }
         Ok(())
@@ -269,7 +285,7 @@ mod tests {
                 return Err(error.clone());
             }
             match method.as_str() {
-                "start" | "stop" | "shutdown" | "init" => Ok(Value::Null),
+                "start" | "stop" | "allow" | "shutdown" | "init" => Ok(Value::Null),
                 "stats" => Ok(s.stats.clone()),
                 "requests" => Ok(json!({})),
                 "logs" => {
@@ -290,7 +306,9 @@ mod tests {
             .filter_map(|c| {
                 let method = c["method"].as_str().unwrap();
                 match method {
-                    "start" | "stop" => Some(format!("{method}:{}:{}", c["id"], c["generation"])),
+                    "start" | "stop" | "allow" => {
+                        Some(format!("{method}:{}:{}", c["id"], c["generation"]))
+                    }
                     "shutdown" => Some("shutdown".into()),
                     _ => None,
                 }
@@ -436,6 +454,38 @@ mod tests {
             .errors
             .insert("stats".into(), "bridge down".into());
         assert_eq!(rt.publish().unwrap_err(), "bridge down");
+    }
+
+    #[test]
+    fn failed_allow_stops_and_restarts_with_the_full_approved_list() {
+        let dir = dir_with_game(&[KEY_A]);
+        let script = script();
+        let _bridge = fake(&script);
+        let mut rt = runtime(dir.path());
+        rt.reconcile().unwrap();
+
+        script
+            .borrow_mut()
+            .errors
+            .insert("allow".into(), "allow failed".into());
+        write_agent(dir.path(), &[KEY_A, KEY_B]);
+        rt.reconcile().unwrap();
+        assert_eq!(
+            lifecycle(&script),
+            [
+                "start:\"x\":1",
+                "allow:\"x\":1",
+                "stop:\"x\":1",
+                "start:\"x\":2"
+            ]
+        );
+        let calls = &script.borrow().calls;
+        let allow = calls.iter().find(|c| c["method"] == "allow").unwrap();
+        assert_eq!(allow["approved"], json!([KEY_B]));
+        let start = calls.iter().rfind(|c| c["method"] == "start").unwrap();
+        assert_eq!(start["approved"], json!([KEY_A, KEY_B]));
+        assert_eq!(runtime_json(dir.path())["games"][0]["state"], "serving");
+        assert_eq!(runtime_json(dir.path())["games"][0]["approved"], 2);
     }
 
     // TestSupervisorBridgeChangeRequestsRestart (device/key variants)

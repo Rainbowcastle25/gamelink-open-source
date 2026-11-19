@@ -19,6 +19,7 @@ protect, what it assumes, and what it does not defend against.
 |---|---|
 | No router port forwarding, no UPnP/NAT-PMP | Nothing opens an inbound port on the router. The port-mapper code is compiled out of production builds (`ts_omit_portmapper`) and CI fails if it comes back |
 | A game with no approved devices is unreachable | The knock-only mode keeps Tailcat's allowlist restrictive and serves zero TCP or UDP ports (see [architecture](architecture.md)); covered by tests |
+| Additional approvals preserve live sessions | A serving game updates both allowlists in place. The first approval starts serving game ports with a fresh server. An unsuccessful update restarts the server from the configured list |
 | Per-game identity | Own key + PSK per game; no key is shared across games or with the desktop identity |
 | Agent invitation rotation and expiry | Rotation replaces the per-game key and PSK. At expiry the host retires the whole identity, including established sessions. Device approvals carry over to the next identity |
 | Revocation works | Closes the game's server and restarts it with the remaining keys; live TCP and UDP sessions end. Tested end to end |
