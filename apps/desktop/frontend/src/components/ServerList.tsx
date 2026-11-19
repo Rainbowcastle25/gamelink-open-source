@@ -26,24 +26,24 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
   const linked = useLinkedGames(store.backend);
   const hosted = [
     ...(local.games ?? []).map((game) => ({
-      key: `local-${game.id}`, name: game.name, game: game.game, serverPublicKey: game.serverPublicKey,
+      key: `local-${game.id}`, name: game.name, game: game.game, serverFingerprint: game.serverFingerprint,
       tunnel: undefined,
       detail: `Hosted on this PC · Port ${game.port} · ${game.enabled ? game.state === "serving" ? "Tunnel active" : game.detail : "Sharing paused"}`,
       copy: game.enabled ? () => store.backend.copyHostedInvitation(game.id) : undefined,
     })),
     ...(linked.games ?? []).flatMap((game) => {
-      const { serverPublicKey } = game;
-      if (!serverPublicKey) return [];
+      const { serverFingerprint } = game;
+      if (!serverFingerprint) return [];
       return [{
-        key: `linked-${game.id}`, name: game.name, game: game.type, serverPublicKey,
+        key: `linked-${game.id}`, name: game.name, game: game.type, serverFingerprint,
         tunnel: game.proto && game.port !== undefined ? { proto: game.proto, port: game.port } : undefined,
         detail: `Hosted on your linked node${game.port ? ` · Port ${game.port}` : ""} · ${game.disabled ? "Disabled" : game.detail || game.state}`,
-        copy: game.canCopyInvitation ? () => store.backend.copyLinkedInvitation(game.id, serverPublicKey) : undefined,
+        copy: game.canCopyInvitation ? () => store.backend.copyLinkedInvitation(game.id, serverFingerprint) : undefined,
       }];
     }),
   ];
   const matches = (server: ServerView, game: (typeof hosted)[number]) =>
-    !server.demo && !!game.serverPublicKey && server.serverPublicKey === game.serverPublicKey;
+    !server.demo && !!game.serverFingerprint && server.serverFingerprint === game.serverFingerprint;
   const hasCurrentSettings = (server: ServerView, game: (typeof hosted)[number]) =>
     server.game === game.game && (!game.tunnel || (server.proto === game.tunnel.proto && server.port === game.tunnel.port));
   const savedCards = new Map(hosted.map((game) => {

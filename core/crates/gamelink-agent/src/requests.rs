@@ -139,15 +139,16 @@ impl Cli {
                 .unwrap_or("");
             self.approve_device(game, s(request, "publicKey"), label, &scopes[game].keys)?;
         }
-        store.dismiss(game, id, chrono::Utc::now());
         if cmd == "requests approve" {
+            store.remove(game, id);
             println!("Approved request {id} for {game:?}. If the first attempt timed out, ask your friend to click Join again after the agent reloads.");
             if save(&store, &self.dir).is_err() {
                 eprintln!("The approval was saved, but the request store could not be updated.");
             }
         } else {
+            store.dismiss(game, id, chrono::Utc::now());
             save(&store, &self.dir)?;
-            println!("Dismissed request {id} for {game:?}.");
+            println!("Dismissed request {id} for {game:?}. GameLink ignores this device for this game until you rotate its invitation.");
         }
         Ok(())
     }

@@ -125,6 +125,17 @@ func TestRustAgentSubprocessKnockRotateAndExpire(t *testing.T) {
 	if entries := list(); len(entries) != 1 || entries[0].ID != friendRequest {
 		t.Fatal("dismissal hid the wrong request or changed its ID")
 	}
+	// The shim reports every knock again; a dismissal holds until rotation.
+	probe, probePublic := newKey()
+	deny(original, other)
+	deny(original, probe)
+	waitRequest(probePublic)
+	for _, entry := range list() {
+		if entry.PublicKey == otherPublic {
+			t.Fatal("a dismissed device was listed again before rotation")
+		}
+	}
+	env.cli("requests", "dismiss", probePublic)
 
 	env.stop()
 	env.serve()
@@ -146,6 +157,9 @@ func TestRustAgentSubprocessKnockRotateAndExpire(t *testing.T) {
 	firstTunnel.Stop()
 	secondTunnel, secondConn := connect(tailcat.Addr(rotated.Addr))
 	deny(original, friend)
+	deny(tailcat.Addr(rotated.Addr), other)
+	waitRequest(otherPublic)
+	env.cli("requests", "dismiss", otherPublic)
 
 	expiringText := strings.TrimSpace(string(env.cli("invite", "--game", gameID, "--expires", "15s", "--allow-local-relay")))
 	expiring, _, err := invite.Parse(expiringText, localRelay)

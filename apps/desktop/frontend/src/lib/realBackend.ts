@@ -44,10 +44,12 @@ export const realBackend: Backend = {
   configureHost: async (endpoint, token) => call("configureHost", { endpoint, token }),
   hostStatus: async () => call("hostStatus"),
   refreshHost: async () => call("refreshHost"),
-  importHostGame: async (gameID) => call("importHostGame", { gameID }),
-  copyLinkedInvitation: async (id, serverPublicKey) => call("copyLinkedInvitation", { id, serverPublicKey }),
-  approveLinkedRequest: async (id, serverPublicKey, request, label) =>
-    call("approveLinkedRequest", { id, serverPublicKey, requestId: request.id, publicKey: request.publicKey, label }),
+  importHostGame: async (gameID, serverFingerprint) => call("importHostGame", { gameID, serverFingerprint }),
+  copyLinkedInvitation: async (id, serverFingerprint) => call("copyLinkedInvitation", { id, serverFingerprint }),
+  approveLinkedRequest: async (id, serverFingerprint, request, label) =>
+    call("approveLinkedRequest", { id, serverFingerprint, requestId: request.id, publicKey: request.publicKey, label }),
+  dismissLinkedRequest: async (id, serverFingerprint, request) =>
+    call("dismissLinkedRequest", { id, serverFingerprint, requestId: request.id, publicKey: request.publicKey }),
 
   hostedGames: async () => call("hostedGames"),
   createHostedGame: async (form) => call("createHostedGame", { ...form }),

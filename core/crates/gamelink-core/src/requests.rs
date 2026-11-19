@@ -10,7 +10,17 @@ fn text<'a>(value: &'a Value, field: &str) -> &'a str {
 }
 
 const LIMIT: usize = 32;
+const DISMISSED_LIMIT: usize = 256;
 const LIFETIME: TimeDelta = TimeDelta::hours(24);
+
+/// A one-way identifier for a game's server public key. Anyone who knows the
+/// public key itself can knock, so only this crosses the UI and admin API.
+pub fn server_fingerprint(public_key: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"gamelink server fingerprint v1\n");
+    hash.update(public_key.trim().to_ascii_lowercase().as_bytes());
+    format!("{:x}", hash.finalize())
+}
 
 pub fn identity(keys: &Value) -> String {
     let mut hash = Sha256::new();
@@ -61,8 +71,7 @@ struct Request {
 struct GameRequests {
     identity: String,
     pending: Vec<Request>,
-    // Ignore queued attempts which arrived before a dismissal. A fresh knock
-    // from the same key can be listed again with its own ID.
+    // Dismissed keys are ignored until the game identity changes (rotation).
     dismissed: BTreeMap<String, DateTime<Utc>>,
 }
 
@@ -98,15 +107,22 @@ impl Store {
         out
     }
 
-    pub fn dismiss(&mut self, game: &str, id: u64, now: DateTime<Utc>) {
+    /// Removes a listed request without remembering its key, after approval.
+    pub fn remove(&mut self, game: &str, id: u64) -> String {
         let requests = self.games.get_mut(game).expect("listed game");
         let index = requests
             .pending
             .iter()
             .position(|r| r.id == id)
             .expect("listed request");
-        let key = requests.pending.remove(index).knock.public_key;
-        if requests.dismissed.len() >= LIMIT {
+        requests.pending.remove(index).knock.public_key
+    }
+
+    /// Removes a listed request and ignores its key until rotation.
+    pub fn dismiss(&mut self, game: &str, id: u64, now: DateTime<Utc>) {
+        let key = self.remove(game, id);
+        let requests = self.games.get_mut(game).expect("listed game");
+        if requests.dismissed.len() >= DISMISSED_LIMIT {
             if let Some(oldest) = requests
                 .dismissed
                 .iter()
@@ -127,14 +143,15 @@ impl Store {
         now: DateTime<Utc>,
     ) -> Result<(), String> {
         self.games.retain(|game, requests| {
-            let Some(scope) = scopes
-                .get(game)
-                .filter(|scope| scope.identity == requests.identity)
-            else {
-                return false;
-            };
-            requests.pending.retain(|r| active(&r.knock, scope, now));
-            requests.dismissed.retain(|_, at| now - *at < LIFETIME);
+            match scopes.get(game) {
+                // A new identity means the invitation was rotated.
+                Some(scope) if scope.identity != requests.identity => return false,
+                Some(scope) => requests.pending.retain(|r| active(&r.knock, scope, now)),
+                // Keep dismissals while a game is paused or briefly unreadable.
+                None => requests
+                    .pending
+                    .retain(|r| now - r.knock.first_seen < LIFETIME),
+            }
             !requests.pending.is_empty() || !requests.dismissed.is_empty()
         });
         for (game, mut batch) in batches {
@@ -150,11 +167,7 @@ impl Store {
             });
             batch.sort_unstable_by_key(|knock| knock.first_seen);
             for knock in batch {
-                if !active(&knock, scope, now)
-                    || requests
-                        .dismissed
-                        .get(&knock.public_key)
-                        .is_some_and(|at| knock.first_seen <= *at)
+                if !active(&knock, scope, now) || requests.dismissed.contains_key(&knock.public_key)
                 {
                     continue;
                 }
@@ -176,6 +189,17 @@ impl Store {
             }
         }
         Ok(())
+    }
+
+    /// A copy holding only dismissals, for hosts which keep pending requests
+    /// in memory but must remember dismissals across restarts.
+    pub fn dismissals(&self) -> Self {
+        let mut out = self.clone();
+        out.games.retain(|_, requests| {
+            requests.pending.clear();
+            !requests.dismissed.is_empty()
+        });
+        out
     }
 }
 
@@ -237,19 +261,57 @@ mod tests {
             .merge(&scopes, &running, batch(vec![knock(0, later)]), later)
             .unwrap();
         assert_eq!(store.list(&scopes, later).len(), LIMIT - 1);
-        let again = later + TimeDelta::seconds(1);
+        // The host clears its batch every poll, so the same key knocks again
+        // with fresh timestamps. A dismissal holds until rotation, even after
+        // the game was paused and a day has passed.
+        let again = later + LIFETIME + TimeDelta::seconds(1);
+        store
+            .merge(&BTreeMap::new(), &running, BTreeMap::new(), again)
+            .unwrap();
         store
             .merge(&scopes, &running, batch(vec![knock(0, again)]), again)
             .unwrap();
-        assert_eq!(store.list(&scopes, again)[LIMIT - 1]["id"], 33);
+        assert!(store
+            .list(&scopes, again)
+            .iter()
+            .all(|r| r["publicKey"] != "peer-0"));
+        let restored = store.dismissals();
+        assert!(restored.games[&game].pending.is_empty());
+        assert!(restored.games[&game].dismissed.contains_key("peer-0"));
 
-        scopes.insert(
-            game.clone(),
-            Scope::new(&json!({}), json!({"privateKey":"new"})),
-        );
+        // Approval removes a request without ignoring the key later.
         store
-            .merge(&scopes, &running, batch(vec![knock(0, again)]), again)
+            .merge(&scopes, &running, batch(vec![knock(1, again)]), again)
             .unwrap();
-        assert!(store.list(&scopes, again).is_empty());
+        let id = store.list(&scopes, again)[0]["id"].as_u64().unwrap();
+        assert_eq!(store.remove(&game, id), "peer-1");
+        let after = again + TimeDelta::seconds(1);
+        store
+            .merge(&scopes, &running, batch(vec![knock(1, after)]), after)
+            .unwrap();
+        assert_eq!(store.list(&scopes, after)[0]["publicKey"], "peer-1");
+
+        let rotated = Scope::new(&json!({}), json!({"privateKey":"new"}));
+        let running = BTreeMap::from([(game.clone(), rotated.identity.clone())]);
+        scopes.insert(game.clone(), rotated);
+        store
+            .merge(&scopes, &running, batch(vec![knock(0, after)]), after)
+            .unwrap();
+        let listed = store.list(&scopes, after);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["publicKey"], "peer-0");
+    }
+
+    #[test]
+    fn server_fingerprints_are_stable_and_hide_the_key() {
+        let key = format!("nodekey:{}", "ab".repeat(32));
+        let print = server_fingerprint(&key);
+        assert_eq!(print, server_fingerprint(&key.to_ascii_uppercase()));
+        assert_eq!(print.len(), 64);
+        assert!(!print.contains("abab"));
+        assert_ne!(
+            print,
+            server_fingerprint(&format!("nodekey:{}", "cd".repeat(32)))
+        );
     }
 }

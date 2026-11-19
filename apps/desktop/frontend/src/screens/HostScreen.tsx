@@ -77,12 +77,12 @@ export function HostScreen() {
     }
   }
 
-  async function addGame(id: string) {
+  async function addGame(id: string, serverFingerprint: string) {
     setImporting(id);
     setError("");
     setNotice("");
     try {
-      const server = await backend.importHostGame(id);
+      const server = await backend.importHostGame(id, serverFingerprint);
       await store.refreshServers();
       setNotice(`${server.name} was added to your servers.`);
     } catch (e) {
@@ -151,7 +151,7 @@ export function HostScreen() {
                     <p className="mt-1 text-xs text-muted">Status: <span className={game.state === "unknown" ? "text-muted" : "text-fg"}>{stateLabel(game.state)}</span>{game.detail ? ` · ${game.detail}` : ""}</p>
                   </div>
                 </div>
-                <Button variant="primary" size="sm" loading={importing === game.id} disabled={actionBusy || game.disabled} onClick={() => void addGame(game.id)}>Add to GameLink</Button>
+                <Button variant="primary" size="sm" loading={importing === game.id} disabled={actionBusy || game.disabled || !game.serverFingerprint} onClick={() => void addGame(game.id, game.serverFingerprint ?? "")}>Add to GameLink</Button>
               </article>
             ))}
           </div>

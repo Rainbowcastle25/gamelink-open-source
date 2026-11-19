@@ -19,6 +19,7 @@ type Result<T> = std::result::Result<T, String>;
 type Connections = BTreeMap<String, BTreeMap<String, String>>;
 type Scopes = BTreeMap<String, Scope>;
 const LAN_ORIGIN: &str = "desktop-minecraft-lan";
+const REQUESTS_FILE: &str = "requests.json";
 
 #[derive(Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 struct LanWorld {
@@ -77,6 +78,11 @@ impl Hosting {
             .ok()
             .and_then(|raw| serde_json::from_slice(&raw).ok())
             .unwrap_or_default();
+        // Pending requests stay in memory; dismissals last until rotation.
+        let requests = storage::read_bounded(&dir.join(REQUESTS_FILE))
+            .ok()
+            .and_then(|raw| serde_json::from_slice(&raw).ok())
+            .unwrap_or_default();
         Self {
             dir,
             state: State::default(),
@@ -90,7 +96,7 @@ impl Hosting {
             lan_live: BTreeSet::new(),
             connections,
             connections_dirty: false,
-            requests: Store::default(),
+            requests,
             scopes: Scopes::new(),
             running_identities: BTreeMap::new(),
             issue: None,
@@ -533,6 +539,10 @@ impl Hosting {
             )?;
         } else {
             self.requests.dismiss(id, request_id, now);
+            let saved = serde_json::to_vec(&self.requests.dismissals())
+                .map_err(|_| "could not save the dismissal")?;
+            storage::write_atomic(&self.dir.join(REQUESTS_FILE), &saved)
+                .map_err(|_| "Dismissed until GameLink restarts; could not save it")?;
         }
         Ok(Value::Null)
     }
@@ -688,12 +698,16 @@ impl Hosting {
             } else {
                 text(status, "detail")
             };
-            let public_key = self
+            let fingerprint = self
                 .keys(id)
                 .and_then(|keys| bridge::call(json!({"method":"host_public_key","keys":keys})))
-                .unwrap_or(Value::Null);
+                .ok()
+                .and_then(|key| {
+                    key.as_str()
+                        .map(gamelink_core::requests::server_fingerprint)
+                });
             result.push(json!({
-                "serverPublicKey":public_key,"id":id,"name":game["name"],"game":game["type"],"port":port,"lan":is_lan(game),
+                "serverFingerprint":fingerprint,"id":id,"name":game["name"],"game":game["type"],"port":port,"lan":is_lan(game),
                 "enabled":shared,"paused":paused,"state":status["state"],"detail":detail,"approved":approved,"pending":pending
             }));
         }
@@ -724,6 +738,7 @@ mod tests {
                     json!({"privateKey":secret,"presharedKey":secret})
                 }
                 "host_address" => json!("test-tailcat-address"),
+                "host_public_key" => json!("nodekey:hostedfullkey"),
                 "host_peers" => std::mem::take(&mut *knocks.borrow_mut()),
                 _ => Value::Null,
             })
@@ -813,11 +828,17 @@ mod tests {
         let games = hosting.command(&snapshots, None).unwrap();
         assert_eq!(games[0]["state"], "serving");
         assert_eq!(games[0]["approved"][0]["publicKey"], key);
-        let remaining = rows(&games[0]["pending"]);
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0]["publicKey"], other);
-        assert_ne!(remaining[0]["id"], dismissed);
+        // The shim clears its batch every poll; a dismissed key knocking again
+        // later stays ignored until the invitation is rotated.
+        assert!(rows(&games[0]["pending"]).is_empty());
         assert!(hosting.command(&approve(&request_id(&key)), None).is_err());
+        let saved = std::fs::read_to_string(host_dir.join(REQUESTS_FILE)).unwrap();
+        assert!(saved.contains(&other) && !saved.contains(&key));
+        assert!(!games.to_string().contains("hostedfullkey"));
+        assert_eq!(
+            games[0]["serverFingerprint"],
+            gamelink_core::requests::server_fingerprint("nodekey:hostedfullkey")
+        );
 
         *worlds.borrow_mut() = json!([{"name":"Cabin","port":52000}]);
         assert!(hosting.command(&share(51000), None).is_err());
@@ -896,6 +917,7 @@ mod tests {
         drop(calls);
 
         let mut reopened = Hosting::new(host_dir);
+        assert!(reopened.requests.dismissals() == hosting.requests.dismissals());
         let saved = reopened.command(&snapshots, None).unwrap();
         assert_eq!(saved[0]["id"], id);
         assert_eq!(saved[0]["enabled"], false);

@@ -155,7 +155,8 @@ privately import its invitation for your own use. To invite a friend, open
 card. Copying and reviewing join requests require the updated desktop and
 Linux agent. Your friend imports the invitation and clicks **Join** to request access.
 In **People**, review the request for that game, confirm the device's public
-key, and approve it. The desktop manages one connected node at a time. Change
+key, and approve it, or dismiss it. Dismissal on the node needs the updated
+agent. The desktop manages one connected node at a time. Change
 the endpoint and token in **Host admin** to administer another node.
 
 Suspended, missing, and newly unmapped servers are disabled on the next
@@ -167,8 +168,10 @@ commands or stop the agent. Rotating the host admin token requires restarting
 the agent and updating the desktop connection.
 
 The authenticated interface provides cached status, pending join requests,
-explicit Refresh, invitation copying, and device approval for enabled managed
-games. Copying an invitation enables join requests without granting access. It exposes no shell,
+explicit Refresh, invitation copying, and device approval or dismissal for
+enabled managed games. Status identifies each game's server key by a one-way
+fingerprint, and every change must name the fingerprint of the game's current
+identity. Copying an invitation enables join requests without granting access. It exposes no shell,
 console commands, files, arbitrary destinations, game power controls, or Panel
 credentials. Protect the admin token: it authorizes device approval for this
 node's registered games.

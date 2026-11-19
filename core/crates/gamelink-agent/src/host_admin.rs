@@ -3,7 +3,7 @@
 use crate::{
     bridge, config, invitations, json, now, pterodactyl, pure, requests, rows, s, Cli, Result,
 };
-use gamelink_core::requests::Scope;
+use gamelink_core::requests::{server_fingerprint, Scope};
 use serde_json::Value;
 use std::{
     fs,
@@ -264,10 +264,18 @@ fn managed(game: &Value) -> bool {
     !s(game, "origin").is_empty()
 }
 
-fn server_key(keys: &Value) -> Result<Value> {
+// The full server key is enough to knock, so only its fingerprint leaves.
+fn game_fingerprint(keys: &Value) -> Result<String> {
     let key = bridge::call(json!({"method":"server_public_key","keys":keys}))?;
-    pure::dispatch("identity.public_key", json!({"text":key}))
+    let key = pure::dispatch("identity.public_key", json!({"text":key}))?;
+    Ok(server_fingerprint(
+        key.as_str().ok_or("invalid server key")?,
+    ))
 }
+
+const UNKNOWN_GAME: &str = "unknown or disabled managed game";
+const CHANGED_GAME: &str = "the selected game identity has changed";
+const NOT_PENDING: &str = "request is no longer pending for that device and game";
 
 impl Host {
     fn handle(&mut self, request: Request) -> ApiResult<(u16, Value)> {
@@ -283,19 +291,30 @@ impl Host {
                 self.statuses = result["statuses"].clone();
                 self.checked_at = now();
             }
-            ("POST", "/v1/host/import" | "/v1/host/invitation" | "/v1/host/requests/approve") => {
+            (
+                "POST",
+                "/v1/host/import"
+                | "/v1/host/invitation"
+                | "/v1/host/requests/approve"
+                | "/v1/host/requests/dismiss",
+            ) => {
                 let body: Value = serde_json::from_slice(&request.body)
                     .map_err(|_| (400, "Invalid game request".into()))?;
                 let result = match request.path.as_str() {
                     "/v1/host/import" => self.import(&body),
                     "/v1/host/invitation" => self.invitation(&body),
-                    _ => self.approve_request(&body),
+                    "/v1/host/requests/approve" => self.resolve_request(&body, true),
+                    _ => self.resolve_request(&body, false),
                 };
-                return result.map(|value| (200, value)).map_err(|_| {
-                    (
-                        400,
-                        "Could not complete the action for the selected enabled game".into(),
-                    )
+                // Only fixed selection errors are specific; others stay generic.
+                return result.map(|value| (200, value)).map_err(|error| {
+                    let message =
+                        if [UNKNOWN_GAME, CHANGED_GAME, NOT_PENDING].contains(&error.as_str()) {
+                            error
+                        } else {
+                            "Could not complete the action for the selected enabled game".into()
+                        };
+                    (400, message)
                 });
             }
             (
@@ -304,7 +323,8 @@ impl Host {
                 | "/v1/host/refresh"
                 | "/v1/host/import"
                 | "/v1/host/invitation"
-                | "/v1/host/requests/approve",
+                | "/v1/host/requests/approve"
+                | "/v1/host/requests/dismiss",
             ) => return Err((405, "Unsupported host request method".into())),
             _ => return Err((404, "Unknown host operation".into())),
         }
@@ -336,14 +356,14 @@ impl Host {
                 ("unknown", "Click Refresh to check the Panel")
             };
             let key = invitations::load_keys(&self.dir, id)
-                .and_then(|keys| server_key(&keys)).unwrap_or(Value::Null);
+                .and_then(|keys| game_fingerprint(&keys)).map_or(Value::Null, Value::from);
             let pending: Vec<_> = pending.iter().filter(|request| request["game"] == id)
                 .map(|request| json!({"id":request["id"],"publicKey":request["publicKey"],"lastSeen":request["lastSeen"]}))
                 .collect();
             json!({
                 "id":id,"name":game["name"],"type":game["type"],"proto":game["protocol"],"port":game["tunnelPort"],
                 "disabled":game["disabled"]==true,"approvedDevices":rows(&game["devices"]).len(),
-                "state":state,"detail":detail,"serverPublicKey":key,
+                "state":state,"detail":detail,"serverFingerprint":key,
                 "canCopyInvitation":scopes.contains_key(id) && !key.is_null(),"pending":pending
             })
         }).collect();
@@ -355,21 +375,22 @@ impl Host {
         let game = rows(&cfg["games"])
             .iter()
             .find(|game| game["id"] == body["gameId"] && managed(game) && game["disabled"] != true)
-            .ok_or("unknown or disabled managed game")?;
+            .ok_or(UNKNOWN_GAME)?;
         let keys = invitations::load_keys(&self.dir, s(game, "id"))?;
         pure::check_invite_expiry(&keys["expiresAt"])?;
         Ok((game.clone(), keys))
     }
 
     fn check_selection(keys: &Value, body: &Value) -> Result<()> {
-        if server_key(keys)? != body["serverPublicKey"] {
-            return Err("the selected game identity has changed".into());
+        if body["serverFingerprint"] != game_fingerprint(keys)? {
+            return Err(CHANGED_GAME.into());
         }
         Ok(())
     }
 
     fn import(&self, body: &Value) -> Result<Value> {
         let (game, keys) = self.selected_game(body)?;
+        Self::check_selection(&keys, body)?;
         let invitation = invitations::encode(&game, &keys, s(&game, "name"), "", false)?;
         self.cli().approve_device(
             s(&game, "id"),
@@ -391,7 +412,7 @@ impl Host {
         Ok(json!({"invitation":invitation}))
     }
 
-    fn approve_request(&self, body: &Value) -> Result<Value> {
+    fn resolve_request(&self, body: &Value, approve: bool) -> Result<Value> {
         let _lock = requests::lock(&self.dir)?;
         let (game, keys) = self.selected_game(body)?;
         Self::check_selection(&keys, body)?;
@@ -406,15 +427,20 @@ impl Host {
             .find(|request| {
                 request["id"] == body["requestId"] && request["publicKey"] == body["publicKey"]
             })
-            .ok_or("request is no longer pending for that device and game")?;
+            .ok_or(NOT_PENDING)?;
+        let request_id = request["id"].as_u64().ok_or("invalid request ID")?;
+        if !approve {
+            store.dismiss(id, request_id, now);
+            requests::save(&store, &self.dir)?;
+            return Ok(json!({}));
+        }
         self.cli().approve_device(
             id,
             s(&request, "publicKey"),
             s(body, "label"),
             &scopes[id].keys,
         )?;
-        let request_id = request["id"].as_u64().ok_or("invalid request ID")?;
-        store.dismiss(id, request_id, now);
+        store.remove(id, request_id);
         if requests::save(&store, &self.dir).is_err() {
             crate::log("The approval was saved, but the request store could not be updated.");
         }

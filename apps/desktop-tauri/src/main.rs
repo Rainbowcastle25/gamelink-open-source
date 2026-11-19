@@ -89,6 +89,7 @@ fn public_method(method: &str) -> bool {
             | "copyHostedInvitation"
             | "copyLinkedInvitation"
             | "approveLinkedRequest"
+            | "dismissLinkedRequest"
             | "copyText"
             | "pickExecutable"
             | "openConfigFolder"
@@ -125,6 +126,7 @@ fn native_or_manager(app: &tauri::AppHandle, request: Value) -> Result<Value, St
             | "refreshHost"
             | "importHostGame"
             | "approveLinkedRequest"
+            | "dismissLinkedRequest"
     ) {
         return host_connection::call(request);
     }

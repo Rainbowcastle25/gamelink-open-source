@@ -54,8 +54,8 @@ export function PeopleScreen() {
   const { go } = useNav();
   const hosted = useHostedGames(backend);
   const linked = useLinkedGames(backend, 5000);
-  const linkedGames = (linked.games ?? []).filter((game) => game.serverPublicKey);
-  const [approval, setApproval] = useState<{ game: GameForApproval; request?: PendingDevice; serverPublicKey?: string }>();
+  const linkedGames = (linked.games ?? []).filter((game) => game.serverFingerprint);
+  const [approval, setApproval] = useState<{ game: GameForApproval; request?: PendingDevice; serverFingerprint?: string }>();
   const [publicKey, setPublicKey] = useState("");
   const [label, setLabel] = useState("");
   const [revoking, setRevoking] = useState<{ game: HostedGame; device: HostedDevice }>();
@@ -78,27 +78,27 @@ export function PeopleScreen() {
     }
   }
 
-  function askApproval(game: GameForApproval, request?: PendingDevice, serverPublicKey?: string) {
+  function askApproval(game: GameForApproval, request?: PendingDevice, serverFingerprint?: string) {
     setPublicKey(request?.publicKey ?? "");
     setLabel("");
     setError("");
     setNotice("");
-    setApproval({ game, request, serverPublicKey });
+    setApproval({ game, request, serverFingerprint });
   }
 
   function approve() {
     if (busy || !approval || !publicKey.trim()) return;
-    const { game, request, serverPublicKey } = approval;
+    const { game, request, serverFingerprint } = approval;
     void act(async () => {
-      if (request && serverPublicKey) {
-        await backend.approveLinkedRequest(game.id, serverPublicKey, request, label.trim());
+      if (request && serverFingerprint) {
+        await backend.approveLinkedRequest(game.id, serverFingerprint, request, label.trim());
       } else if (request) {
         await backend.approveHostedRequest(game.id, request.id, label.trim());
       } else {
         await backend.approveHostedDevice(game.id, publicKey.trim(), label.trim());
       }
       setApproval(undefined);
-    }, request ? `Device approved for ${game.name}. Ask your friend to try Join again.` : `Device approved for ${game.name}.`, serverPublicKey ? linked.refresh : hosted.refresh);
+    }, request ? `Device approved for ${game.name}. Ask your friend to try Join again.` : `Device approved for ${game.name}.`, serverFingerprint ? linked.refresh : hosted.refresh);
   }
 
   return (
@@ -159,7 +159,8 @@ export function PeopleScreen() {
                   <h3 id={`linked-access-${game.id}`} className="font-medium [overflow-wrap:anywhere]">{game.name}</h3>
                   <p className="mt-1 text-xs text-muted">{game.approvedDevices} approved {game.approvedDevices === 1 ? "device" : "devices"}</p>
                   <PendingRequests pending={game.pending ?? []} busy={busy}
-                    onReview={(request) => askApproval(game, request, game.serverPublicKey ?? undefined)}
+                    onReview={(request) => askApproval(game, request, game.serverFingerprint ?? undefined)}
+                    onDismiss={(request) => void act(() => backend.dismissLinkedRequest(game.id, game.serverFingerprint ?? "", request), "Join request dismissed.", linked.refresh)}
                   />
                 </article>
               ))}

@@ -53,12 +53,14 @@ Invitation holder (not approved) ──X─►   (handshake gets no reply)
   public port) and cannot guess a Tailcat address.
 - **A stranger who obtains the invitation/address but not an approved key**:
   gets no handshake reply at all. This is tested. Note this means a rejected
-  device sees exactly what an offline server looks like. An invitation holder
-  can cause a DERP-authenticated peer key to appear in the host's private
-  request list. This happens before WireGuard checks the PSK, so knowing the
-  server's public key and relay suffices to knock. A request identifies a
-  device key, and the host must separately confirm who controls it before
-  approving.
+  device sees exactly what an offline server looks like.
+- **Anyone who knows a game's server public key and relay**, not only an
+  invitation holder, can cause a DERP-authenticated peer key to appear in the
+  host's private request list. The knock happens before WireGuard checks the
+  PSK. GameLink therefore keeps the full server public key in the native app
+  and agent; the UI and the linked-node admin API see only a one-way
+  fingerprint. A request identifies a device key, and the host must separately
+  confirm who controls it before approving.
 - **An approved friend**: can connect to the single game port you exposed, as
   any player. They cannot reach other ports, the LAN, or run commands. If the
   game itself has a vulnerability or an admin console on that port, that is
@@ -183,13 +185,18 @@ Invitation holder (not approved) ──X─►   (handshake gets no reply)
 14. **Agent status heartbeat.** `gamelink-agent status` reports "running" for up
     to 20 seconds after a hard kill because it reads a heartbeat file.
 15. **Pending requests.** Each game keeps at most 32 pending keys for 24 hours
-    from their first appearance. New keys are rate-limited, but an invitation
-    holder can still fill the list and delay legitimate requests. Dismissal
-    frees a slot and a fresh knock can appear again. Both hosts track the
-    key, first and last seen times, and attempt count. The Linux agent uses
-    a private 0600 `requests.json` file. The desktop keeps pending requests in
-    memory until the app exits. Approval always requires an explicit host
-    action.
+    from their first appearance. New keys are rate-limited, but anyone who
+    knows the game's server public key can still fill the list with fresh keys
+    and delay legitimate requests. Dismissal frees a slot, and GameLink then
+    ignores that device key for the game until its invitation is rotated (up
+    to 256 dismissed keys per game; the oldest is forgotten first). Rotating
+    the invitation replaces the server key, so it also clears request spam:
+    old pending requests and dismissals are dropped and only holders of the
+    new invitation can knock. Both hosts track the key, first and last seen
+    times, and attempt count. The Linux agent uses a private 0600
+    `requests.json` file. The desktop keeps pending requests in memory until
+    the app exits and saves only dismissals. Approval always requires an
+    explicit host action.
 
 ## Reporting vulnerabilities
 

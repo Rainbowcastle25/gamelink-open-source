@@ -43,7 +43,8 @@ hosts drain the same bounded batches and use the Rust core request store to
 deduplicate by game identity and key, cap pending requests at 32 per game, and
 expire them 24 hours after first sighting. The Linux CLI and desktop People
 screen approve or dismiss a specific pending request. Dismissal leaves access
-unchanged and a fresh attempt can appear again.
+unchanged, and later attempts from that key are ignored until the game's
+invitation is rotated.
 
 The supervisor checks config once per second by default. Rust serializes
 observations and effects, and waits for old Go resources to close before

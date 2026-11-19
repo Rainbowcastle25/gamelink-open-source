@@ -5,13 +5,72 @@ use crate::{bridge, host};
 use gamelink_core::storage;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 use url::Url;
 
 const FILE_NAME: &str = "host-connection.json";
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
 type Result<T> = std::result::Result<T, String>;
+
+// The node's admin listener serves one request at a time and a Refresh can
+// take up to 95 s. While this app runs one, People keeps polling status, so
+// answer from the last status of that endpoint instead of timing out.
+#[derive(Default)]
+struct Endpoint {
+    refreshing: usize,
+    last: Option<Value>,
+}
+static ENDPOINTS: Mutex<BTreeMap<String, Endpoint>> = Mutex::new(BTreeMap::new());
+
+fn endpoints() -> std::sync::MutexGuard<'static, BTreeMap<String, Endpoint>> {
+    ENDPOINTS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn remember(endpoint: &str, result: &Result<Value>) {
+    if let Ok(value) = result {
+        endpoints().entry(endpoint.into()).or_default().last = Some(value.clone());
+    }
+}
+
+fn status(saved: &SavedConnection) -> Result<Value> {
+    let cached = endpoints()
+        .get(&saved.endpoint)
+        .filter(|e| e.refreshing > 0)
+        .and_then(|e| e.last.clone());
+    if let Some(value) = cached {
+        return Ok(value);
+    }
+    let result = host_request(saved, "GET", "/v1/host/status", Value::Null, 5);
+    remember(&saved.endpoint, &result);
+    result
+}
+
+struct Refreshing<'a>(&'a str);
+impl<'a> Refreshing<'a> {
+    fn begin(endpoint: &'a str) -> Self {
+        endpoints().entry(endpoint.into()).or_default().refreshing += 1;
+        Self(endpoint)
+    }
+}
+impl Drop for Refreshing<'_> {
+    fn drop(&mut self) {
+        if let Some(entry) = endpoints().get_mut(self.0) {
+            entry.refreshing -= 1;
+        }
+    }
+}
+
+fn refresh(saved: &SavedConnection) -> Result<Value> {
+    let _busy = Refreshing::begin(&saved.endpoint);
+    let result = host_request(saved, "POST", "/v1/host/refresh", json!({}), 95);
+    remember(&saved.endpoint, &result);
+    result
+}
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,21 +110,31 @@ pub fn call(request: Value) -> Result<Value> {
         }
         "hostStatus" => {
             let dir = config_dir()?;
-            if !file_path(&dir).try_exists().map_err(|_| "could not read host connection")? {
+            if !file_path(&dir)
+                .try_exists()
+                .map_err(|_| "could not read host connection")?
+            {
                 return Ok(json!({"games":[],"refreshedAt":""}));
             }
-            let saved = read_configured(&dir)?;
-            host_request(&saved, "GET", "/v1/host/status", Value::Null, 5)
+            status(&read_configured(&dir)?)
         }
-        "refreshHost" => {
-            let saved = read_configured(&config_dir()?)?;
-            host_request(&saved, "POST", "/v1/host/refresh", json!({}), 95)
+        "refreshHost" => refresh(&read_configured(&config_dir()?)?),
+        "approveLinkedRequest" | "dismissLinkedRequest" => {
+            let path = if request["method"] == "approveLinkedRequest" {
+                "/v1/host/requests/approve"
+            } else {
+                "/v1/host/requests/dismiss"
+            };
+            game_request(path, json!({
+                "gameId":request["id"],"serverFingerprint":request["serverFingerprint"],
+                "requestId":request["requestId"],"publicKey":request["publicKey"],"label":request["label"]
+            }))
+            .map(|_| Value::Null)
         }
-        "approveLinkedRequest" => game_request("/v1/host/requests/approve", json!({
-            "gameId":request["id"],"serverPublicKey":request["serverPublicKey"],
-            "requestId":request["requestId"],"publicKey":request["publicKey"],"label":request["label"]
-        })).map(|_| Value::Null),
-        "importHostGame" => import_game(request["gameID"].as_str().unwrap_or("")),
+        "importHostGame" => import_game(
+            request["gameID"].as_str().unwrap_or(""),
+            &request["serverFingerprint"],
+        ),
         _ => Err("unknown host command".into()),
     }
 }
@@ -187,7 +256,7 @@ pub fn invitation(request: &Value) -> Result<String> {
     let result = game_request(
         "/v1/host/invitation",
         json!({
-            "gameId":request["id"],"serverPublicKey":request["serverPublicKey"]
+            "gameId":request["id"],"serverFingerprint":request["serverFingerprint"]
         }),
     )?;
     Ok(invitation_text(&result)?.to_owned())
@@ -200,7 +269,7 @@ fn invitation_text(result: &Value) -> Result<&str> {
         .ok_or_else(|| "host returned an invalid invitation".into())
 }
 
-fn import_game(game_id: &str) -> Result<Value> {
+fn import_game(game_id: &str, fingerprint: &Value) -> Result<Value> {
     if game_id.is_empty() || game_id.len() > 128 {
         return Err("select a game to import".into());
     }
@@ -211,7 +280,7 @@ fn import_game(game_id: &str) -> Result<Value> {
         .ok_or("could not read this device's public key")?;
     let result = game_request(
         "/v1/host/import",
-        json!({"gameId":game_id,"publicKey":public_key}),
+        json!({"gameId":game_id,"serverFingerprint":fingerprint,"publicKey":public_key}),
     )?;
     let invitation = invitation_text(&result)?;
     // Keep the invitation inside the Rust native host. Only the imported
@@ -258,5 +327,31 @@ mod tests {
             first.token
         );
         assert!(configure(dir.path(), "https://different.example", "").is_err());
+    }
+
+    #[test]
+    fn status_during_a_refresh_uses_the_last_snapshot_without_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = configure(dir.path(), "https://refreshing.example", "admin").unwrap();
+        let fail = std::rc::Rc::new(std::cell::Cell::new(false));
+        let failing = fail.clone();
+        let _fake = bridge::fake::install(move |request| {
+            assert_eq!(request["method"], "http");
+            if failing.get() {
+                Err("timed out".into())
+            } else {
+                Ok(json!({"games":[{"id":"cached"}],"refreshedAt":""}))
+            }
+        });
+        let cached = status(&saved).unwrap();
+        fail.set(true);
+        assert!(status(&saved).is_err());
+        {
+            let _busy = Refreshing::begin(&saved.endpoint);
+            assert_eq!(status(&saved).unwrap(), cached);
+        }
+        assert!(status(&saved).is_err());
+        assert!(refresh(&saved).is_err());
+        assert_eq!(endpoints()[&saved.endpoint].refreshing, 0);
     }
 }
