@@ -242,6 +242,7 @@ export interface HostGame {
 export interface HostSnapshot {
   games: HostGame[];
   refreshedAt: string;
+  refreshing?: boolean;
 }
 
 export type DesktopGameType = Exclude<GameId, "custom">;

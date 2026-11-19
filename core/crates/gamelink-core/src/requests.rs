@@ -71,7 +71,9 @@ struct Request {
 struct GameRequests {
     identity: String,
     pending: Vec<Request>,
-    // Dismissed keys are ignored until the game identity changes (rotation).
+    // Legacy "dismissed" entries mixed approvals and dismissals. Ignore them
+    // on load and persist only dismissals made under the rotation policy.
+    #[serde(default, rename = "dismissedUntilRotation")]
     dismissed: BTreeMap<String, DateTime<Utc>>,
 }
 
@@ -300,6 +302,48 @@ mod tests {
         let listed = store.list(&scopes, after);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0]["publicKey"], "peer-0");
+    }
+
+    #[test]
+    fn legacy_approval_markers_do_not_suppress_revoked_devices() {
+        let now = DateTime::<Utc>::from(std::time::SystemTime::now());
+        let game = "game".to_owned();
+        let scope = Scope::new(&json!({}), json!({"privateKey":"old"}));
+        let running = BTreeMap::from([(game.clone(), scope.identity.clone())]);
+        let legacy = json!({
+            "next_id": 42,
+            "games": {
+                "game": {
+                    "identity": scope.identity,
+                    "pending": [{"id":42,"publicKey":"peer-1","firstSeen":now,"lastSeen":now,"attempts":1}],
+                    "dismissed": {"peer-0": now}
+                }
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("requests.json");
+        std::fs::write(&path, legacy.to_string()).unwrap();
+        let mut store: Store = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let scopes = BTreeMap::from([(game.clone(), scope)]);
+        let later = now + TimeDelta::seconds(1);
+        store
+            .merge(
+                &scopes,
+                &running,
+                BTreeMap::from([(game, vec![knock(0, later)])]),
+                later,
+            )
+            .unwrap();
+        let requests = store.list(&scopes, later);
+        assert_eq!(
+            requests.len(),
+            2,
+            "a revoked device must be able to knock again"
+        );
+        assert_eq!(requests[0]["publicKey"], "peer-1");
+        assert_eq!(requests[0]["id"], 42);
+        assert_eq!(requests[1]["publicKey"], "peer-0");
+        assert_eq!(requests[1]["id"], 43);
     }
 
     #[test]

@@ -8,17 +8,19 @@ export function hostingError(error: unknown) {
 }
 
 export function useHostedGames(backend: Backend) {
-  const load = useCallback(() => backend.hostedGames(), [backend]);
+  const load = useCallback(async () => ({ games: await backend.hostedGames() }), [backend]);
   return useGameList<HostedGame>(load, 2000);
 }
 
 export function useLinkedGames(backend: Backend, pollMs?: number) {
-  const load = useCallback(async () => (await backend.hostStatus()).games, [backend]);
+  const load = useCallback(() => backend.hostStatus(), [backend]);
   return useGameList<HostGame>(load, pollMs);
 }
 
-function useGameList<T>(load: () => Promise<T[]>, pollMs?: number) {
-  const [games, setGames] = useState<T[]>();
+type GameList<T> = { games: T[]; refreshing?: boolean };
+
+function useGameList<T>(load: () => Promise<GameList<T>>, pollMs?: number) {
+  const [list, setList] = useState<GameList<T>>();
   const [error, setError] = useState("");
   const request = useRef(0);
   const invalidate = useCallback(() => { ++request.current; }, []);
@@ -26,14 +28,14 @@ function useGameList<T>(load: () => Promise<T[]>, pollMs?: number) {
   const refresh = useCallback(async () => {
     const current = ++request.current;
     try {
-      const hosted = await load();
+      const result = await load();
       if (current === request.current) {
-        setGames(hosted);
+        setList(result);
         setError("");
       }
     } catch (e) {
       if (current === request.current) {
-        setGames(undefined);
+        setList(undefined);
         setError(hostingError(e));
       }
     }
@@ -54,5 +56,11 @@ function useGameList<T>(load: () => Promise<T[]>, pollMs?: number) {
     };
   }, [invalidate, pollMs, refresh]);
 
-  return { games, error, refresh };
+  useEffect(() => {
+    if (pollMs !== undefined || !list?.refreshing) return;
+    const timeout = window.setTimeout(() => void refresh(), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [list, pollMs, refresh]);
+
+  return { games: list?.games, refreshing: list?.refreshing, error, refresh };
 }

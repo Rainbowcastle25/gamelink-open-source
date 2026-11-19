@@ -2,7 +2,7 @@
 //! host. This module deliberately runs outside the main app mutex so bounded
 //! host requests cannot block the desktop's existing transport state updates.
 use crate::{bridge, host};
-use gamelink_core::storage;
+use gamelink_core::{requests::server_fingerprint, storage};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -17,9 +17,59 @@ const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
 type Result<T> = std::result::Result<T, String>;
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostSnapshot {
+    games: Vec<HostGame>,
+    refreshed_at: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostGame {
+    id: String,
+    name: String,
+    #[serde(rename = "type")]
+    game_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proto: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
+    disabled: bool,
+    approved_devices: usize,
+    state: String,
+    detail: String,
+    server_fingerprint: Option<String>,
+    #[serde(rename = "serverPublicKey", skip_serializing)]
+    legacy_server_key: Option<String>,
+    #[serde(default)]
+    can_copy_invitation: bool,
+    #[serde(default)]
+    pending: Vec<PendingDevice>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingDevice {
+    id: u64,
+    public_key: String,
+    last_seen: String,
+}
+
+fn project_snapshot(raw: Value) -> Result<Value> {
+    let mut snapshot: HostSnapshot =
+        serde_json::from_value(raw).map_err(|_| "host returned an invalid status")?;
+    for game in &mut snapshot.games {
+        if game.server_fingerprint.is_none() {
+            game.server_fingerprint = game.legacy_server_key.as_deref().map(server_fingerprint);
+        }
+    }
+    serde_json::to_value(snapshot).map_err(|_| "could not encode host status".into())
+}
+
 // The node's admin listener serves one request at a time and a Refresh can
 // take up to 95 s. While this app runs one, People keeps polling status, so
-// answer from the last status of that endpoint instead of timing out.
+// answer from the last status of that endpoint or report that it is refreshing.
 #[derive(Default)]
 struct Endpoint {
     refreshing: usize,
@@ -31,23 +81,30 @@ fn endpoints() -> std::sync::MutexGuard<'static, BTreeMap<String, Endpoint>> {
     ENDPOINTS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn remember(endpoint: &str, result: &Result<Value>) {
-    if let Ok(value) = result {
-        endpoints().entry(endpoint.into()).or_default().last = Some(value.clone());
-    }
+fn request_snapshot(
+    saved: &SavedConnection,
+    verb: &str,
+    path: &str,
+    body: Value,
+    timeout_seconds: u64,
+) -> Result<Value> {
+    let value =
+        host_request(saved, verb, path, body, timeout_seconds).and_then(project_snapshot)?;
+    endpoints().entry(saved.endpoint.clone()).or_default().last = Some(value.clone());
+    Ok(value)
 }
 
 fn status(saved: &SavedConnection) -> Result<Value> {
-    let cached = endpoints()
+    if let Some(entry) = endpoints()
         .get(&saved.endpoint)
-        .filter(|e| e.refreshing > 0)
-        .and_then(|e| e.last.clone());
-    if let Some(value) = cached {
-        return Ok(value);
+        .filter(|entry| entry.refreshing > 0)
+    {
+        return Ok(entry
+            .last
+            .clone()
+            .unwrap_or_else(|| json!({"games":[],"refreshedAt":"","refreshing":true})));
     }
-    let result = host_request(saved, "GET", "/v1/host/status", Value::Null, 5);
-    remember(&saved.endpoint, &result);
-    result
+    request_snapshot(saved, "GET", "/v1/host/status", Value::Null, 5)
 }
 
 struct Refreshing<'a>(&'a str);
@@ -67,9 +124,7 @@ impl Drop for Refreshing<'_> {
 
 fn refresh(saved: &SavedConnection) -> Result<Value> {
     let _busy = Refreshing::begin(&saved.endpoint);
-    let result = host_request(saved, "POST", "/v1/host/refresh", json!({}), 95);
-    remember(&saved.endpoint, &result);
-    result
+    request_snapshot(saved, "POST", "/v1/host/refresh", json!({}), 95)
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -330,6 +385,67 @@ mod tests {
     }
 
     #[test]
+    fn legacy_snapshots_are_projected_before_returning_and_caching() {
+        let dir = tempfile::tempdir().unwrap();
+        let server_key = format!("nodekey:{}", "ab".repeat(32));
+        let fingerprint = gamelink_core::requests::server_fingerprint(&server_key);
+        for (operation, path) in [
+            (status as fn(&SavedConnection) -> Result<Value>, "status"),
+            (refresh, "refresh"),
+        ] {
+            let saved = configure(
+                dir.path(),
+                &format!("https://legacy-{path}.example"),
+                "admin",
+            )
+            .unwrap();
+            let raw = json!({
+                "refreshedAt":"2026-01-01T00:00:00Z",
+                "extra":true,
+                "games":[{
+                    "id":"old-game","name":"Old Game","type":"factorio","proto":"udp","port":34197,
+                    "disabled":false,"approvedDevices":2,"state":"running","detail":"",
+                    "serverPublicKey":server_key,"canCopyInvitation":true,
+                    "pending":[{"id":4,"publicKey":"device-key","lastSeen":"2026-01-01T00:00:00Z","extra":true}],
+                    "extra":true
+                }]
+            });
+            let url = format!("{}/v1/host/{path}", saved.endpoint);
+            let _fake = bridge::fake::install(move |request| {
+                assert_eq!(request["url"], url);
+                Ok(raw.clone())
+            });
+
+            let output = operation(&saved).unwrap();
+            assert!(
+                output["games"][0].get("serverPublicKey").is_none(),
+                "{path}"
+            );
+            assert_eq!(output["games"][0]["serverFingerprint"], fingerprint);
+            assert_eq!(output["games"][0]["pending"][0]["publicKey"], "device-key");
+            assert!(output.get("extra").is_none());
+            assert!(output["games"][0].get("extra").is_none());
+            assert!(output["games"][0]["pending"][0].get("extra").is_none());
+            assert_eq!(endpoints()[&saved.endpoint].last.as_ref(), Some(&output));
+            let _busy = Refreshing::begin(&saved.endpoint);
+            assert_eq!(status(&saved).unwrap(), output);
+        }
+    }
+
+    #[test]
+    fn status_during_a_refresh_with_no_snapshot_does_not_call_the_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = configure(dir.path(), "https://cold-refresh.example", "admin").unwrap();
+        let _fake = bridge::fake::install(|_| panic!("status made an HTTP call during Refresh"));
+        let _busy = Refreshing::begin(&saved.endpoint);
+        assert_eq!(
+            status(&saved).unwrap(),
+            json!({"games":[],"refreshedAt":"","refreshing":true})
+        );
+        assert!(endpoints()[&saved.endpoint].last.is_none());
+    }
+
+    #[test]
     fn status_during_a_refresh_uses_the_last_snapshot_without_waiting() {
         let dir = tempfile::tempdir().unwrap();
         let saved = configure(dir.path(), "https://refreshing.example", "admin").unwrap();
@@ -340,7 +456,10 @@ mod tests {
             if failing.get() {
                 Err("timed out".into())
             } else {
-                Ok(json!({"games":[{"id":"cached"}],"refreshedAt":""}))
+                Ok(json!({"games":[{
+                    "id":"cached","name":"Cached Game","type":"factorio",
+                    "disabled":false,"approvedDevices":0,"state":"running","detail":""
+                }],"refreshedAt":""}))
             }
         });
         let cached = status(&saved).unwrap();

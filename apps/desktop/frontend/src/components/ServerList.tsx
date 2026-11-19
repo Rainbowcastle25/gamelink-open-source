@@ -74,8 +74,12 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
     />
   );
 
+  const linkedRefreshing = linked.refreshing && (
+    <p role="status" className="text-sm text-muted">Refreshing…</p>
+  );
+
   if (servers.length === 0 && hostedOnly.length === 0) {
-    if (savedError || linkedError) return <div className="space-y-3">{savedError}{linkedError}</div>;
+    if (savedError || linkedError || linkedRefreshing) return <div className="space-y-3">{savedError}{linkedError}{linkedRefreshing}</div>;
     if ((!local.games && !local.error) || (!linked.games && !linked.error)) return <ServerListSkeleton />;
     return (
       <EmptyState
@@ -97,6 +101,7 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
     <ul className="flex flex-col gap-3">
       {savedError && <li>{savedError}</li>}
       {linkedError && <li>{linkedError}</li>}
+      {linkedRefreshing && <li>{linkedRefreshing}</li>}
       {hostedOnly.map((game) => (
         <li key={game.key} className="min-w-0">
           <article aria-label={game.name} className="flex min-w-0 items-start gap-4 rounded-xl border border-line bg-surface p-4 shadow-card">

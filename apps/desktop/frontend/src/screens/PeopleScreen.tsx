@@ -149,9 +149,10 @@ export function PeopleScreen() {
           {!hosted.games && !hosted.error && <p role="status" className="mt-3 text-sm text-muted">Loading game access…</p>}
         </section>
 
-        {(linkedGames.length > 0 || linked.error) && (
+        {(linkedGames.length > 0 || linked.error || linked.refreshing) && (
           <section aria-labelledby="linked-access" className="rounded-xl border border-line bg-surface p-5">
             <h2 id="linked-access" className="font-semibold">Access to games on your linked node</h2>
+            {linked.refreshing && <p role="status" className="mt-3 text-sm text-muted">Refreshing…</p>}
             {linked.error && <p role="alert" className="mt-3 text-sm text-danger">Could not read linked game access. {linked.error}</p>}
             <div className="mt-2 divide-y divide-line">
               {linkedGames.map((game) => (

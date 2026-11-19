@@ -343,7 +343,7 @@ func TestRustAgentPterodactylManualRefresh(t *testing.T) {
 	var handled struct {
 		Games map[string]struct {
 			Pending   []struct{ PublicKey string }
-			Dismissed map[string]time.Time
+			Dismissed map[string]time.Time `json:"dismissedUntilRotation"`
 		}
 	}
 	handledBytes, err := os.ReadFile(filepath.Join(dir, "requests.json"))
@@ -355,7 +355,6 @@ func TestRustAgentPterodactylManualRefresh(t *testing.T) {
 			t.Fatal("approval did not retire the old request")
 		}
 	}
-
 
 	var tunnel *transport.Tunnel
 	for deadline := time.Now().Add(agentWait); time.Now().Before(deadline); {

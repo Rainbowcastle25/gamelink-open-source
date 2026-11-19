@@ -261,6 +261,17 @@ it("shows a LAN world on both screens after sharing and tracks pause, port chang
   }
 });
 
+it("shows a linked node with no cached games as refreshing in People", async () => {
+  const backend = createMockBackend({ delayMs: 0 });
+  const refreshing = { games: [], refreshedAt: "", refreshing: true };
+  vi.spyOn(backend, "hostStatus").mockResolvedValue(refreshing);
+  renderApp(<PeopleScreen />, { backend });
+
+  const linked = await screen.findByRole("region", { name: "Access to games on your linked node" });
+  expect(within(linked).getByRole("status")).toHaveTextContent("Refreshing…");
+  expect(within(linked).queryByRole("alert")).not.toBeInTheDocument();
+});
+
 it("reviews and explicitly approves the selected device for a linked game in People", async () => {
   const backend = createMockBackend({ delayMs: 0 });
   await backend.configureHost("http://127.0.0.1:8467", "test");
