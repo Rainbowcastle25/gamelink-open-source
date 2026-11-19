@@ -7,6 +7,7 @@
 | Go | 1.27.x (see `go.mod`) |
 | Node.js | 22 LTS |
 | Desktop shell | Tauri 2; pinned standalone `apps/desktop-tauri/Cargo.lock` |
+| Release packaging | Python 3.11+, Tauri CLI 2.12.4, Minisign 0.12, NSIS for the Windows installer |
 | Desktop Windows GNU | MinGW-w64 gcc/binutils (including windres); Zig remains the Go cgo compiler |
 | Desktop Linux | GTK 3 and WebKitGTK 4.1 development packages |
 | Windows | WebView2 runtime (preinstalled on current Windows 11) |
@@ -105,10 +106,11 @@ for development/tests. Zig builds the Go Windows archive; MinGW links the
 Tauri GNU host and compiles its Windows resources. Set
 `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` to override the MinGW linker.
 
-Artifacts and notices are staged in `dist/desktop/<triple>/`. On Windows ship
+The standalone executable and notices are staged in `dist/desktop/<triple>/`.
+For manual Windows copies, keep
 `GameLink.exe` **and `WebView2Loader.dll` together**, with the copied notices and
-licenses. The system WebView2 runtime is also required. This is an unsigned
-application, not an installer or public release.
+licenses. The system WebView2 runtime is also required. The release pipeline
+uses this same build script before packaging the NSIS installer and AppImage.
 
 For everyday use, launch the staged desktop executable with `GAMELINK_HOME`
 unset. See [where GameLink saves your servers](getting-started.md#where-gamelink-saves-your-servers).
@@ -355,16 +357,71 @@ Xbox/PlayStation tests are tracked separately in the
 [Console Bridge guide](android-console-bridge.md); do not infer console
 compatibility from a successful build or echo test.
 
-## Releasing (manual for now)
+## Releasing
 
-1. Update the package versions in the desktop and agent `Cargo.toml` files
-   and prepare the release notes.
-2. Run everything above on a clean checkout. CI does this on every push.
-3. Build the artifacts with the release verification keys embedded. Publish
-   checksums and the signed release manifest alongside the downloads using the
-   [release manifest guide](release-manifest.md). Windows binaries are unsigned.
-   Say so in the release notes.
-4. Regenerate [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) if dependencies changed.
+1. For the first release, [commit the public pins and configure the three
+   secrets in the `release` environment](release-manifest.md#set-up-the-signing-keys).
+2. Set matching versions in `apps/desktop-tauri/Cargo.toml` and
+   `core/crates/gamelink-agent/Cargo.toml` and update both checked-in Cargo
+   lockfiles. Use SemVer without build metadata. Regenerate
+   [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) if dependencies changed.
+3. Merge the release commit to `master` after CI passes. Run `git fetch origin`
+   and tag the merged commit with `git tag v0.3.0 <release-commit>`. Push the
+   tag with `git push origin v0.3.0`. For a security release use
+   `git tag -a v0.3.0 <release-commit> -m 'GameLink v0.3.0' -m 'GameLink-Release-Severity: security'`.
+   Release tags matching `v*` are immutable. The GitHub tag ruleset blocks
+   updates and deletions. Cut a new version if the tagged commit needs changes.
+4. Wait for the draft. Review its notes and assets, then click **Publish
+   release**. The Windows installer has a Tauri updater signature. It has no
+   Authenticode signature and can trigger Windows SmartScreen warnings, which
+   the draft notes disclose. Publish a stable release as latest to activate
+   the two standard update feeds. Prerelease tags produce prerelease drafts.
+
+[**Release build**](../.github/workflows/release.yml) runs on a pushed `v*` tag
+with read-only repository access. It builds and uploads unsigned static Linux
+agents for amd64 and arm64, the Linux x86_64 AppImage, and the Windows x64 NSIS
+installer. The Windows installer uses the same GNU cross-build as desktop CI
+and includes `WebView2Loader.dll`. Packaging downloads use fixed URLs and
+SHA-256 pins.
+
+[**Sign release**](../.github/workflows/sign-release.yml) runs on the completion
+of **Release build**. GitHub loads a `workflow_run` workflow from the default
+branch, so reviewed `master` code controls access to the signing keys even when
+someone tags a different commit. The keyless preflight requires a successful
+tag build whose commit is an ancestor of `origin/master` and is still the
+target of the tag. It downloads the build's artifact by run and checks the
+signer executable hashes and public pins embedded in the binaries against
+the `master` checkout. It reads the AppImage and NSIS desktop executables
+from the packages without running them.
+
+The signing job uses the preflight's immutable artifact ID and the
+`master`-only `release` environment. A following job runs the Rust client
+verifier against the signed manifest and checks the asset checksums. The
+draft job rechecks the live tag and checksums and uploads the verified assets.
+If an upload fails after draft creation, inspect or discard the incomplete
+draft before retrying the same run. Published releases are immutable. Both
+workflows pin Actions to full commit SHAs.
+
+On pull requests, **Release build** tests the signing gates and builds all
+four targets using freshly generated keys. It checks the embedded pins, signs
+the assets, checks the detached signatures and checksums, and runs the Rust
+client verifier. This exercises the build and signing scripts before merge.
+GitHub can start **Sign release** once its workflow is on `master`. Its jobs
+require a successful tag build.
+
+For local validation, use the toolchain in the table above with the Linux GUI
+dependencies, both Linux musl targets, the GNU Windows target, MinGW-w64, NSIS,
+`curl`, `unsquashfs` (from `squashfs-tools`) and `7z` (from `7zip`).
+
+```sh
+mkdir -p .tools
+release_work="$(mktemp -d "$PWD/.tools/release.XXXXXXXX")"
+python3 -B scripts/test-release-gates.py
+python3 -B scripts/release.py --validate --output "$release_work/assets"
+```
+
+Add `--linux-only` to validate just the amd64 agent and AppImage with the
+Linux dependencies and amd64 musl target.
 
 ### Console protocol policy
 

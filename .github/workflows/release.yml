@@ -1,0 +1,96 @@
+name: Release build
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build release assets or validate with throwaway keys
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.2
+          cache: npm
+          cache-dependency-path: apps/desktop/frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: 1.100.0
+          components: llvm-tools
+          targets: x86_64-unknown-linux-musl
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: 0.15.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: release
+          workspaces: |
+            core
+            apps/desktop-tauri
+      - name: Install Linux bundle dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev libfuse2t64
+      - name: Install ARM target and Windows cross-bundling tools
+        run: |
+          rustup target add aarch64-unknown-linux-musl x86_64-pc-windows-gnu
+          sudo apt-get install -y gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+          nsis_dir="$(mktemp -d "$RUNNER_TEMP/nsis.XXXXXXXX")"
+          cd "$nsis_dir"
+          nsis_url=https://archive.ubuntu.com/ubuntu/pool/universe/n/nsis
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --retry 3 \
+            --remote-name "$nsis_url/nsis_3.09-4ubuntu1_amd64.deb" \
+            --remote-name "$nsis_url/nsis-common_3.09-4ubuntu1_all.deb"
+          sha256sum --check <<'SHA256'
+          49471b9debdee4751ebb4caf6b705cc4c678eebfaecefbe56362258893f85859  nsis-common_3.09-4ubuntu1_all.deb
+          9e061bef1a8b611aeb2ea76d9a3bd7722b960ca1a9dff8e38d2ab51e5a8f5e5b  nsis_3.09-4ubuntu1_amd64.deb
+          SHA256
+          sudo dpkg --install nsis-common_3.09-4ubuntu1_all.deb nsis_3.09-4ubuntu1_amd64.deb
+      - name: Test the signing gates
+        if: github.event_name == 'pull_request'
+        run: python3 -B scripts/test-release-gates.py
+      - name: Build and verify all artifacts with throwaway keys
+        if: github.event_name == 'pull_request'
+        run: |
+          sudo apt-get install -y squashfs-tools 7zip
+          python3 -B scripts/release.py --validate
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.event_name == 'pull_request'
+        with:
+          name: release-validation-assets
+          path: dist/release/
+          if-no-files-found: error
+          compression-level: 0
+      - name: Stage unsigned release assets and pinned signers
+        if: github.event_name == 'push'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 -B scripts/release.py --build --tag "$RELEASE_TAG" \
+            --output "$RUNNER_TEMP/release-staging/assets" --tools "$RUNNER_TEMP/release-staging/tools"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.event_name == 'push'
+        with:
+          name: unsigned-release-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-staging/
+          if-no-files-found: error
+          compression-level: 0

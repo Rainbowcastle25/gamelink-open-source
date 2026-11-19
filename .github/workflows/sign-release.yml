@@ -1,0 +1,176 @@
+name: Sign release
+
+on:
+  workflow_run:
+    workflows: [Release build]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.event }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Verify release source and unsigned artifacts
+    if: >-
+      github.ref == 'refs/heads/master' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.path == '.github/workflows/release.yml' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      artifact-id: ${{ steps.artifact.outputs.id }}
+    steps:
+      # For workflow_run, github.sha is the default branch's commit.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the live tag to point to the build commit on master
+        env:
+          RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
+          BUILT_COMMIT: ${{ github.event.workflow_run.head_sha }}
+        run: python3 -B scripts/release.py --check-source --tag "$RELEASE_TAG" --commit "$BUILT_COMMIT"
+      - name: Resolve the unsigned artifact for this build attempt
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN: ${{ github.event.workflow_run.id }}
+          BUILD_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          artifact_id="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN/artifacts" \
+            -f "name=unsigned-release-$BUILD_ATTEMPT" \
+            --jq 'select(.total_count == 1) | .artifacts[] | select(.expired == false) | .id')"
+          [[ "$artifact_id" =~ ^[0-9]+$ ]]
+          echo "id=$artifact_id" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ steps.artifact.outputs.id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/release-staging
+      - name: Install read-only package inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools 7zip
+      - name: Check signer hashes and inspect the embedded public pins
+        env:
+          RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          python3 -B scripts/release.py --preflight --tag "$RELEASE_TAG" \
+            --output "$RUNNER_TEMP/release-staging/assets" --tools "$RUNNER_TEMP/release-staging/tools"
+
+  sign:
+    name: Sign verified release artifacts
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      # v4 artifacts are immutable. Use the ID already checked by preflight.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.preflight.outputs.artifact-id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/release-staging
+      - name: Run the pinned signers and check their signatures
+        env:
+          RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
+          BUILT_COMMIT: ${{ github.event.workflow_run.head_sha }}
+          GAMELINK_RELEASE_SIGNING_KEY: ${{ secrets.GAMELINK_RELEASE_SIGNING_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          python3 -B scripts/release.py --sign --tag "$RELEASE_TAG" --commit "$BUILT_COMMIT" \
+            --repository "$GITHUB_REPOSITORY" --output "$RUNNER_TEMP/release-staging/assets" \
+            --tools "$RUNNER_TEMP/release-staging/tools"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: upload
+        with:
+          name: release-assets-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-staging/assets/
+          if-no-files-found: error
+          compression-level: 0
+
+  verify:
+    name: Verify the signed manifest with the Rust client
+    needs: sign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: 1.100.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.sign.outputs.artifact-id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/release-assets
+      - name: Check the manifest schema, metadata, signature and asset checksums
+        run: python3 -B scripts/release.py --verify --output "$RUNNER_TEMP/release-assets"
+
+  draft:
+    name: Create draft GitHub Release
+    needs: [sign, verify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.sign.outputs.artifact-id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/release-assets
+      - name: Upload verified assets to a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
+          BUILT_COMMIT: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          tagged_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$RELEASE_TAG" --jq .sha)"
+          if [[ "$tagged_commit" != "$BUILT_COMMIT" ]]; then
+            echo "::error::Tag $RELEASE_TAG no longer points to the build commit"
+            exit 1
+          fi
+          release_tags="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[].tag_name')"
+          if grep -Fxq -- "$RELEASE_TAG" <<< "$release_tags"; then
+            echo "::error::A release or draft already exists for $RELEASE_TAG"
+            exit 1
+          fi
+          cd "$RUNNER_TEMP/release-assets"
+          sha256sum --check --strict SHA256SUMS
+          flags=(--draft --verify-tag --title "GameLink $RELEASE_TAG" --generate-notes)
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            flags+=(--prerelease --latest=false)
+          fi
+          gh release create "$RELEASE_TAG" ./* --repo "$GITHUB_REPOSITORY" "${flags[@]}" \
+            --notes 'Windows installers lack Authenticode signing, so Windows SmartScreen may warn when you run them.'
