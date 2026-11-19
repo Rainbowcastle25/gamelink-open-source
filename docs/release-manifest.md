@@ -6,8 +6,11 @@ Users follow the release notes link to get and install updates themselves.
 
 ## Release files
 
-The [release workflow](../.github/workflows/release.yml) builds the binaries,
-signs the release files and uploads them to a **draft** GitHub Release. See
+The [release workflow](../.github/workflows/release.yml) stages unsigned
+binaries, signs and verifies them on a separate runner, and uploads the
+signed files to a **draft** GitHub Release. A pushed `v*` tag triggers the
+release. The signing job fetches `master` and requires the tagged commit to
+be an ancestor before the step with the keys can run. See
 [building and releasing](building.md#releasing) for the tag and publish steps.
 It generates UTF-8 `release-manifest.json` with the following schema. The
 version, date and digest below are examples.
@@ -92,8 +95,10 @@ sed -n '2p' "$keydir/manifest.pub" > release/keys/manifest.pub
 cp "$keydir/tauri.key.pub" release/keys/tauri.pub
 ```
 
-Commit the two public files. Add these GitHub Actions repository secrets with
-the exact file contents or password:
+Commit the two public files. In GitHub, configure a deployment environment
+named `release` with a deployment policy restricted to tags matching `v*`.
+Only the signing job uses this environment. Add these GitHub Actions
+environment secrets with the exact file contents or password.
 
 | Secret | Value |
 | --- | --- |
@@ -102,14 +107,23 @@ the exact file contents or password:
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password set during Tauri key generation |
 
 From an authenticated checkout, you can set the file secrets with
-`gh secret set GAMELINK_RELEASE_SIGNING_KEY < "$keydir/manifest.key"` and
-`gh secret set TAURI_SIGNING_PRIVATE_KEY < "$keydir/tauri.key"`. Use
-`gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to enter the password
-interactively. The release job fails if any secret or public file is missing.
+`gh secret set --env release GAMELINK_RELEASE_SIGNING_KEY < "$keydir/manifest.key"`
+and `gh secret set --env release TAURI_SIGNING_PRIVATE_KEY < "$keydir/tauri.key"`.
+Use `gh secret set --env release TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to enter
+the password interactively. The build and signing jobs require both public
+files to be present and nonempty. The signing job also requires all three
+environment secrets. Limit who can create `v*` tags because GitHub runs the
+workflow version from the tagged commit.
 
 The pipeline passes the checked-in Minisign public key lines as
 `GAMELINK_UPDATE_PUBLIC_KEYS` to both the agent and desktop builds. It injects
 the checked-in Tauri key as `plugins.updater.pubkey` at build and bundle time.
+The workflow pins Actions to full commit SHAs. The build runner checks
+SHA-256 digests for the fixed-release packaging downloads, and the signing
+runner rechecks the two signer executables. It verifies each installer
+signature against the Tauri pin and each agent and manifest signature against
+the Minisign pins before uploading the assets.
+Pull request validation uses freshly generated key pairs and pins.
 Plain local builds without Minisign pins have release checks disabled.
 The notification feed URL override uses the same compiled-in pins.
 

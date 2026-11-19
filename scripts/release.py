@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Build, sign and verify a GameLink release without contacting GitHub Releases."""
+"""Stage unsigned GameLink release assets, then sign and verify them."""
 
 import argparse
 import base64
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,14 +14,22 @@ import sys
 import tarfile
 import tomllib
 
+from release_tools import bundle_environment, install_signers, sha256, verify_signers
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / "apps/desktop-tauri"
-TAURI = ("npx", "--yes", "@tauri-apps/cli@2.12.4")
+KEYS = ROOT / "release/keys"
 SECRET_NAMES = (
     "GAMELINK_RELEASE_SIGNING_KEY",
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+)
+OTHER_TAURI_SIGNING_VARS = (
+    "TAURI_SIGNING_PRIVATE_KEY_PATH",
+    "TAURI_PRIVATE_KEY",
+    "TAURI_PRIVATE_KEY_PATH",
+    "TAURI_PRIVATE_KEY_PASSWORD",
 )
 NUMBER = r"(?:0|[1-9][0-9]*)"
 PRERELEASE = rf"(?:{NUMBER}|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
@@ -42,6 +49,17 @@ def read_key(path):
 def valid_minisign_pin(pin):
     raw = base64.b64decode(pin, validate=True)
     return len(raw) == 42 and raw[:2] == b"Ed"
+
+
+def load_pins(directory):
+    pins = read_key(directory / "manifest.pub").split()
+    tauri_public = read_key(directory / "tauri.pub")
+    tauri_lines = base64.b64decode(tauri_public, validate=True).decode().splitlines()
+    if len(tauri_lines) != 2 or not all(valid_minisign_pin(pin) for pin in [*pins, tauri_lines[1]]):
+        raise ValueError("invalid Minisign public key in the release pins")
+    if tauri_lines[1] in pins:
+        raise ValueError("use distinct signing keys for GameLink manifests and Tauri artifacts")
+    return pins, tauri_public, tauri_lines[1]
 
 
 def write_json(path, data):
@@ -78,105 +96,111 @@ def release_metadata(tag, env):
     return desktop, severity
 
 
-def release_keys(validate, work, build_env):
-    if validate:
-        manifest_key = work / "manifest.key"
-        tauri_key = work / "tauri.key"
-        run("minisign", "-G", "-W", "-s", manifest_key, "-p", work / "manifest.pub", env=build_env)
-        run(*TAURI, "signer", "generate", "--ci", "--write-keys", tauri_key, env=build_env)
-        pins = read_key(work / "manifest.pub").splitlines()[1]
-        tauri_public = read_key(work / "tauri.key.pub")
-        secrets = (manifest_key.read_text(), tauri_key.read_text(), "")
-    else:
-        secrets = tuple(os.environ.get(name) for name in SECRET_NAMES)
-        missing = [name for name, value in zip(SECRET_NAMES, secrets) if not value]
-        if missing:
-            raise ValueError(f"missing release secrets: {', '.join(missing)}")
-        pins = read_key(ROOT / "release/keys/manifest.pub")
-        tauri_public = read_key(ROOT / "release/keys/tauri.pub")
-
-    tauri_pin = base64.b64decode(tauri_public, validate=True).decode().splitlines()[-1]
-    if not all(valid_minisign_pin(pin) for pin in [*pins.split(), tauri_pin]):
-        raise ValueError("invalid Minisign public key in the release pins")
-    if tauri_pin in pins.split():
-        raise ValueError("use distinct signing keys for GameLink manifests and Tauri artifacts")
-    build_env["GAMELINK_UPDATE_PUBLIC_KEYS"] = " ".join(pins.split())
-    write_json(work / "tauri-release.json", {"plugins": {"updater": {"pubkey": tauri_public}}})
-    return secrets, tauri_pin
+def throwaway_keys(work, tools, env):
+    manifest_key = work / "manifest.key"
+    tauri_key = work / "tauri.key"
+    manifest_public = work / "manifest.pub"
+    run(tools / "minisign", "-G", "-W", "-s", manifest_key, "-p", manifest_public, env=env)
+    run(tools / "cargo-tauri", "signer", "generate", "--ci", "--write-keys", tauri_key, env=env)
+    manifest_public.write_text(read_key(manifest_public).splitlines()[1] + "\n")
+    tauri_key.with_suffix(".key.pub").rename(work / "tauri.pub")
+    return manifest_key.read_text(), tauri_key.read_text(), ""
 
 
-def desktop_bundle(target, bundle, name, work, out, build_env, signing_env, public_key, version):
-    config = work / "tauri-release.json"
-    run("bash", "scripts/build-desktop.sh", target,
-        env=build_env | {"TAURI_CONFIG": config.read_text()})
-    release_dir = DESKTOP / "target" / target / "release"
-    if bundle == "nsis":
-        # Tauri's GNU NSIS bundler includes this DLL when it is next to the executable.
-        shutil.copy2(ROOT / "dist/desktop" / target / "WebView2Loader.dll", release_dir)
-    run(*TAURI, "bundle", "--ci", "--target", target, "--bundles", bundle,
-        "--config", config, cwd=DESKTOP, env=signing_env)
-    artifact = release_dir / "bundle" / bundle / name
-    signature = artifact.with_name(f"{name}.sig")
-    signature_text = signature.read_text().strip()
-    decoded = base64.b64decode(signature_text, validate=True)
-    verified_signature = work / f"{name}.minisig"
-    verified_signature.write_bytes(decoded)
-    run("minisign", "-Vq", "-m", artifact, "-x", verified_signature, "-P", public_key, env=build_env)
-    if f"version:{version}" not in decoded.decode().splitlines()[2].split("\t"):
-        raise ValueError(f"{name} updater signature does not bind version {version}")
-    shutil.copy2(artifact, out)
-    shutil.copy2(signature, out)
-    return signature_text
+def bundles(version, linux_only):
+    yield "linux-x86_64", "x86_64-unknown-linux-gnu", "appimage", f"GameLink_{version}_amd64.AppImage"
+    if not linux_only:
+        yield "windows-x86_64", "x86_64-pc-windows-gnu", "nsis", f"GameLink_{version}_x64-setup.exe"
 
 
-def sha256(path):
-    with path.open("rb") as file:
-        return hashlib.file_digest(file, "sha256").hexdigest()
+def agent_arches(linux_only):
+    return ("amd64",) if linux_only else ("amd64", "arm64")
 
 
-def build_release(args):
-    build_env = {name: value for name, value in os.environ.items() if name not in SECRET_NAMES}
-    version, severity = release_metadata(args.tag, build_env)
-    work = Path(run("mktemp", "-d", env=build_env, capture_output=True, text=True).stdout.strip())
-    out = args.output.resolve()
+def agent_name(arch):
+    return f"gamelink-agent-linux-{arch}"
+
+
+def build_release(version, linux_only, work, out, tools, pins, env):
     out.mkdir(parents=True, exist_ok=True)
     if any(out.iterdir()):
         raise ValueError(f"release output directory must be empty: {out}")
 
-    (manifest_key, tauri_key, password), tauri_pin = release_keys(args.validate, work, build_env)
-    signing_env = build_env | {
-        "TAURI_SIGNING_PRIVATE_KEY": tauri_key.strip(),
-        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD": password,
-    }
+    manifest_pins, tauri_public, _ = pins
+    build_env = env | {"GAMELINK_UPDATE_PUBLIC_KEYS": " ".join(manifest_pins)}
+    config = work / "tauri-release.json"
+    write_json(config, {"plugins": {"updater": {"pubkey": tauri_public}}})
 
-    agents = []
-    for arch in ("amd64",) if args.validate else ("amd64", "arm64"):
-        agent = out / f"gamelink-agent-linux-{arch}"
-        run("bash", "scripts/build-agent.sh", arch, agent, env=build_env)
-        agents.append(agent)
+    bundle_env = bundle_environment(work, build_env, windows=not linux_only)
+    for arch in agent_arches(linux_only):
+        run("bash", "scripts/build-agent.sh", arch, out / agent_name(arch), env=build_env)
 
-    bundles = [
-        ("linux-x86_64", "x86_64-unknown-linux-gnu", "appimage", f"GameLink_{version}_amd64.AppImage"),
-    ]
-    if not args.validate:
-        bundles.append(
-            ("windows-x86_64", "x86_64-pc-windows-gnu", "nsis", f"GameLink_{version}_x64-setup.exe")
-        )
-    releases = f"https://github.com/{args.repository}/releases"
-    platforms = {}
-    for platform, target, bundle, name in bundles:
-        signature = desktop_bundle(
-            target, bundle, name, work, out, build_env, signing_env, tauri_pin, version,
-        )
-        platforms[platform] = {
-            "url": f"{releases}/download/v{version}/{name}",
-            "signature": signature,
-        }
+    for _, target, bundle, name in bundles(version, linux_only):
+        run("bash", "scripts/build-desktop.sh", target,
+            env=build_env | {"TAURI_CONFIG": config.read_text()})
+        release_dir = DESKTOP / "target" / target / "release"
+        if bundle == "nsis":
+            # The GNU NSIS bundler includes this DLL next to the executable.
+            shutil.copy2(ROOT / "dist/desktop" / target / "WebView2Loader.dll", release_dir)
+        run(tools / "cargo-tauri", "bundle", "--ci", "--no-sign", "--target", target,
+            "--bundles", bundle, "--config", config, cwd=DESKTOP, env=bundle_env)
+        shutil.copy2(release_dir / "bundle" / bundle / name, out)
 
     with tarfile.open(out / "GameLink-licenses.tar.gz", "w:gz") as archive:
         for path in ("LICENSE", "THIRD_PARTY_NOTICES.md", "third_party/licenses"):
             archive.add(ROOT / path, arcname=path)
-    payloads = sorted(path for path in out.iterdir() if not path.name.endswith(".sig"))
+    print(f"Staged unsigned release assets: {out}", flush=True)
+
+
+def verify_minisign(minisign, path, signature, pins, env):
+    for pin in pins:
+        result = subprocess.run(
+            (minisign, "-Vq", "-m", path, "-x", signature, "-P", pin),
+            cwd=ROOT, env=env, capture_output=True,
+        )
+        if result.returncode == 0:
+            print(f"Verified {path.name} against its pinned public key", flush=True)
+            return
+    raise ValueError(f"{path.name} signature does not verify against the pinned public keys")
+
+
+def sign_tauri(artifact, version, work, tools, tauri_pin, tauri_key, password, env):
+    run(tools / "cargo-tauri", "signer", "sign", "--app-version", version, artifact, env=env | {
+        "TAURI_SIGNING_PRIVATE_KEY": tauri_key.strip(),
+        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD": password,
+    })
+    signature_text = artifact.with_name(f"{artifact.name}.sig").read_text().strip()
+    decoded = base64.b64decode(signature_text, validate=True)
+    detached = work / f"{artifact.name}.minisig"
+    detached.write_bytes(decoded)
+    verify_minisign(tools / "minisign", artifact, detached, [tauri_pin], env)
+    trusted_comment = decoded.decode().splitlines()[2]
+    if f"version:{version}" not in trusted_comment.split("\t"):
+        raise ValueError(f"{artifact.name} updater signature does not bind version {version}")
+    return signature_text
+
+
+def sign_release(version, severity, linux_only, work, out, tools, pins, keys, repository, env):
+    verify_signers(tools)
+    installers = {platform: out / name for platform, _, _, name in bundles(version, linux_only)}
+    agents = [out / agent_name(arch) for arch in agent_arches(linux_only)]
+    payloads = sorted([*installers.values(), *agents, out / "GameLink-licenses.tar.gz"])
+    if set(out.iterdir()) != set(payloads) or any(
+        path.is_symlink() or not path.is_file() or path.stat().st_size == 0 for path in payloads
+    ):
+        raise ValueError(f"expected only the complete set of unsigned release assets in {out}")
+
+    manifest_key, tauri_key, password = keys
+    manifest_pins, _, tauri_pin = pins
+    releases = f"https://github.com/{repository}/releases"
+    platforms = {}
+    for platform, artifact in installers.items():
+        signature = sign_tauri(artifact, version, work, tools, tauri_pin, tauri_key, password, env)
+        platforms[platform] = {
+            "url": f"{releases}/download/v{version}/{artifact.name}",
+            "signature": signature,
+        }
+
     now = datetime.now(timezone.utc)
     manifest = out / "release-manifest.json"
     write_json(manifest, {
@@ -192,31 +216,76 @@ def build_release(args):
         "pub_date": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "platforms": platforms,
     })
-    # Read the secret from stdin so the hosted runner doesn't need a private key file.
-    run("minisign", "-S", "-s", "/dev/stdin", "-m", manifest, *agents,
-        input=manifest_key, text=True, env=build_env)
+    # Send the private key on stdin. Do not write it to disk or put it in argv.
+    minisign = tools / "minisign"
+    run(minisign, "-S", "-s", "/dev/stdin", "-m", manifest, *agents,
+        input=manifest_key, text=True, env=env)
+    for path in [manifest, *agents]:
+        verify_minisign(minisign, path, path.with_name(f"{path.name}.minisig"), manifest_pins, env)
+
     (out / "SHA256SUMS").write_text(
         "".join(f"{sha256(path)}  {path.name}\n" for path in sorted(out.iterdir())),
         encoding="ascii",
     )
-    run("sha256sum", "--check", "SHA256SUMS", cwd=out, env=build_env)
-    run("cargo", "test", "--manifest-path", "core/Cargo.toml", "--locked", "-p", "gamelink-core",
-        "--features", "update-notifications", "--lib",
-        "update::tests::verifies_release_pipeline_manifest", "--", "--ignored", "--exact",
-        env=build_env | {"GAMELINK_TEST_SIGNED_RELEASE_DIR": str(out)})
+    run("sha256sum", "--check", "SHA256SUMS", cwd=out, env=env)
     print(f"Verified release assets: {out}", flush=True)
+
+
+def prepare_release(args):
+    env = {
+        name: value for name, value in os.environ.items()
+        if name not in SECRET_NAMES + OTHER_TAURI_SIGNING_VARS
+    }
+    version, severity = release_metadata(args.tag, env)
+    scratch = ROOT / ".tools"
+    scratch.mkdir(exist_ok=True)
+    work = Path(run("mktemp", "-d", scratch / "release.XXXXXXXX",
+                    env=env, capture_output=True, text=True).stdout.strip())
+    env["TMPDIR"] = str(work)
+    out = args.output.resolve()
+    tools = work / "signers" if args.validate else args.tools.resolve()
+    if args.validate:
+        install_signers(tools, work, env)
+        keys = throwaway_keys(work, tools, env)
+        pins = load_pins(work)
+    else:
+        pins = load_pins(KEYS)
+        if args.sign:
+            keys = tuple(os.environ.get(name) for name in SECRET_NAMES)
+            if missing := [name for name, value in zip(SECRET_NAMES, keys) if not value]:
+                raise ValueError(f"missing release secrets: {', '.join(missing)}")
+        else:
+            install_signers(tools, work, env)
+    if args.build or args.validate:
+        build_release(version, args.validate, work, out, tools, pins, env)
+    if args.sign or args.validate:
+        sign_release(version, severity, args.validate, work, out, tools, pins, keys,
+                     args.repository, env)
+    if args.validate:
+        run("cargo", "test", "--manifest-path", "core/Cargo.toml", "--locked", "-p", "gamelink-core",
+            "--features", "update-notifications", "--lib",
+            "update::tests::verifies_release_pipeline_manifest", "--", "--ignored", "--exact",
+            env=env | {
+                "GAMELINK_UPDATE_PUBLIC_KEYS": " ".join(pins[0]),
+                "GAMELINK_TEST_SIGNED_RELEASE_DIR": str(out),
+            })
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--validate", action="store_true", help="use throwaway keys and build Linux amd64 only")
-    mode.add_argument("--tag", help="build a signed release at the checked-out tag")
+    mode.add_argument("--build", action="store_true", help="stage unsigned release assets and pinned signers")
+    mode.add_argument("--sign", action="store_true", help="sign and verify staged release assets")
+    mode.add_argument("--validate", action="store_true", help="build and sign Linux amd64 with throwaway keys")
+    parser.add_argument("--tag", help="checked-out release tag (required for --build and --sign)")
     parser.add_argument("--repository", default="Rainbowcastle25/gamelink-open-source")
     parser.add_argument("--output", type=Path, default=ROOT / "dist/release")
+    parser.add_argument("--tools", type=Path, default=ROOT / "dist/release-tools")
     args = parser.parse_args()
+    if args.validate == bool(args.tag):
+        parser.error("provide --tag for --build or --sign only")
     try:
-        build_release(args)
+        prepare_release(args)
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         sys.exit(f"release: {error}")
 
