@@ -91,7 +91,7 @@ export function LocalHostScreen() {
       <div className="space-y-5">
         <section className="rounded-xl border border-line bg-surface p-5" aria-labelledby="lan-worlds">
           <h2 id="lan-worlds" className="font-semibold">Minecraft Java LAN worlds</h2>
-          <p className="mt-1 text-sm text-muted">Open a world to LAN in Minecraft. GameLink looks for worlds announced by this PC while this tab is open.</p>
+          <p className="mt-1 text-sm text-muted">Open a world to LAN in Minecraft. GameLink looks for worlds announced by this PC while this tab is open or a LAN world is shared. Sharing pauses when a shared world closes.</p>
           {scanError ? <p role="alert" className="mt-3 text-sm text-danger">{scanError} You can enter the port below.</p> :
             worlds?.length ? (
               <ul className="mt-4 divide-y divide-line">
@@ -161,6 +161,7 @@ export function LocalHostScreen() {
                 <li key={entry.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                   <div>
                     <h3 className="text-sm font-medium [overflow-wrap:anywhere]">{entry.name}</h3>
+                    {entry.paused && <span className="rounded bg-warn/15 px-1.5 py-0.5 text-xs text-warn">Sharing paused</span>}
                     <p className="text-xs text-muted">Port {entry.port} · {entry.approved.length} approved · {entry.state === "serving" ? "Tunnel active" : entry.detail}</p>
                   </div>
                   <div className="flex flex-wrap gap-2">

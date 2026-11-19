@@ -22,7 +22,7 @@ protect, what it assumes, and what it does not defend against.
 | Per-game identity | Own key + PSK per game; no key is shared across games or with the desktop identity |
 | Agent invitation rotation and expiry | Rotation replaces the per-game key and PSK. At expiry the host retires the whole identity, including established sessions. Device approvals carry over to the next identity |
 | Revocation works | Closes the game's server and restarts it with the remaining keys; live TCP and UDP sessions end. Tested end to end |
-| Narrow listeners | Desktop client game sockets and desktop host destinations use `127.0.0.1`. Minecraft Java discovery receives only multicast announcements, with a loopback bind on Windows. The Linux agent defaults to a loopback destination. The explicit Bedrock Console Bridge uses a Wi-Fi discovery/media path scoped to one configured server IPv4 and media-port range |
+| Narrow listeners | Desktop client game sockets and desktop host destinations use `127.0.0.1`. Minecraft Java discovery receives only multicast announcements: Windows binds the wildcard address but accepts only group-destined datagrams from this PC. The Linux agent defaults to a loopback destination. The explicit Bedrock Console Bridge uses a Wi-Fi discovery/media path scoped to one configured server IPv4 and media-port range |
 | No SSH, shell, file transfer | No such handler exists in GameLink. Tailcat's SSH/SFTP server is compiled out (`ts_omit_ssh`). Optional host administration is a bearer-authenticated, loopback-only API for explicit Pterodactyl refresh and per-game device approval/import. It is off by default and exposes no shell, console, files, or power controls |
 | No general LAN access or exit node | No route forwarding is enabled. The optional Console Bridge only accepts traffic for the selected Bedrock server and configured media range; it does not expose other host or LAN ports |
 | Secrets are not logged | A redactor scrubs private keys, PSKs, Tailcat addresses and invitations from logs and diagnostics. Verbose Tailcat output is off by default and redacted when on |
@@ -87,17 +87,32 @@ Invitation holder (not approved) ──X─►   (handshake gets no reply)
   Tailcat server, per-game identity, supervisor, and approval policy as the
   Linux agent. Windows protects the hosted private key and pre-shared key with
   DPAPI. The desktop writes invitation text directly to the native clipboard.
-- While **Host** is open, Minecraft Java discovery joins IPv4 multicast
-  `224.0.2.60:4445` on local interfaces. The socket is receive-only and uses
-  a loopback bind with destination filtering on Windows and a group-address
-  bind on Linux. GameLink sends no discovery packets and forwards no discovery
-  traffic. It filters announcements by this PC's interface addresses and bounds
-  the datagram size, cache and lifetime.
+- Minecraft Java discovery joins IPv4 multicast `224.0.2.60:4445` on local
+  interfaces only while **Host** is open or a LAN world is shared (including
+  while that share is paused, below). It stops when Host is closed and no LAN
+  world is shared. The socket is receive-only. Windows binds the wildcard
+  address, because Winsock delivers multicast only to wildcard or
+  receiving-interface binds, and accepts only datagrams whose destination is
+  the group. Linux binds the group address. GameLink sends no discovery
+  packets and forwards no discovery traffic. It filters announcements by this
+  PC's interface addresses and bounds the datagram size, cache and lifetime.
 - An announcement is an unauthenticated hint. Sharing or updating a LAN
   world's port requires a click by the host. The destination is always
-  `127.0.0.1` on the host PC. The desktop requires re-detection of LAN worlds
-  after the app restarts because a previous port may now belong to a different
-  local application. Stop sharing a world when closing it.
+  `127.0.0.1` on the host PC. A shared world's tunnel pauses when no
+  announcement for that world name on its confirmed port has arrived for 10
+  seconds (Minecraft announces about every 1.5 seconds), because a closed
+  world's temporary port may be reused by another local program. It resumes
+  only when the same name reappears on the same port; a new port needs the
+  host's click again. A local program could still announce a matching name and
+  port while the world is closed. **Stop sharing** forgets the port. The
+  desktop requires re-detection of LAN worlds after the app restarts.
+  Two narrow cases can keep a closed world's port reachable to approved
+  devices briefly after the PC resumes from sleep. An announcement queued
+  before suspend is treated as new when GameLink reads it after resume, so
+  it renews the share for about 10 seconds. A connection that passed the
+  expiry check just before suspend can finish opening after resume, and
+  stays open until that share pauses. Established streams close when sharing
+  pauses.
 - **People** displays pending requests from the shared Tailcat refusal
   mechanism. The app records the time of the last authorized game connection
   locally for approved devices.

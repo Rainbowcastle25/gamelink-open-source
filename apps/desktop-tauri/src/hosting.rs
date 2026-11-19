@@ -1,11 +1,12 @@
 //! Desktop adapter for the shared host config and supervisor.
-use crate::{bridge, lan};
+use crate::bridge;
 use gamelink_core::{
     config, pure,
     requests::{Scope, Store},
     storage,
     supervisor::{self, Effect, Event, State},
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -18,6 +19,12 @@ type Result<T> = std::result::Result<T, String>;
 type Connections = BTreeMap<String, BTreeMap<String, String>>;
 type Scopes = BTreeMap<String, Scope>;
 const LAN_ORIGIN: &str = "desktop-minecraft-lan";
+
+#[derive(Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+struct LanWorld {
+    name: String,
+    port: u16,
+}
 
 fn text<'a>(value: &'a Value, field: &str) -> &'a str {
     value[field].as_str().unwrap_or_default()
@@ -51,7 +58,10 @@ pub struct Hosting {
     clock: Instant,
     next_poll: Instant,
     lan_deadline: Option<Instant>,
+    lan_open: bool,
+    // Host-confirmed LAN shares and the IDs that were live at reconciliation.
     lan_ports: BTreeMap<String, u16>,
+    lan_live: BTreeSet<String>,
     connections: Connections,
     connections_dirty: bool,
     requests: Store,
@@ -75,7 +85,9 @@ impl Hosting {
             clock,
             next_poll: clock,
             lan_deadline: None,
+            lan_open: false,
             lan_ports: BTreeMap::new(),
+            lan_live: BTreeSet::new(),
             connections,
             connections_dirty: false,
             requests: Store::default(),
@@ -96,7 +108,8 @@ impl Hosting {
     pub fn pump(&mut self) {
         let now = Instant::now();
         if self.lan_deadline.is_some_and(|deadline| deadline <= now) {
-            let _ = self.close_lan();
+            self.lan_deadline = None;
+            self.close_idle_lan();
         }
         if now >= self.next_poll {
             self.refresh();
@@ -134,7 +147,7 @@ impl Hosting {
         }
     }
 
-    fn observe(&self, games: &Value) -> Result<(Event, Scopes)> {
+    fn observe(&self, games: &Value, lan_live: &BTreeSet<String>) -> Result<(Event, Scopes)> {
         if rows(games).len() > 32 {
             return Err("Too many hosted games".into());
         }
@@ -181,7 +194,7 @@ impl Hosting {
                 }
             }
             let mut observed_game = game.clone();
-            if is_lan(game) && self.lan_ports.get(id) != Some(&dest.port()) {
+            if is_lan(game) && !lan_live.contains(id) {
                 observed_game["disabled"] = json!(true);
             }
             let enabled = observed_game["disabled"] != true && approved_error.is_none();
@@ -194,11 +207,14 @@ impl Hosting {
                         let expired = pure::check_invite_expiry(&keys["expiresAt"]).is_err();
                         let scope = Scope::new(game, keys);
                         observation["expired"] = json!(expired);
-                        observation["keyIdentity"] = json!(format!(
-                            "{}|{}",
-                            scope.identity,
-                            text(&scope.keys, "expiresAt")
-                        ));
+                        let mut fingerprint =
+                            format!("{}|{}", scope.identity, text(&scope.keys, "expiresAt"));
+                        // The running tunnel's dial guard also depends on the LAN name.
+                        if is_lan(game) {
+                            fingerprint.push_str("|lan=");
+                            fingerprint.push_str(text(game, "name"));
+                        }
+                        observation["keyIdentity"] = json!(fingerprint);
                         if !expired {
                             scopes.insert(id.to_owned(), scope);
                         }
@@ -218,9 +234,9 @@ impl Hosting {
     }
 
     fn reconcile(&mut self) -> Result<()> {
-        let loaded = self
-            .load_games()
-            .and_then(|games| Ok((self.observe(&games)?, games)));
+        let loaded = self.load_games();
+        let lan_live = self.observe_lan(loaded.as_ref().unwrap_or(&Value::Null));
+        let loaded = loaded.and_then(|games| Ok((self.observe(&games, &lan_live)?, games)));
         let ((event, scopes), games, invalid) = match loaded {
             Ok((observation, games)) => (observation, games, false),
             Err(_) => (
@@ -271,6 +287,7 @@ impl Hosting {
             return Err("Desktop hosting stopped because its configuration is invalid".into());
         }
         self.games = games;
+        self.lan_live = lan_live;
         self.save_connections();
         sampled
     }
@@ -304,10 +321,14 @@ impl Hosting {
             .iter()
             .map(|d| &d["publicKey"])
             .collect();
-        bridge::call(json!({
+        let mut request = json!({
             "method":"host_start","id":id,"generation":generation,"keys":scope.keys,"approved":approved,
             "game":{"type":game["type"],"protocol":game["protocol"],"tunnelPort":game["tunnelPort"],"dest":game["dest"]}
-        })).map_err(|_| "Could not start the Tailcat game tunnel")?;
+        });
+        if is_lan(game) {
+            request["game"]["lanName"] = game["name"].clone();
+        }
+        bridge::call(request).map_err(|_| "Could not start the Tailcat game tunnel")?;
         self.running_identities
             .insert(id.to_owned(), scope.identity.clone());
         Ok(())
@@ -374,28 +395,67 @@ impl Hosting {
         }
     }
 
-    fn close_lan(&mut self) -> Result<Value> {
-        self.lan_deadline = None;
-        bridge::call(json!({"method":"lan_close"}))
+    fn observe_lan(&mut self, games: &Value) -> BTreeSet<String> {
+        let shared = |id: &str| {
+            rows(games)
+                .iter()
+                .find(|game| is_lan(game) && game["id"] == id && game["disabled"] != true)
+        };
+        self.lan_ports.retain(|id, port| {
+            shared(id).is_some_and(|game| {
+                text(game, "dest")
+                    .parse::<SocketAddrV4>()
+                    .is_ok_and(|dest| dest.port() == *port)
+            })
+        });
+        if self.lan_ports.is_empty() {
+            self.close_idle_lan();
+            return BTreeSet::new();
+        }
+        // Discover worlds even while their shares are paused. Go uses the
+        // same announcement deadline here and immediately before dialing.
+        let Ok(worlds) = Self::worlds("lan_scan", true) else {
+            self.lan_open = false;
+            return BTreeSet::new();
+        };
+        self.lan_open = true;
+        self.lan_ports
+            .iter()
+            .filter_map(|(id, &port)| {
+                let name = text(shared(id)?, "name").into();
+                worlds
+                    .contains(&LanWorld { name, port })
+                    .then(|| id.clone())
+            })
+            .collect()
     }
 
-    fn worlds(&self, method: &str) -> Result<BTreeSet<lan::World>> {
-        let packets = bridge::call(json!({"method":method}))?;
-        Ok(rows(&packets)
-            .iter()
-            .filter_map(|p| lan::parse(p.as_str()?.as_bytes()))
-            .collect())
+    fn close_idle_lan(&mut self) {
+        if self.lan_open && self.lan_deadline.is_none() && self.lan_ports.is_empty() {
+            self.lan_open = bridge::call(json!({"method":"lan_close"})).is_err();
+        }
+    }
+
+    fn worlds(method: &str, sharing: bool) -> Result<BTreeSet<LanWorld>> {
+        let worlds = bridge::call(json!({"method":method,"sharing":sharing}))?;
+        serde_json::from_value(worlds)
+            .map_err(|_| "invalid Minecraft LAN discovery response".into())
     }
 
     pub fn command(&mut self, request: &Value, region: Option<&Value>) -> Result<Value> {
         let id = text(request, "id");
         match text(request, "method") {
             "scanLanWorlds" => {
-                let worlds = self.worlds("lan_scan")?;
+                let worlds = Self::worlds("lan_scan", false)?;
+                self.lan_open = true;
                 self.lan_deadline = Some(Instant::now() + Duration::from_secs(5));
                 return Ok(json!(worlds));
             }
-            "stopLanScan" => return self.close_lan(),
+            "stopLanScan" => {
+                self.lan_deadline = None;
+                self.close_idle_lan();
+                return Ok(Value::Null);
+            }
             _ => {}
         }
         if matches!(
@@ -436,12 +496,14 @@ impl Hosting {
                     "set_disabled",
                     json!({"id":id,"value":{"disabled":!enabled}}),
                 )?;
+                self.close_idle_lan();
                 Ok(Value::Null)
             }
             "removeHostedGame" => {
                 self.game(id)?;
                 self.lan_ports.remove(id);
                 self.mutate("remove", json!({"id":id}))?;
+                self.close_idle_lan();
                 Ok(Value::Null)
             }
             "hostedInvitation" => self.invitation(self.game(id)?),
@@ -515,7 +577,7 @@ impl Hosting {
         let dest = destination(port).to_string();
         if lan {
             if self.lan_deadline.is_none()
-                || !self.worlds("lan_packets")?.contains(&lan::World {
+                || !Self::worlds("lan_packets", false)?.contains(&LanWorld {
                     name: name.into(),
                     port,
                 })
@@ -614,11 +676,14 @@ impl Hosting {
                 .parse::<SocketAddrV4>()
                 .expect("observed loopback destination")
                 .port();
-            let enabled = game["disabled"] != true
+            let shared = game["disabled"] != true
                 && (!is_lan(game) || self.lan_ports.get(id) == Some(&port));
-            let detail = if is_lan(game) && !enabled {
+            let paused = shared && is_lan(game) && !self.lan_live.contains(id);
+            let detail = if paused {
+                "World closed or not announced; sharing resumes if it reopens on the same port"
+            } else if is_lan(game) && !shared {
                 "Open this world to LAN and share it again"
-            } else if !enabled {
+            } else if !shared {
                 "Sharing paused"
             } else {
                 text(status, "detail")
@@ -629,7 +694,7 @@ impl Hosting {
                 .unwrap_or(Value::Null);
             result.push(json!({
                 "serverPublicKey":public_key,"id":id,"name":game["name"],"game":game["type"],"port":port,"lan":is_lan(game),
-                "enabled":enabled,"state":status["state"],"detail":detail,"approved":approved,"pending":pending
+                "enabled":shared,"paused":paused,"state":status["state"],"detail":detail,"approved":approved,"pending":pending
             }));
         }
         json!(result)
@@ -645,15 +710,15 @@ mod tests {
     fn hosted_lan_revocation_replacement_and_restart_use_shared_policy() {
         let dir = tempfile::tempdir().unwrap();
         let requests = Rc::new(RefCell::new(Vec::new()));
-        let packet = Rc::new(RefCell::new("[MOTD]Cabin[/MOTD][AD]51000[/AD]".to_owned()));
+        let worlds = Rc::new(RefCell::new(json!([{"name":"Cabin","port":51000}])));
         let batch = Rc::new(RefCell::new(Value::Null));
         let calls = requests.clone();
-        let announcement = packet.clone();
+        let announcements = worlds.clone();
         let knocks = batch.clone();
         let _fake = bridge::fake::install(move |request| {
             calls.borrow_mut().push(request.clone());
             Ok(match text(request, "method") {
-                "lan_scan" | "lan_packets" => json!([*announcement.borrow()]),
+                "lan_scan" | "lan_packets" => announcements.borrow().clone(),
                 "host_generate" => {
                     let secret = config::dispatch("config.new_id", Value::Null)?;
                     json!({"privateKey":secret,"presharedKey":secret})
@@ -754,7 +819,7 @@ mod tests {
         assert_ne!(remaining[0]["id"], dismissed);
         assert!(hosting.command(&approve(&request_id(&key)), None).is_err());
 
-        *packet.borrow_mut() = "[MOTD]Cabin[/MOTD][AD]52000[/AD]".into();
+        *worlds.borrow_mut() = json!([{"name":"Cabin","port":52000}]);
         assert!(hosting.command(&share(51000), None).is_err());
         assert_eq!(hosting.command(&share(52000), None).unwrap()["id"], id);
         let game = &hosting.command(&snapshots, None).unwrap()[0];
@@ -796,6 +861,7 @@ mod tests {
             ]
         );
         assert_eq!(observed[0]["game"]["dest"], "127.0.0.1:51000");
+        assert_eq!(observed[0]["game"]["lanName"], "Cabin");
         assert_eq!(observed[1]["generation"], observed[0]["generation"]);
         assert_eq!(observed[2]["approved"], json!([key]));
         assert_eq!(observed[3]["generation"], observed[2]["generation"]);
@@ -807,10 +873,147 @@ mod tests {
         assert_eq!(observed[5]["generation"], observed[4]["generation"]);
         assert_eq!(observed[6]["approved"], json!([]));
 
+        // A config reload must replace the dial guard when the LAN name changes.
+        let path = hosting.path();
+        let mut config: Value =
+            serde_json::from_slice(&storage::read_bounded(&path).unwrap()).unwrap();
+        config["games"][0]["name"] = json!("Renamed Cabin");
+        storage::write_atomic(&path, &serde_json::to_vec(&config).unwrap()).unwrap();
+        *worlds.borrow_mut() = json!([
+            {"name":"Cabin","port":52000},
+            {"name":"Renamed Cabin","port":52000},
+        ]);
+        hosting.refresh();
+        let calls = requests.borrow();
+        let replacement: Vec<_> = calls
+            .iter()
+            .filter(|call| matches!(text(call, "method"), "host_start" | "host_stop"))
+            .skip(observed.len())
+            .collect();
+        assert_eq!(replacement.len(), 2);
+        assert_eq!(replacement[0]["method"], "host_stop");
+        assert_eq!(replacement[1]["game"]["lanName"], "Renamed Cabin");
+        drop(calls);
+
         let mut reopened = Hosting::new(host_dir);
         let saved = reopened.command(&snapshots, None).unwrap();
         assert_eq!(saved[0]["id"], id);
         assert_eq!(saved[0]["enabled"], false);
+    }
+
+    #[test]
+    fn closed_lan_world_pauses_and_resumes_only_on_its_confirmed_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let port = Rc::new(RefCell::new(Some(51000)));
+        let fail_stop = Rc::new(std::cell::Cell::new(false));
+        let reject_stop = fail_stop.clone();
+        let calls = requests.clone();
+        let announcement = port.clone();
+        let _fake = bridge::fake::install(move |request| {
+            calls.borrow_mut().push(text(request, "method").to_owned());
+            Ok(match text(request, "method") {
+                "lan_scan" | "lan_packets" => match *announcement.borrow() {
+                    Some(port) => json!([{"name":"Cabin","port":port}]),
+                    None => json!([]),
+                },
+                "host_stop" if reject_stop.get() => return Err("test stop failure".into()),
+                "host_generate" => {
+                    let secret = config::dispatch("config.new_id", Value::Null)?;
+                    json!({"privateKey":secret,"presharedKey":secret})
+                }
+                _ => Value::Null,
+            })
+        });
+        let count = |method: &str| requests.borrow().iter().filter(|m| *m == method).count();
+        let mut hosting = Hosting::new(dir.path().join("hosting"));
+        let region = json!({"RegionID":1,"Nodes":[{}]});
+        let scan = json!({"method":"scanLanWorlds"});
+        let leave = json!({"method":"stopLanScan"});
+        let snapshot = |hosting: &mut Hosting| {
+            hosting.refresh();
+            hosting
+                .command(&json!({"method":"hostedGames"}), None)
+                .unwrap()[0]
+                .clone()
+        };
+
+        // Closing Host with nothing shared stops discovery.
+        hosting.command(&scan, None).unwrap();
+        hosting.command(&leave, None).unwrap();
+        assert_eq!(count("lan_close"), 1);
+
+        hosting.command(&scan, None).unwrap();
+        let share = json!({"method":"shareLanWorld","name":"Cabin","port":51000});
+        let id = text(&hosting.command(&share, Some(&region)).unwrap(), "id").to_owned();
+        hosting.command(&leave, None).unwrap();
+        assert_eq!(count("lan_close"), 1, "a shared world keeps discovery open");
+        let scans = count("lan_scan");
+        let game = snapshot(&mut hosting);
+        assert!(
+            count("lan_scan") > scans,
+            "discovery keeps receiving after Host closes"
+        );
+        assert_eq!(
+            (game["enabled"].clone(), game["paused"].clone()),
+            (json!(true), json!(false))
+        );
+        assert_eq!(count("host_start"), 1);
+
+        // The world closes: no announcement for the whole grace period.
+        *port.borrow_mut() = None;
+        let game = snapshot(&mut hosting);
+        assert_eq!(
+            count("host_stop"),
+            1,
+            "the tunnel to the closed world stops"
+        );
+        assert_eq!(
+            (game["enabled"].clone(), game["paused"].clone()),
+            (json!(true), json!(true))
+        );
+        assert!(text(&game, "detail").contains("resumes if it reopens on the same port"));
+        assert_eq!(game["state"], "inactive");
+
+        // Another world on a new port needs the host's click.
+        *port.borrow_mut() = Some(52000);
+        assert_eq!(snapshot(&mut hosting)["paused"], true);
+        assert_eq!(count("host_start"), 1);
+
+        // The same world on the same port resumes by itself.
+        *port.borrow_mut() = Some(51000);
+        let game = snapshot(&mut hosting);
+        assert_eq!(game["paused"], false);
+        assert_eq!(count("host_start"), 2);
+
+        let approve = json!({
+            "method":"approveHostedDevice","id":id,"publicKey":generated_public_key(),"label":"Friend"
+        });
+        hosting.command(&approve, None).unwrap();
+        assert_eq!(hosting.view()[0]["state"], "serving");
+
+        // An expired announcement only changes the published state after the tunnel stops.
+        *port.borrow_mut() = None;
+        assert_eq!(hosting.view()[0]["paused"], false);
+        fail_stop.set(true);
+        hosting.refresh();
+        assert_eq!(hosting.issue.as_deref(), Some("test stop failure"));
+        let still_serving = &hosting.view()[0];
+        assert_eq!(still_serving["state"], "serving");
+        assert_eq!(still_serving["paused"], false);
+        fail_stop.set(false);
+        let paused = snapshot(&mut hosting);
+        assert_eq!(paused["state"], "inactive");
+        assert_eq!(paused["paused"], true);
+        assert_eq!(count("lan_close"), 1, "a paused share keeps discovery open");
+
+        // Stop sharing while paused with Host closed stops discovery.
+        let stop = json!({"method":"setHostingEnabled","id":id,"enabled":false});
+        hosting.command(&stop, None).unwrap();
+        assert_eq!(count("lan_close"), 2);
+        let scans = count("lan_scan");
+        assert_eq!(snapshot(&mut hosting)["enabled"], false);
+        assert_eq!(count("lan_scan"), scans, "nothing shared and Host closed");
     }
 
     fn generated_public_key() -> String {
@@ -831,10 +1034,13 @@ mod tests {
     fn a_hosted_game_cannot_reconcile_to_a_non_loopback_destination() {
         let host = Hosting::new(PathBuf::new());
         assert!(host
-            .observe(&json!([{
-                "id":"game","name":"Example","type":"factorio","protocol":"udp",
-                "tunnelPort":34197,"dest":"192.0.2.2:34197","devices":[]
-            }]))
+            .observe(
+                &json!([{
+                    "id":"game","name":"Example","type":"factorio","protocol":"udp",
+                    "tunnelPort":34197,"dest":"192.0.2.2:34197","devices":[]
+                }]),
+                &BTreeSet::new()
+            )
             .is_err());
     }
 }

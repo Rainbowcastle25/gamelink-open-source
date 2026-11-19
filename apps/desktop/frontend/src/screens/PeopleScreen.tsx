@@ -118,6 +118,7 @@ export function PeopleScreen() {
                 <article key={game.id} aria-labelledby={`access-${game.id}`} className="py-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <h3 id={`access-${game.id}`} className="min-w-0 font-medium [overflow-wrap:anywhere]">{game.name}</h3>
+                    {game.paused && <span className="rounded bg-warn/15 px-1.5 py-0.5 text-xs text-warn">Sharing paused</span>}
                     <div className="flex flex-wrap gap-2">
                       <Button size="sm" disabled={busy} onClick={() => void act(() => backend.copyHostedInvitation(game.id), "Invitation copied. Share it privately.")}>Copy invitation</Button>
                       <Button size="sm" variant="primary" disabled={busy} onClick={() => askApproval(game)}>Approve device</Button>

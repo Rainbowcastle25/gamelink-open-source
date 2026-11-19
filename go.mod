@@ -5,6 +5,7 @@ go 1.27.4
 require (
 	github.com/tailscale/tailcat v0.7.0
 	golang.org/x/net v0.61.0
+	golang.org/x/sys v0.50.0
 	golang.org/x/time v0.15.0
 	tailscale.com v1.103.0-pre.0.20260916030321-a2263542f260
 )
@@ -95,7 +96,6 @@ require (
 	golang.org/x/mobile v0.0.0-20261011034528-197770444867 // indirect
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/tools v0.52.0 // indirect

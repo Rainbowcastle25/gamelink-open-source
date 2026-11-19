@@ -43,6 +43,23 @@ describe("Host on this PC", () => {
     });
   });
 
+  it("shows a closed shared LAN world as paused on Host and People", async () => {
+    const backend = createMockBackend({ delayMs: 0, seed: false });
+    const detail = "World closed or not announced; sharing resumes if it reopens on the same port";
+    vi.spyOn(backend, "hostedGames").mockResolvedValue([{
+      id: "demo-hosted-lan", game: Type.MinecraftJava, name: "Demo: Closed Cabin", port: 51000,
+      lan: true, enabled: true, paused: true, state: "inactive", detail, approved: [], pending: [],
+    }]);
+    const host = renderApp(<LocalHostScreen />, { backend });
+    const card = (await screen.findByRole("heading", { name: "Demo: Closed Cabin" })).closest("li")!;
+    expect(card).toHaveTextContent("Sharing paused");
+    expect(card).toHaveTextContent(detail);
+    expect(within(card).getByRole("button", { name: "Stop sharing" })).toBeInTheDocument();
+    host.unmount();
+    renderApp(<PeopleScreen />, { backend });
+    expect(await screen.findByRole("article", { name: "Demo: Closed Cabin" })).toHaveTextContent("Sharing paused");
+  });
+
   it("creates a manual server when multicast is unavailable", async () => {
     const backend = createMockBackend({ delayMs: 0, seed: false });
     vi.spyOn(backend, "scanLanWorlds").mockRejectedValue("Could not join multicast");

@@ -6,18 +6,25 @@ import (
 	"net"
 	"net/netip"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/sys/windows"
 )
 
+// Go's monotonic clock on Windows advances across suspend.
+func lanNow() time.Time { return time.Now() }
+
 type groupSocket struct {
 	conn *net.UDPConn
 }
 
-// Winsock multicast uses a local unicast bind. Bind only to loopback and
-// check the destination in Winsock's packet metadata before returning data.
+// Winsock delivers multicast only to sockets bound to the wildcard address or
+// to the receiving interface's address. Minecraft announces on the default
+// interface, so a loopback bind receives nothing. Bind the wildcard and accept
+// only datagrams whose destination, from Winsock's packet metadata, is the
+// group; listenLAN also requires a source address of this PC. Never sends.
 func bindMulticast() (lanSocket, error) {
 	config := net.ListenConfig{Control: func(_, _ string, raw syscall.RawConn) error {
 		var optionError error
@@ -28,7 +35,7 @@ func bindMulticast() (lanSocket, error) {
 		}
 		return optionError
 	}}
-	addr := netip.AddrPortFrom(netip.AddrFrom4([4]byte{127, 0, 0, 1}), lanGroup.Port())
+	addr := netip.AddrPortFrom(netip.IPv4Unspecified(), lanGroup.Port())
 	conn, err := config.ListenPacket(context.Background(), "udp4", addr.String())
 	if err != nil {
 		return nil, err

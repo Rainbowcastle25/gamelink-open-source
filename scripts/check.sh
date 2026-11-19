@@ -106,7 +106,8 @@ for section in "${sections[@]}"; do
         windows-cross)
             run env GAMELINK_FFI_FEATURES=panic-probe bash scripts/build-rust-ffi.sh x86_64-pc-windows-gnu
             mkdir -p dist
-            for package in rustcore invite; do
+            # windows-run requires desktop.test.exe for the multicast and unicast assertions.
+            for package in rustcore invite desktop; do
                 run env GOOS=windows GOARCH=amd64 CC="$PWD/scripts/zig-cc-windows-amd64.sh" go test -c -o "dist/$package.test.exe" "./shim/$package"
                 run file "dist/$package.test.exe"
             done
