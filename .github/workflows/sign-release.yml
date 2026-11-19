@@ -63,7 +63,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y squashfs-tools 7zip
-      - name: Check signer hashes and inspect the embedded public pins
+      - name: Check signer hashes and inspect public pins in binaries and packages
         env:
           RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
         run: |

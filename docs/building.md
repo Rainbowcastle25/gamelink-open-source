@@ -384,11 +384,16 @@ compatibility from a successful build or echo test.
    Authenticode signature and can trigger Windows SmartScreen warnings, which
    the draft notes disclose. Publish a stable release as latest to activate
    the two standard update feeds. Prerelease tags produce prerelease drafts.
+   Publishing a stable release also queues the [apt repository
+   rebuild](release-manifest.md#publish-the-apt-repository).
 
 [**Release build**](../.github/workflows/release.yml) runs on a pushed `v*` tag
 with read-only repository access. It builds and uploads unsigned static Linux
-agents for amd64 and arm64, the Linux x86_64 AppImage, and the Windows x64 NSIS
-installer. The Windows installer uses the same GNU cross-build as desktop CI
+agents and matching `.deb` packages for amd64 and arm64, the Linux x86_64
+AppImage, and the Windows x64 NSIS installer. The Debian packages use the
+tag's version and the same static agent binaries as the raw assets. The build
+checks the SHA-256 hashes of the nFPM archive and executable before using the
+packager. The Windows installer uses the same GNU cross-build as desktop CI
 and includes `WebView2Loader.dll`. Packaging downloads use fixed URLs and
 SHA-256 pins.
 
@@ -399,8 +404,9 @@ someone tags a different commit. The keyless preflight requires a successful
 tag build whose commit is an ancestor of `origin/master` and is still the
 target of the tag. It downloads the build's artifact by run and checks the
 signer executable hashes and public pins embedded in the binaries against
-the `master` checkout. It reads the AppImage and NSIS desktop executables
-from the packages without running them.
+the `master` checkout. It reads the AppImage, NSIS and Debian executables
+from the packages without running them, and checks that each packaged agent
+matches the raw agent for its architecture.
 
 The signing job uses the preflight's immutable artifact ID and the
 `master`-only `release` environment. A following job runs the Rust client
@@ -414,8 +420,10 @@ On pull requests, **Release build** tests the signing gates and builds all
 four targets using freshly generated keys. It checks the embedded pins, signs
 the assets, checks the detached signatures and checksums, and runs the Rust
 client verifier. This exercises the build and signing scripts before merge.
-GitHub can start **Sign release** once its workflow is on `master`. Its jobs
-require a successful tag build.
+The PR job also builds a throwaway-signed apt repository, then installs and
+upgrades the amd64 package in a disposable Debian container. GitHub can start
+**Sign release** once its workflow is on `master`. Its jobs require a
+successful tag build.
 
 For local validation, use the toolchain in the table above with the Linux GUI
 dependencies, both Linux musl targets, the GNU Windows target, MinGW-w64, NSIS,
@@ -428,8 +436,11 @@ python3 -B scripts/test-release-gates.py
 python3 -B scripts/release.py --validate --output "$release_work/assets"
 ```
 
-Add `--linux-only` to validate just the amd64 agent and AppImage with the
-Linux dependencies and amd64 musl target.
+Add `--linux-only` to validate the amd64 agent and its Debian package and the
+AppImage with the Linux dependencies and amd64 musl target. Run the full
+validation with `--test-apt` to add the apt install and upgrade test. It
+requires `dpkg-deb`, `apt-ftparchive` (from `apt-utils`), GnuPG and Docker or
+Podman.
 
 ### Console protocol policy
 

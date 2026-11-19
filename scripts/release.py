@@ -14,8 +14,9 @@ import sys
 import tarfile
 import tomllib
 
+from release_deb import ARCHES, build_deb, check_deb_pins, deb_name
 from release_pins import check_binary_pins, check_bundle_pins
-from release_tools import bundle_environment, install_signers, sha256, verify_signers
+from release_tools import NFPM, bundle_environment, install_signers, install_tool, sha256, verify_signers
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +24,7 @@ DESKTOP = ROOT / "apps/desktop-tauri"
 KEYS = ROOT / "release/keys"
 SOURCE_TAG = "refs/gamelink/release-tag"
 SUMMARY_ASSET = "release-summary.txt"
+LICENSES_ASSET = "GameLink-licenses.tar.gz"
 SECRET_NAMES = (
     "GAMELINK_RELEASE_SIGNING_KEY",
     "TAURI_SIGNING_PRIVATE_KEY",
@@ -55,14 +57,21 @@ def valid_minisign_pin(pin):
 
 
 def load_pins(directory):
-    pins = read_key(directory / "manifest.pub").split()
+    pins = load_manifest_pins(directory)
     tauri_public = read_key(directory / "tauri.pub")
     tauri_lines = base64.b64decode(tauri_public, validate=True).decode().splitlines()
-    if len(tauri_lines) != 2 or not all(valid_minisign_pin(pin) for pin in [*pins, tauri_lines[1]]):
+    if len(tauri_lines) != 2 or not valid_minisign_pin(tauri_lines[1]):
         raise ValueError("invalid Minisign public key in the release pins")
     if tauri_lines[1] in pins:
         raise ValueError("use distinct signing keys for GameLink manifests and Tauri artifacts")
     return pins, tauri_public, tauri_lines[1]
+
+
+def load_manifest_pins(directory):
+    pins = read_key(directory / "manifest.pub").split()
+    if not all(valid_minisign_pin(pin) for pin in pins):
+        raise ValueError("invalid Minisign public key in the release pins")
+    return pins
 
 
 def write_json(path, data):
@@ -150,7 +159,7 @@ def bundles(version, linux_only):
 
 
 def agent_arches(linux_only):
-    return ("amd64",) if linux_only else ("amd64", "arm64")
+    return ("amd64",) if linux_only else ARCHES
 
 
 def agent_name(arch):
@@ -167,10 +176,18 @@ def build_release(version, linux_only, work, out, tools, pins, env):
     config = work / "tauri-release.json"
     write_json(config, {"plugins": {"updater": {"pubkey": tauri_public}}})
 
-    bundle_env = bundle_environment(work, build_env, windows=not linux_only)
-    for arch in agent_arches(linux_only):
-        run("bash", "scripts/build-agent.sh", arch, out / agent_name(arch), env=build_env)
+    nfpm = install_tool("nfpm", NFPM, work, work, env)
+    licenses = out / LICENSES_ASSET
+    with tarfile.open(licenses, "w:gz") as archive:
+        for path in ("LICENSE", "THIRD_PARTY_NOTICES.md", "third_party/licenses"):
+            archive.add(ROOT / path, arcname=path)
 
+    for arch in agent_arches(linux_only):
+        binary = out / agent_name(arch)
+        run("bash", "scripts/build-agent.sh", arch, binary, env=build_env)
+        build_deb(nfpm, binary, licenses, work, version, arch, out / deb_name(version, arch), build_env)
+
+    bundle_env = bundle_environment(work, build_env, windows=not linux_only)
     for _, target, bundle, name in bundles(version, linux_only):
         run("bash", "scripts/build-desktop.sh", target,
             env=build_env | {"TAURI_CONFIG": config.read_text()})
@@ -182,9 +199,6 @@ def build_release(version, linux_only, work, out, tools, pins, env):
             "--bundles", bundle, "--config", config, cwd=DESKTOP, env=bundle_env)
         shutil.copy2(release_dir / "bundle" / bundle / name, out)
 
-    with tarfile.open(out / "GameLink-licenses.tar.gz", "w:gz") as archive:
-        for path in ("LICENSE", "THIRD_PARTY_NOTICES.md", "third_party/licenses"):
-            archive.add(ROOT / path, arcname=path)
     print(f"Staged unsigned release assets: {out}", flush=True)
 
 
@@ -219,22 +233,24 @@ def sign_tauri(artifact, version, work, tools, tauri_pin, tauri_key, password, e
 def unsigned_assets(version, linux_only, out):
     installers = {platform: out / name for platform, _, _, name in bundles(version, linux_only)}
     agents = [out / agent_name(arch) for arch in agent_arches(linux_only)]
-    payloads = sorted([*installers.values(), *agents, out / "GameLink-licenses.tar.gz"])
+    debs = [out / deb_name(version, arch) for arch in agent_arches(linux_only)]
+    payloads = sorted([*installers.values(), *agents, *debs, out / LICENSES_ASSET])
     if out.is_symlink() or set(out.iterdir()) != set(payloads) or any(
         path.is_symlink() or not path.is_file() or path.stat().st_size == 0 for path in payloads
     ):
         raise ValueError(f"expected only the complete set of unsigned release assets in {out}")
-    return installers, agents, payloads
+    return installers, agents, debs, payloads
 
 
 def check_staging(version, linux_only, work, out, tools, pins, env):
     verify_signers(tools)
-    installers, agents, _ = unsigned_assets(version, linux_only, out)
-    for path in agents:
+    installers, agents, debs, _ = unsigned_assets(version, linux_only, out)
+    for arch, path, deb in zip(agent_arches(linux_only), agents, debs, strict=True):
         binary = path.read_bytes()
         if not binary.startswith(b"\x7fELF"):
             raise ValueError(f"{path.name}: expected a Linux agent executable")
         check_binary_pins(binary, path.name, pins)
+        check_deb_pins(deb, path, version, arch, pins, env)
     for platform, _, bundle, _ in bundles(version, linux_only):
         check_bundle_pins(bundle, installers[platform], work, pins, env)
 
@@ -253,7 +269,7 @@ def add_release_summary(summary, out, payloads):
 
 def sign_release(version, severity, summary, linux_only, work, out, tools, pins, keys, repository, env):
     verify_signers(tools)
-    installers, agents, payloads = unsigned_assets(version, linux_only, out)
+    installers, agents, debs, payloads = unsigned_assets(version, linux_only, out)
 
     manifest_key, tauri_key, password = keys
     manifest_pins, _, tauri_pin = pins
@@ -285,12 +301,7 @@ def sign_release(version, severity, summary, linux_only, work, out, tools, pins,
     if summary:
         latest["notes"] = summary
     write_json(out / "latest.json", latest)
-    # Send the private key on stdin. Do not write it to disk or put it in argv.
-    minisign = tools / "minisign"
-    run(minisign, "-S", "-s", "/dev/stdin", "-m", manifest, *agents,
-        input=manifest_key, text=True, env=env)
-    for path in [manifest, *agents]:
-        verify_minisign(minisign, path, path.with_name(f"{path.name}.minisig"), manifest_pins, env)
+    sign_minisign(tools / "minisign", [manifest, *agents, *debs], manifest_key, manifest_pins, env)
 
     (out / "SHA256SUMS").write_text(
         "".join(f"{sha256(path)}  {path.name}\n" for path in sorted(out.iterdir())),
@@ -298,6 +309,13 @@ def sign_release(version, severity, summary, linux_only, work, out, tools, pins,
     )
     run("sha256sum", "--check", "SHA256SUMS", cwd=out, env=env)
     print(f"Verified release assets: {out}", flush=True)
+
+
+def sign_minisign(minisign, paths, key, pins, env):
+    # Send the private key on stdin. Do not put it in argv.
+    run(minisign, "-S", "-s", "/dev/stdin", "-m", *paths, input=key, text=True, env=env)
+    for path in paths:
+        verify_minisign(minisign, path, path.with_name(f"{path.name}.minisig"), pins, env)
 
 
 VERIFIER_TEST = "update::tests::verifies_release_pipeline_manifest"
@@ -371,6 +389,9 @@ def prepare_release(args):
                      args.repository, env)
     if args.validate:
         verify_release(out, pins, env)
+        if args.test_apt:
+            from apt_repo import validate_repository
+            validate_repository(version, out, work, tools / "minisign", keys[0], pins[0], env)
 
 
 def main():
@@ -383,6 +404,7 @@ def main():
     mode.add_argument("--verify", action="store_true", help="verify signed assets with the Rust client verifier")
     mode.add_argument("--validate", action="store_true", help="build, check and sign with throwaway keys")
     parser.add_argument("--linux-only", action="store_true", help="validate only the amd64 agent and AppImage")
+    parser.add_argument("--test-apt", action="store_true", help="validate apt install and upgrade in Docker or Podman")
     parser.add_argument("--tag", help="release tag")
     parser.add_argument("--commit", help="triggering build's full commit SHA")
     parser.add_argument("--repository", default="Rainbowcastle25/gamelink-open-source")
@@ -395,6 +417,8 @@ def main():
         parser.error("provide --commit for --check-source or --sign")
     if args.linux_only and not args.validate:
         parser.error("--linux-only requires --validate")
+    if args.test_apt and (not args.validate or args.linux_only):
+        parser.error("--test-apt requires full --validate")
     try:
         prepare_release(args)
     except (ValueError, OSError, subprocess.CalledProcessError) as error:

@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+case "$1" in
+    configure)
+        state=/var/lib/gamelink-agent
+        if ! getent passwd gamelink >/dev/null; then
+            useradd --system --user-group --no-create-home \
+                --home-dir "$state" --shell /usr/sbin/nologin gamelink
+        fi
+        if [ ! -e "$state" ] && [ ! -L "$state" ]; then
+            mkdir -m 0700 "$state"
+        fi
+        # /var/lib is root-owned. Take ownership without following a symlink,
+        # then validate the directory before changing modes.
+        if [ -L "$state" ] || [ ! -d "$state" ]; then
+            echo "GameLink state path must be a directory: $state" >&2
+            exit 1
+        fi
+        chown -h root:gamelink "$state"
+        chmod 0700 "$state"
+        chown -h gamelink:gamelink "$state"
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload
+            if [ -n "${2:-}" ]; then
+                deb-systemd-invoke try-restart gamelink-agent.service
+            fi
+        fi
+        ;;
+esac

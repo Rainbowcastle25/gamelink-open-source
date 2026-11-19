@@ -3,7 +3,8 @@
 GameLink desktop and the Linux agent share a verifier for the release manifest
 and its detached Minisign signature. The Windows NSIS install and Linux
 AppImage use that manifest to offer one-click desktop updates.
-The Linux agent can also stage and install a signed update on explicit request.
+Manually installed Linux agents can also stage and install a signed update
+on explicit request. Apt installations use the signed repository below.
 
 ## Release files
 
@@ -35,6 +36,10 @@ schema. The version, date and digest below are examples.
     {
       "name": "gamelink-agent-linux-amd64",
       "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    {
+      "name": "gamelink-agent_0.3.0_amd64.deb",
+      "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
     }
   ]
 }
@@ -57,14 +62,15 @@ schema. The version, date and digest below are examples.
   `release-summary.txt`. Its digest covers the exact UTF-8 bytes of `notes`
   in `latest.json`, which lets GameLink display the summary without another GET.
 
-The pipeline signs the exact manifest bytes and each raw agent binary using
-Minisign's default prehashed signature format. Each gets a detached `.minisig`.
-To verify a downloaded manifest or binary, use the second line of the
+The pipeline signs the exact manifest bytes, each raw agent binary and each
+`.deb` using Minisign's default prehashed signature format. Each gets a
+detached `.minisig`. To verify a downloaded asset, use the second line of the
 signer's Minisign public file:
 
 ```sh
 minisign -Vm release-manifest.json -P "$release_public_key"
 minisign -Vm gamelink-agent-linux-amd64 -P "$release_public_key"
+minisign -Vm gamelink-agent_0.3.0_amd64.deb -P "$release_public_key"
 ```
 
 Tauri signs the Windows x64 NSIS installer and Linux x86_64 AppImage, producing
@@ -134,10 +140,11 @@ the checked-in Tauri key as `plugins.updater.pubkey` at build and bundle time.
 Both workflows pin Actions to full commit SHAs. The build runner checks
 SHA-256 digests for the fixed-release packaging downloads. The preflight
 rechecks the two signer executables and inspects the AppImage, installer
-payload and raw agent binaries for the selected pins. The signing runner
-rechecks the signer hashes and verifies each installer signature against the
-Tauri pin and each agent and manifest signature against the Minisign pins.
-The next job runs the same Rust manifest verifier as the clients, including
+payload and the raw and Debian-packaged agent binaries for the selected
+pins. The signing runner rechecks the signer hashes and verifies each
+installer signature against the Tauri pin and each agent, Debian package and
+manifest signature against the Minisign pins. The next job runs the same Rust
+manifest verifier as the clients, including
 checks on the schema and metadata. Pull request validation runs the same
 checks with freshly generated key pairs and pins.
 Plain local builds without Minisign pins have release checks disabled.
@@ -145,6 +152,52 @@ Builds with Minisign pins and no Tauri pin can show signed notices with a link.
 The notification feed URL override uses the same compiled-in pins. Automatic
 installation uses the production Tauri feed and tag-specific GitHub asset URLs
 embedded at build time.
+
+## Publish the apt repository
+
+Create a separate signing-only Ed25519 OpenPGP key with a two-year expiry
+and an empty passphrase for GitHub Actions. Keep the private export and its
+backup outside the checkout.
+
+```sh
+apt_keydir="$(mktemp -d)"
+apt_signer='GameLink apt archive <apt@gamelink.invalid>'
+gpg --homedir "$apt_keydir" --batch --pinentry-mode loopback --passphrase '' \
+  --quick-generate-key "$apt_signer" ed25519 sign 2y
+gpg --homedir "$apt_keydir" --armor --export "$apt_signer" > release/keys/apt.asc
+gpg --homedir "$apt_keydir" --batch --pinentry-mode loopback --passphrase '' \
+  --armor --export-secret-keys "$apt_signer" > "$apt_keydir/apt-secret.asc"
+```
+
+Commit only the public `release/keys/apt.asc` and merge it to `master`.
+Create an `apt-repo` GitHub Actions environment and restrict deployments to
+the `master` branch. Add the full ASCII-armored private export as its
+`GAMELINK_APT_SIGNING_KEY` environment secret. From an authenticated checkout:
+
+```sh
+gh secret set --env apt-repo GAMELINK_APT_SIGNING_KEY < "$apt_keydir/apt-secret.asc"
+```
+
+Under **Settings → Pages → Build and deployment**, set **Source** to
+**GitHub Actions**. Allow the `github-pages` deployment environment to
+deploy from `master`.
+
+[**Publish apt repository**](../.github/workflows/apt-repo.yml) dispatches
+a build from `master` when the owner publishes a stable release. The build
+downloads the two highest published stable versions and verifies the
+Minisign signatures, signed manifest digests and package metadata before
+indexing the packages. The first apt publication can contain one version
+if the preceding signed release shipped no Debian packages. Keep the
+Minisign verifier pins for both versions while their packages remain in
+the repository.
+
+Only the signing step receives the apt secret. It verifies both the
+clear-signed `InRelease` and the detached `Release.gpg` against the committed
+public key before the deploy job publishes the Pages artifact. Publishing
+fails if the public key is still a placeholder or the required key or
+signatures fail verification. To rebuild the repository, run the workflow
+manually from `master`. Renew the key and update the distributed keyring
+before its expiry.
 
 ## Rotate verification keys
 
