@@ -170,12 +170,55 @@ pub enum Effect {
     },
 }
 
+impl Effect {
+    pub fn grants_access(&self) -> bool {
+        matches!(self, Self::Allow { .. } | Self::Start { .. })
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Reduction {
     pub state: State,
     pub effects: Vec<Effect>,
     pub changed: bool,
     pub games: Vec<GameState>,
+}
+
+impl Reduction {
+    pub fn has_grants(&self) -> bool {
+        self.effects.iter().any(Effect::grants_access)
+    }
+
+    pub fn has_stops(&self) -> bool {
+        self.effects
+            .iter()
+            .any(|e| matches!(e, Effect::Stop { .. }))
+    }
+}
+
+impl State {
+    pub fn record_stop(&mut self, id: &str, generation: u64) {
+        if self
+            .active
+            .get(id)
+            .is_some_and(|a| a.generation == generation)
+        {
+            self.active.remove(id);
+            self.pending.remove(id);
+        }
+    }
+
+    pub fn complete_grant(&mut self, completion: Event) -> Result<Vec<Effect>, String> {
+        let mut change = reduce(self.clone(), completion)?;
+        if change.has_grants() {
+            // A failed Allow requires a stop. Keep the active generation
+            // unconfirmed until closure, then re-observe for its replacement.
+            change.effects.retain(|e| !e.grants_access());
+        } else {
+            *self = change.state;
+        }
+        Ok(change.effects)
+    }
 }
 
 #[derive(Deserialize)]

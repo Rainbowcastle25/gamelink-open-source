@@ -70,7 +70,7 @@ impl Runtime<'_> {
         }
         self.publish_requests();
         let out = self.reduce(Event::Shutdown)?;
-        self.effects(out.effects, &BTreeMap::new())
+        self.finish_effects(&out.effects).map(|_| ())
     }
     fn observe_config(&mut self) -> Result<(Event, BTreeMap<String, Value>)> {
         let cfg = config::dispatch(
@@ -139,26 +139,43 @@ impl Runtime<'_> {
     }
 
     fn reconcile(&mut self) -> Result<()> {
-        let (event, mut games) = self.observe_config()?;
+        let (event, _) = self.observe_config()?;
         let mut change = supervisor::reduce(self.state.clone(), event)?;
         // Request approval takes the request lock before the config lock.
         self.publish_requests();
-        {
-            let _lock;
-            if change
-                .effects
-                .iter()
-                .any(|e| matches!(e, Effect::Allow { .. }))
-            {
-                // Re-read both config and keys before granting access. Keep
-                // the lock through the allow and any replacement start.
-                _lock = config::lock_mutations(self.dir)?;
-                let event;
-                (event, games) = self.observe_config()?;
-                change = supervisor::reduce(self.state.clone(), event)?;
+        loop {
+            if !change.has_grants() {
+                self.finish_effects(&change.effects)?;
+                self.state = change.state;
+                break;
             }
-            self.state = change.state;
-            self.effects(change.effects, &games)?;
+            let Some(lock) = config::try_lock_mutations(self.dir)? else {
+                // Apply revocations even while a writer is busy. The next
+                // poll will retry the grants without disturbing other games.
+                self.finish_effects(&change.effects)?;
+                return Ok(());
+            };
+            let (event, games) = self.observe_config()?;
+            change = supervisor::reduce(self.state.clone(), event)?;
+            if !change.has_grants() {
+                drop(lock);
+                continue;
+            }
+            if change.has_stops() {
+                // A stop may wait for Go's resources to drain. Re-read the
+                // config again before executing any grants after the stop.
+                drop(lock);
+                self.finish_effects(&change.effects)?;
+            } else {
+                self.state = change.state;
+                let followups = self.apply_grants(change.effects, &games)?;
+                drop(lock);
+                if !self.finish_effects(&followups)? {
+                    break;
+                }
+            }
+            let (event, _) = self.observe_config()?;
+            change = supervisor::reduce(self.state.clone(), event)?;
         }
         let final_state = self.reduce(Event::Commit)?;
         self.games = final_state
@@ -179,7 +196,8 @@ impl Runtime<'_> {
         }
         self.request_store_failed = failed;
     }
-    fn effects(&mut self, effects: Vec<Effect>, games: &BTreeMap<String, Value>) -> Result<()> {
+    fn finish_effects(&mut self, effects: &[Effect]) -> Result<bool> {
+        let mut stopped = false;
         for effect in effects {
             match effect {
                 Effect::Log { message } => {
@@ -191,17 +209,31 @@ impl Runtime<'_> {
                 }
                 Effect::Stop { id, generation } => {
                     bridge::call(json!({"method":"stop","id":id,"generation":generation}))?;
-                    self.running_identities.remove(&id);
+                    self.running_identities.remove(id);
+                    self.state.record_stop(id, *generation);
+                    stopped = true;
                 }
+                Effect::Start { .. } | Effect::Allow { .. } => {}
+            }
+        }
+        Ok(stopped)
+    }
+    fn apply_grants(
+        &mut self,
+        effects: Vec<Effect>,
+        games: &BTreeMap<String, Value>,
+    ) -> Result<Vec<Effect>> {
+        let mut followups = Vec::new();
+        for effect in effects {
+            let completed = match effect {
                 Effect::Start { id, generation } => {
                     let error = self.start(&id, generation, games).err();
-                    let next = self.reduce(Event::StartCompleted {
+                    Event::StartCompleted {
                         id,
                         generation,
                         error,
                         now_ns: self.tick_ns(),
-                    })?;
-                    self.effects(next.effects, games)?;
+                    }
                 }
                 Effect::Allow {
                     id,
@@ -212,16 +244,20 @@ impl Runtime<'_> {
                         json!({"method":"allow","id":id,"generation":generation,"approved":approved}),
                     )
                     .err();
-                    let next = self.reduce(Event::AllowCompleted {
+                    Event::AllowCompleted {
                         id,
                         generation,
                         error,
-                    })?;
-                    self.effects(next.effects, games)?;
+                    }
                 }
-            }
+                effect => {
+                    followups.push(effect);
+                    continue;
+                }
+            };
+            followups.extend(self.state.complete_grant(completed)?);
         }
-        Ok(())
+        Ok(followups)
     }
     fn start(&mut self, id: &str, generation: u64, games: &BTreeMap<String, Value>) -> Result<()> {
         let mut game = games
@@ -277,13 +313,16 @@ mod tests {
     const KEY_A: &str = "nodekey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const KEY_B: &str = "nodekey:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+    type LogHook = Box<dyn FnMut(&[Value])>;
+
     struct Script {
         calls: Vec<Value>,
         errors: BTreeMap<String, String>,
         stats: Value,
         logs: Vec<Value>,
-        on_logs: Option<Box<dyn FnMut()>>,
+        on_logs: Option<LogHook>,
         on_requests: Option<Box<dyn FnOnce()>>,
+        on_stop: Option<Box<dyn FnOnce()>>,
     }
     type Shared = Rc<RefCell<Script>>;
 
@@ -295,6 +334,7 @@ mod tests {
             logs: vec![],
             on_logs: None,
             on_requests: None,
+            on_stop: None,
         }))
     }
     // Strict: any bridge method the test did not script is a failure, so a stray
@@ -309,7 +349,13 @@ mod tests {
                 return Err(error.clone());
             }
             match method.as_str() {
-                "start" | "stop" | "allow" | "shutdown" | "init" => Ok(Value::Null),
+                "start" | "allow" | "shutdown" | "init" => Ok(Value::Null),
+                "stop" => {
+                    if let Some(f) = s.on_stop.take() {
+                        f();
+                    }
+                    Ok(Value::Null)
+                }
                 "stats" => Ok(s.stats.clone()),
                 "requests" => {
                     if let Some(f) = s.on_requests.take() {
@@ -318,8 +364,9 @@ mod tests {
                     Ok(json!({}))
                 }
                 "logs" => {
-                    if let Some(f) = s.on_logs.as_mut() {
-                        f();
+                    if let Some(mut f) = s.on_logs.take() {
+                        f(&s.calls);
+                        s.on_logs = Some(f);
                     }
                     Ok(json!(std::mem::take(&mut s.logs)))
                 }
@@ -371,6 +418,20 @@ mod tests {
     }
     fn keys_path(dir: &Path) -> PathBuf {
         dir.join("keys").join("x.json")
+    }
+    fn add_second_game(dir: &Path, devices: &[&str]) {
+        let mut cfg: Value =
+            serde_json::from_slice(&fs::read(dir.join("agent.json")).unwrap()).unwrap();
+        let mut game = cfg["games"][0].clone();
+        game["id"] = json!("y");
+        game["tunnelPort"] = json!(25566);
+        game["devices"] = json!(devices
+            .iter()
+            .map(|key| json!({"publicKey":key,"label":"b"}))
+            .collect::<Vec<_>>());
+        cfg["games"].as_array_mut().unwrap().push(game);
+        write_games(dir, cfg["games"].clone());
+        fs::copy(keys_path(dir), dir.join("keys/y.json")).unwrap();
     }
     fn write_keys(dir: &Path) {
         fs::create_dir_all(dir.join("keys")).unwrap();
@@ -538,6 +599,66 @@ mod tests {
         rt.reconcile().unwrap();
 
         assert_eq!(lifecycle(&script), ["start:\"x\":1"]);
+        assert_eq!(runtime_json(dir.path())["games"][0]["approved"], 1);
+    }
+
+    #[test]
+    fn revoked_first_approval_is_never_started_from_a_stale_snapshot() {
+        let dir = dir_with_game(&[KEY_A]);
+        add_second_game(dir.path(), &[]);
+        let script = script();
+        let _bridge = fake(&script);
+        let mut rt = runtime(dir.path());
+        rt.reconcile().unwrap();
+
+        let path = dir.path().join("agent.json");
+        config::dispatch(
+            "config.agent_mutate",
+            json!({"path":path,"action":"approve","id":"y","publicKey":KEY_B,"now":now()}),
+        )
+        .unwrap();
+        script.borrow_mut().on_requests = Some(Box::new(move || {
+            config::dispatch(
+                "config.agent_mutate",
+                json!({"path":path,"action":"revoke","id":"y","publicKey":KEY_B}),
+            )
+            .unwrap();
+        }));
+        rt.reconcile().unwrap();
+
+        assert_eq!(lifecycle(&script), ["start:\"x\":1"]);
+        assert_eq!(runtime_json(dir.path())["games"][1]["approved"], 0);
+    }
+
+    #[test]
+    fn unrelated_stop_releases_config_writers_before_revalidating_grants() {
+        let dir = dir_with_game(&[KEY_A]);
+        add_second_game(dir.path(), &[KEY_A]);
+        let script = script();
+        let _bridge = fake(&script);
+        let mut rt = runtime(dir.path());
+        rt.reconcile().unwrap();
+
+        write_agent(dir.path(), &[KEY_A, KEY_B]);
+        let path = dir.path().join("agent.json");
+        let lock_path = dir.path().join("agent.lock");
+        script.borrow_mut().on_stop = Some(Box::new(move || {
+            // A writer can lock the file even while the stop is draining.
+            let lock = fs::OpenOptions::new().write(true).open(lock_path).unwrap();
+            lock.try_lock().expect("held the config lock during stop");
+            drop(lock);
+            config::dispatch(
+                "config.agent_mutate",
+                json!({"path":path,"action":"revoke","id":"x","publicKey":KEY_B}),
+            )
+            .unwrap();
+        }));
+        rt.reconcile().unwrap();
+
+        assert_eq!(
+            lifecycle(&script),
+            ["start:\"x\":1", "start:\"y\":2", "stop:\"y\":2"]
+        );
         assert_eq!(runtime_json(dir.path())["games"][0]["approved"], 1);
     }
 
@@ -759,26 +880,30 @@ mod tests {
             json!({"id":"x","name":"G","dest":"127.0.0.1:25565","devices":[{"publicKey":KEY_A}]}),
         );
         // The supervisor never scheduled generation 5, so its completion is stale.
-        rt.effects(
-            vec![Effect::Start {
-                id: "x".into(),
-                generation: 5,
-            }],
-            &games,
-        )
-        .unwrap();
+        let followups = rt
+            .apply_grants(
+                vec![Effect::Start {
+                    id: "x".into(),
+                    generation: 5,
+                }],
+                &games,
+            )
+            .unwrap();
+        rt.finish_effects(&followups).unwrap();
         assert_eq!(lifecycle(&script), ["start:\"x\":5", "stop:\"x\":5"]);
 
         // A failed stale start has nothing to release.
         let before = lifecycle(&script).len();
-        rt.effects(
-            vec![Effect::Start {
-                id: "unknown".into(),
-                generation: 6,
-            }],
-            &games,
-        )
-        .unwrap();
+        let followups = rt
+            .apply_grants(
+                vec![Effect::Start {
+                    id: "unknown".into(),
+                    generation: 6,
+                }],
+                &games,
+            )
+            .unwrap();
+        rt.finish_effects(&followups).unwrap();
         assert_eq!(lifecycle(&script).len(), before);
     }
 
@@ -805,12 +930,9 @@ mod tests {
         let mut rt = runtime(dir.path());
         // A secret-bearing log effect goes through the redactor and stderr only.
         // Redaction output itself is covered by the `security.redact` fixtures.
-        rt.effects(
-            vec![Effect::Log {
-                message: format!("failed: privkey:{}", "ab".repeat(16)),
-            }],
-            &BTreeMap::new(),
-        )
+        rt.finish_effects(&[Effect::Log {
+            message: format!("failed: privkey:{}", "ab".repeat(16)),
+        }])
         .unwrap();
         assert!(script.borrow().calls.is_empty());
     }
@@ -839,7 +961,7 @@ mod tests {
             let path = dir.path().join("runtime.json");
             let mut s = script.borrow_mut();
             s.logs = vec![json!("tunnel opened")];
-            s.on_logs = Some(Box::new(move || {
+            s.on_logs = Some(Box::new(move |_| {
                 *seen.borrow_mut() = path.exists();
                 stopping.store(true, Ordering::Relaxed);
             }));
@@ -855,6 +977,62 @@ mod tests {
             ["start:\"x\":1", "stop:\"x\":1", "shutdown"]
         );
         assert!(!dir.path().join("runtime.json").exists());
+    }
+
+    #[test]
+    fn serve_keeps_games_running_during_lock_contention_and_retries_grants() {
+        let dir = dir_with_game(&[KEY_A]);
+        add_second_game(dir.path(), &[KEY_A]);
+        let script = script();
+        let stopping = Arc::new(AtomicBool::new(false));
+        let signal = stopping.clone();
+        let config_dir = dir.path().to_owned();
+        let path = config_dir.join("agent.json");
+        let mut held = None;
+        let mut queued = false;
+        script.borrow_mut().on_logs = Some(Box::new(move |calls| {
+            let polls = calls
+                .iter()
+                .filter(|call| call["method"] == "requests")
+                .count();
+            assert!(calls.iter().all(|call| call["method"] != "stop"));
+            match polls {
+                0 if !queued => {
+                    config::dispatch(
+                        "config.agent_mutate",
+                        json!({"path":path,"action":"approve","id":"x","publicKey":KEY_B,"now":now()}),
+                    )
+                    .unwrap();
+                    held = Some(config::lock_mutations(&config_dir).unwrap());
+                    queued = true;
+                }
+                1 if held.is_some() => {
+                    assert!(calls.iter().all(|call| call["method"] != "allow"));
+                    assert_eq!(runtime_json(&config_dir)["games"][1]["state"], "serving");
+                    drop(held.take());
+                }
+                2 => {
+                    let allow = calls.iter().find(|call| call["method"] == "allow").unwrap();
+                    assert_eq!(allow["approved"], json!([KEY_B]));
+                    signal.store(true, Ordering::Relaxed);
+                }
+                _ => {}
+            }
+        }));
+        let _bridge = fake(&script);
+        serve(dir.path(), &stopping, false).unwrap();
+
+        assert_eq!(
+            lifecycle(&script),
+            [
+                "start:\"x\":1",
+                "start:\"y\":2",
+                "allow:\"x\":1",
+                "stop:\"x\":1",
+                "stop:\"y\":2",
+                "shutdown"
+            ]
+        );
     }
 
     #[test]

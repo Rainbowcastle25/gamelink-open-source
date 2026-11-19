@@ -653,8 +653,7 @@ fn sync_managed(dir: &Path, cfg: &mut Value, input: &Value) -> Result<Value, Str
     }
     Ok(json!({"origin":origin,"discovered":seen.len()}))
 }
-/// Serializes changes to agent.json and its game key files.
-pub fn lock_mutations(dir: &Path) -> Result<fs::File, String> {
+fn open_mutation_lock(dir: &Path) -> Result<fs::File, String> {
     // Keep the file in place so everyone locks the same file. The OS releases
     // the lock when the handle closes, including if the process exits.
     let mut opts = fs::OpenOptions::new();
@@ -664,15 +663,31 @@ pub fn lock_mutations(dir: &Path) -> Result<fs::File, String> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let file = opts
-        .open(dir.join("agent.lock"))
-        .map_err(|e| e.to_string())?;
+    opts.open(dir.join("agent.lock")).map_err(|e| e.to_string())
+}
+
+fn try_mutation_lock(file: &fs::File) -> Result<bool, String> {
+    match file.try_lock() {
+        Ok(()) => Ok(true),
+        Err(TryLockError::WouldBlock) => Ok(false),
+        Err(TryLockError::Error(e)) => Err(e.to_string()),
+    }
+}
+
+/// Attempts to serialize with config writers without blocking the host.
+pub fn try_lock_mutations(dir: &Path) -> Result<Option<fs::File>, String> {
+    let file = open_mutation_lock(dir)?;
+    Ok(try_mutation_lock(&file)?.then_some(file))
+}
+
+/// Serializes changes to agent.json and its game key files.
+pub fn lock_mutations(dir: &Path) -> Result<fs::File, String> {
+    let file = open_mutation_lock(dir)?;
     for _ in 0..100 {
-        match file.try_lock() {
-            Ok(()) => return Ok(file),
-            Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(50)),
-            Err(TryLockError::Error(e)) => return Err(e.to_string()),
+        if try_mutation_lock(&file)? {
+            return Ok(file);
         }
+        std::thread::sleep(Duration::from_millis(50));
     }
     Err(format!(
         "could not lock {} (another gamelink-agent command is running?)",

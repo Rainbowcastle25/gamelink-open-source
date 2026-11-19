@@ -239,9 +239,12 @@ impl Hosting {
         Ok((event, scopes))
     }
 
-    fn observe_config(&mut self) -> (Event, Value, BTreeSet<String>, bool) {
-        let loaded = self.load_games();
-        let lan_live = self.observe_lan(loaded.as_ref().unwrap_or(&Value::Null));
+    fn observe_config(
+        &mut self,
+        loaded: Result<Value>,
+        worlds: &BTreeSet<LanWorld>,
+    ) -> (Event, Value, BTreeSet<String>, bool) {
+        let lan_live = self.live_lan(loaded.as_ref().unwrap_or(&Value::Null), worlds);
         let loaded = loaded.and_then(|games| Ok((self.observe(&games, &lan_live)?, games)));
         let ((event, scopes), games, invalid) = match loaded {
             Ok((observation, games)) => (observation, games, false),
@@ -261,26 +264,45 @@ impl Hosting {
     }
 
     fn reconcile(&mut self) -> Result<()> {
-        let (event, mut games, mut lan_live, mut invalid) = self.observe_config();
+        let loaded = self.load_games();
+        let worlds = self.observe_lan(loaded.as_ref().unwrap_or(&Value::Null));
+        let (event, mut games, mut lan_live, mut invalid) = self.observe_config(loaded, &worlds);
         // Collect before closing a generation, keeping requests for the same
         // identity across approval, revocation and destination changes.
         let sampled = self.sample_peers();
         let mut change = supervisor::reduce(self.state.clone(), event)?;
-        {
-            let _lock;
-            if change
-                .effects
-                .iter()
-                .any(|e| matches!(e, Effect::Allow { .. }))
-            {
-                // Re-read both config and keys before granting access. Keep
-                // the lock through the allow and any replacement start.
-                _lock = config::lock_mutations(&self.dir)?;
-                let event;
-                (event, games, lan_live, invalid) = self.observe_config();
-                change = supervisor::reduce(self.state.clone(), event)?;
+        loop {
+            if !change.has_grants() {
+                self.stop_generations(&change.effects)?;
+                self.state = change.state;
+                break;
             }
-            self.apply_effects(change, &games)?;
+            let Some(lock) = config::try_lock_mutations(&self.dir)? else {
+                self.stop_generations(&change.effects)?;
+                self.save_connections();
+                return sampled;
+            };
+            let mut event;
+            (event, games, lan_live, invalid) = self.observe_config(self.load_games(), &worlds);
+            change = supervisor::reduce(self.state.clone(), event)?;
+            if !change.has_grants() {
+                drop(lock);
+                continue;
+            }
+            if change.has_stops() {
+                // Close all old generations before replanning any grants.
+                drop(lock);
+                self.stop_generations(&change.effects)?;
+            } else {
+                self.state = change.state;
+                let followups = self.apply_grants(change.effects, &games)?;
+                drop(lock);
+                if !self.stop_generations(&followups)? {
+                    break;
+                }
+            }
+            (event, games, lan_live, invalid) = self.observe_config(self.load_games(), &worlds);
+            change = supervisor::reduce(self.state.clone(), event)?;
         }
         let current = supervisor::reduce(self.state.clone(), Event::Commit)?;
         self.state = current.state;
@@ -301,11 +323,9 @@ impl Hosting {
         sampled
     }
 
-    fn apply_effects(&mut self, change: supervisor::Reduction, games: &Value) -> Result<()> {
-        // All old generations complete closure before any replacement starts.
-        self.stop_generations(&change.effects)?;
-        self.state = change.state;
-        for effect in change.effects {
+    fn apply_grants(&mut self, effects: Vec<Effect>, games: &Value) -> Result<Vec<Effect>> {
+        let mut followups = Vec::new();
+        for effect in effects {
             let completed = match effect {
                 Effect::Start { id, generation } => {
                     let error = self.start(games, &id, generation).err();
@@ -333,29 +353,31 @@ impl Hosting {
                 }
                 Effect::Stop { .. } | Effect::Log { .. } => continue,
             };
-            let next = supervisor::reduce(self.state.clone(), completed)?;
-            self.apply_effects(next, games)?;
+            followups.extend(self.state.complete_grant(completed)?);
         }
-        Ok(())
+        Ok(followups)
     }
 
-    fn stop_generations(&mut self, effects: &[Effect]) -> Result<()> {
+    fn stop_generations(&mut self, effects: &[Effect]) -> Result<bool> {
+        let mut stopped = false;
         for effect in effects {
             if let Effect::Stop { id, generation } = effect {
                 let peers =
                     bridge::call(json!({"method":"host_stop","id":id,"generation":generation}))?;
                 self.record_connections(id, &peers["connected"]);
                 self.running_identities.remove(id);
+                self.state.record_stop(id, *generation);
+                stopped = true;
             }
         }
-        Ok(())
+        Ok(stopped)
     }
 
     pub fn shutdown(&mut self) -> Result<()> {
         let change = supervisor::reduce(std::mem::take(&mut self.state), Event::Shutdown)?;
         let stopped = self.stop_generations(&change.effects);
         self.save_connections();
-        stopped
+        stopped.map(|_| ())
     }
 
     fn start(&mut self, games: &Value, id: &str, generation: u64) -> Result<()> {
@@ -442,7 +464,7 @@ impl Hosting {
         }
     }
 
-    fn observe_lan(&mut self, games: &Value) -> BTreeSet<String> {
+    fn observe_lan(&mut self, games: &Value) -> BTreeSet<LanWorld> {
         let shared = |id: &str| {
             rows(games)
                 .iter()
@@ -466,13 +488,23 @@ impl Hosting {
             return BTreeSet::new();
         };
         self.lan_open = true;
-        self.lan_ports
+        worlds
+    }
+
+    fn live_lan(&self, games: &Value, worlds: &BTreeSet<LanWorld>) -> BTreeSet<String> {
+        rows(games)
             .iter()
-            .filter_map(|(id, &port)| {
-                let name = text(shared(id)?, "name").into();
+            .filter_map(|game| {
+                let id = text(game, "id");
+                let &port = self.lan_ports.get(id)?;
+                let dest = text(game, "dest").parse::<SocketAddrV4>().ok()?;
+                if !is_lan(game) || game["disabled"] == true || dest.port() != port {
+                    return None;
+                }
+                let name = text(game, "name").into();
                 worlds
                     .contains(&LanWorld { name, port })
-                    .then(|| id.clone())
+                    .then(|| id.to_owned())
             })
             .collect()
     }
@@ -1090,6 +1122,8 @@ mod tests {
     #[test]
     fn live_approval_uses_the_current_generation_and_restarts_on_failure() {
         let dir = tempfile::tempdir().unwrap();
+        let mut hosting = Hosting::new(dir.path().join("hosting"));
+        let lock_path = hosting.dir.join("agent.lock");
         let requests = Rc::new(RefCell::new(Vec::new()));
         let calls = requests.clone();
         let fail_allow = Rc::new(std::cell::Cell::new(false));
@@ -1108,10 +1142,17 @@ mod tests {
                 }
                 "host_allow" if reject_allow.get() => return Err("test allow failure".into()),
                 "host_stop" if reject_stop.get() => return Err("test stop failure".into()),
+                "host_stop" => {
+                    let lock = std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&lock_path)
+                        .unwrap();
+                    lock.try_lock().expect("held the config lock during stop");
+                    Value::Null
+                }
                 _ => Value::Null,
             })
         });
-        let mut hosting = Hosting::new(dir.path().join("hosting"));
         let game = hosting.command(
             &json!({"method":"createHostedGame","game":"minecraft-java","name":"Game","port":25565}),
             Some(&json!({"RegionID":1,"Nodes":[{}]})),
@@ -1222,6 +1263,50 @@ mod tests {
         assert_eq!(view[0]["state"], "serving");
         assert_eq!(rows(&view[0]["approved"]).len(), 1);
         assert_eq!(view[0]["approved"][0]["publicKey"], alice);
+    }
+
+    #[test]
+    fn revoked_first_hosted_approval_is_never_started_from_a_stale_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut hosting = Hosting::new(dir.path().join("hosting"));
+        let path = hosting.path();
+        let revoke = Rc::new(RefCell::new(None));
+        let pending_revoke = revoke.clone();
+        let _fake = bridge::fake::install(move |request| match text(request, "method") {
+            "host_generate" => {
+                let secret = config::dispatch("config.new_id", Value::Null)?;
+                Ok(json!({"privateKey":secret,"presharedKey":secret}))
+            }
+            "host_peers" => {
+                if let Some(mutation) = pending_revoke.borrow_mut().take() {
+                    config::dispatch("config.agent_mutate", mutation)?;
+                }
+                Ok(Value::Null)
+            }
+            "host_start" => {
+                assert_eq!(request["approved"], json!([]));
+                Ok(Value::Null)
+            }
+            "host_allow" => panic!("allowed a device from a stale snapshot"),
+            _ => Ok(Value::Null),
+        });
+        let game = hosting.command(
+            &json!({"method":"createHostedGame","game":"minecraft-java","name":"Game","port":25565}),
+            Some(&json!({"RegionID":1,"Nodes":[{}]})),
+        ).unwrap();
+        let id = text(&game, "id");
+        let alice = generated_public_key();
+        config::dispatch(
+            "config.agent_mutate",
+            json!({"path":path,"action":"approve","id":id,"publicKey":alice,"now":chrono::Utc::now()}),
+        )
+        .unwrap();
+        *revoke.borrow_mut() =
+            Some(json!({"path":path,"action":"revoke","id":id,"publicKey":alice}));
+        hosting.reconcile().unwrap();
+
+        assert_eq!(hosting.view()[0]["state"], "inactive");
+        assert_eq!(hosting.view()[0]["approved"], json!([]));
     }
 
     #[test]
