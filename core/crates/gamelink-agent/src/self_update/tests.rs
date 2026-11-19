@@ -510,6 +510,53 @@ fn staging_cannot_report_installer_outcomes() {
 }
 
 #[test]
+fn recovery_rejects_invalid_staged_attempt_ids_without_blocking() {
+    let mut staged = Status {
+        attempt: 1,
+        attempt_id: Some(String::new()),
+        state: Phase::Staged,
+        ..Status::default()
+    };
+    let max_id_len = 4096 - serde_json::to_vec(&staged).unwrap().len();
+    for invalid_id in [
+        "a".repeat(max_id_len),
+        "a".repeat(31),
+        "a".repeat(33),
+        "A".repeat(32),
+        "g".repeat(32),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = sandbox(dir.path());
+        let owner = effective_uid();
+        staged.attempt_id = Some(invalid_id);
+        save_stage_status(&paths.staged().join(STAGE_STATUS), &staged).unwrap();
+        File::create(paths.marker()).unwrap();
+        let run_install = |checkpoint: fn(Checkpoint)| {
+            install(&paths, owner, VERSION, &no_service(), || Ok(()), checkpoint)
+        };
+
+        let interrupted = catch_unwind(AssertUnwindSafe(|| {
+            run_install(|point| {
+                if point == Checkpoint::Recorded(InstallPhase::Staged) {
+                    panic_any(InstallPhase::Staged);
+                }
+            })
+        }));
+        assert_eq!(
+            interrupted.unwrap_err().downcast_ref::<InstallPhase>(),
+            Some(&InstallPhase::Staged)
+        );
+
+        run_install(|_| {}).unwrap();
+        assert_retired(&paths);
+        let status = paths.status(owner);
+        assert_eq!(status.state, Phase::Failed);
+        assert!(status.attempt_id.is_none());
+        assert_eq!(fs::read(&paths.installed).unwrap(), OLD);
+    }
+}
+
+#[test]
 #[ignore = "requires a locally signed agent artifact and compiled-in throwaway pins"]
 fn signed_stage_install_tamper_and_rollback() {
     let fixture = std::env::var_os("GAMELINK_TEST_AGENT_RELEASE_DIR").unwrap();

@@ -123,6 +123,14 @@ impl Paths {
         self.staging_dir(owner).ok()?;
         let bytes = read_file(&self.staged().join(STAGE_STATUS), 4096, owner).ok()?;
         let status: Status = serde_json::from_slice(&bytes).ok()?;
+        if status.attempt_id.as_ref().is_some_and(|id| {
+            id.len() != 32
+                || !id
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        }) {
+            return None;
+        }
         matches!(
             status.state,
             Phase::Checking | Phase::Downloading | Phase::Staged | Phase::StagingFailed
