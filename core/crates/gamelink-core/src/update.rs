@@ -18,7 +18,7 @@ const MAX_MANIFEST: usize = 64 * 1024;
 const MAX_SIGNATURE: usize = 4 * 1024;
 const MAX_REDIRECTS: usize = 5;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(8);
-const DAY: u64 = 24 * 60 * 60;
+const DESKTOP_CHECK_INTERVAL: u64 = 4 * 60 * 60;
 const CACHE: &str = "release-check.json";
 
 type Result<T> = std::result::Result<T, &'static str>;
@@ -290,14 +290,14 @@ fn checked_result(
 
 fn due(last_attempt: Option<u64>, now: u64) -> bool {
     // A last attempt in the future came from a bad clock; do not wait for it.
-    last_attempt.is_none_or(|last| last > now || now - last >= DAY)
+    last_attempt.is_none_or(|last| last > now || now - last >= DESKTOP_CHECK_INTERVAL)
 }
 
 fn check_at(
     dir: &Path,
     installed: &Version,
     keys: &[PublicKey],
-    daily: bool,
+    automatic: bool,
     now: u64,
     debug: fn(&'static str),
     fetch: impl FnOnce(u64) -> Result<SignedRelease>,
@@ -326,7 +326,7 @@ fn check_at(
             None
         }
     };
-    if daily && !due(cache.last_attempt, now) {
+    if automatic && !due(cache.last_attempt, now) {
         let Some(signed) = cache.signed.as_ref() else {
             return Ok(None);
         };
@@ -340,7 +340,7 @@ fn check_at(
         }
     }
     // Record attempts before touching the network so failures and restarts
-    // count toward the same 24-hour limit.
+    // count toward the same four-hour limit.
     cache.last_attempt = Some(now);
     cache.last_attempt_succeeded = false;
     save_cache(dir, &cache)?;
@@ -381,7 +381,7 @@ pub fn can_check() -> bool {
 
 /// Desktop-only network entry point. Call after checking the user's setting.
 /// `debug` receives non-fatal problems, such as an ignored corrupt cache.
-pub fn check_daily(
+pub fn check_desktop(
     dir: &Path,
     installed: &str,
     debug: fn(&'static str),
@@ -397,7 +397,7 @@ pub fn check_now(dir: &Path, installed: &str) -> Result<CheckResult> {
 fn check(
     dir: &Path,
     installed: &str,
-    daily: bool,
+    automatic: bool,
     debug: fn(&'static str),
 ) -> Result<Option<CheckResult>> {
     let installed = Version::parse(installed).map_err(|_| "invalid installed version")?;
@@ -405,7 +405,7 @@ fn check(
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "invalid system clock")?
         .as_secs();
-    check_at(dir, &installed, &keys()?, daily, now, debug, download)
+    check_at(dir, &installed, &keys()?, automatic, now, debug, download)
 }
 
 /// The agent's last verified check. Reads local state only.

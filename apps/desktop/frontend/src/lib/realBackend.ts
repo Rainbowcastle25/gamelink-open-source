@@ -1,6 +1,6 @@
 import type { Backend } from "./backend";
-import type { UpdateTopic } from "./types";
-import { invoke } from "@tauri-apps/api/core";
+import type { UpdateProgress, UpdateTopic } from "./types";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 const call = <T>(method: string, args: Record<string, unknown> = {}): Promise<T> =>
@@ -22,7 +22,13 @@ export const realBackend: Backend = {
   servers: async () => (await call<Awaited<ReturnType<Backend["servers"]>>>("servers")) ?? [],
   settings: async () => call("settings"),
   gameIcons: async () => (await call<Record<string, string> | null>("gameIcons")) ?? {},
-  checkRelease: async () => call("checkRelease"),
+  checkRelease: async () => invoke("check_release"),
+  installUpdate: async (version, onProgress) => {
+    const progress = new Channel<UpdateProgress>(onProgress);
+    await invoke("install_update", { version, progress });
+  },
+  // Windows hands off to the NSIS installer, which relaunches after installation.
+  relaunch: async () => invoke("plugin:process|restart"),
   openReleaseNotes: async () => call("openReleaseNotes"),
   activity: async (limit) => (await call<Awaited<ReturnType<Backend["activity"]>>>("activity", { limit })) ?? [],
   clearActivity: async () => call("clearActivity"),

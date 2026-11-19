@@ -366,9 +366,17 @@ compatibility from a successful build or echo test.
    lockfiles. Use SemVer without build metadata. Regenerate
    [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) if dependencies changed.
 3. Merge the release commit to `master` after CI passes. Run `git fetch origin`
-   and tag the merged commit with `git tag v0.3.0 <release-commit>`. Push the
-   tag with `git push origin v0.3.0`. For a security release use
-   `git tag -a v0.3.0 <release-commit> -m 'GameLink v0.3.0' -m 'GameLink-Release-Severity: security'`.
+   and tag the merged commit. Add a one- or two-sentence summary under
+   `GameLink-Release-Summary` (up to 512 UTF-8 bytes) for the updater and draft
+   release notes. Add `GameLink-Release-Severity: security` in the same trailer
+   paragraph for a security release.
+
+   ```sh
+   git tag -a v0.3.0 <release-commit> -m 'GameLink v0.3.0' \
+     -m 'GameLink-Release-Summary: Improves connection recovery after sleep.'
+   git push origin v0.3.0
+   ```
+
    Release tags matching `v*` are immutable. The GitHub tag ruleset blocks
    updates and deletions. Cut a new version if the tagged commit needs changes.
 4. Wait for the draft. Review its notes and assets, then click **Publish

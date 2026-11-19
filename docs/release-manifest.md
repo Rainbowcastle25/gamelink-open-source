@@ -1,8 +1,8 @@
 # Signed release manifests
 
-GameLink desktop and the Linux agent share a verifier for release notices. A
-release check fetches only the JSON manifest and its detached Minisign signature.
-Users follow the release notes link to get and install updates themselves.
+GameLink desktop and the Linux agent share a verifier for the release manifest
+and its detached Minisign signature. The Windows NSIS install and Linux
+AppImage use that manifest to offer one-click desktop updates.
 
 ## Release files
 
@@ -49,9 +49,12 @@ schema. The version, date and digest below are examples.
   `GameLink-Release-Severity: security` for fixes users should prioritize.
 - `releaseNotesUrl` is an HTTPS URL without embedded credentials. Point it at
   the notes for this specific release.
-- `artifacts` lists the published binaries or archives and their SHA-256
+- `artifacts` lists the published release assets and their SHA-256
   digests. Use unique asset basenames with ASCII letters, digits, periods,
   underscores or hyphens. Encode each digest as 64 hex digits.
+  When the release tag supplies a summary, the manifest also lists
+  `release-summary.txt`. Its digest covers the exact UTF-8 bytes of `notes`
+  in `latest.json`, which lets GameLink display the summary without another GET.
 
 The pipeline signs the exact manifest bytes and each raw agent binary using
 Minisign's default prehashed signature format. Each gets a detached `.minisig`.
@@ -136,7 +139,10 @@ The next job runs the same Rust manifest verifier as the clients, including
 checks on the schema and metadata. Pull request validation runs the same
 checks with freshly generated key pairs and pins.
 Plain local builds without Minisign pins have release checks disabled.
-The notification feed URL override uses the same compiled-in pins.
+Builds with Minisign pins and no Tauri pin can show signed notices with a link.
+The notification feed URL override uses the same compiled-in pins. Automatic
+installation uses the production Tauri feed and tag-specific GitHub asset URLs
+embedded at build time.
 
 ## Rotate verification keys
 
@@ -155,18 +161,27 @@ and distribute replacement builds with the compromised key removed.
 
 ## Check behavior
 
-Desktop **Settings → About → Check for updates** is off by default because the
-release host can see the IP address of a request. Opting in permits a check
-when GameLink is open, at most once in each 24-hour interval.
-Failures count toward the interval. If the system clock moved back, so the
-last attempt looks like it is in the future, the next check runs right away.
-An unavailable or unverified result produces no banner and a local debug log
-entry for failures. A verified newer release appears with a link to its notes,
-with stronger styling for security releases. A failed check does not hide a
-notice that was already verified. A damaged local cache triggers an immediate
-check, and its rollback protection is lost only if the saved manifest or
-signature can no longer be read or verified. A manifest for the same version
-as the last verified one is rejected if its signed bytes differ.
+Desktop checks are on by default for new installs. The app checks at startup
+and every four hours while it is open, and reuses a verified local manifest
+between network attempts. Turn checks off under **Settings → About →
+Check for updates**. Existing off settings are preserved. Failed manifest
+requests count toward the interval. If the system clock moves back, the
+next check runs as soon as GameLink detects the future timestamp.
+
+A verified newer release appears in the app header, with stronger styling
+for security releases. On NSIS and AppImage builds, GameLink checks
+`latest.json` for the same version and platform asset. Selecting **Update**
+downloads the installer with Tauri's updater, verifies the pinned Tauri
+signature and the signed release version, and checks the installer's bytes
+against the manifest's digest. GameLink then installs it and restarts.
+Builds without self-update support show the release notes link. The link
+also remains available when the installer feed is unavailable.
+
+A failed manifest check retains the last verified notice. A damaged cache
+triggers an immediate check, and its rollback protection is lost only if the
+saved manifest or signature can no longer be read or verified. A manifest for
+the same version as the last verified one is rejected if its signed bytes
+differ.
 
 The Linux agent sends release requests only on `gamelink-agent update check`.
 Add `--json` for an object containing `installedVersion`, `checkedAt`,
@@ -177,4 +192,5 @@ locally. `status --json` includes it under `update` when available.
 Checks use HTTPS GETs with `User-Agent: GameLink` and carry no cookies,
 credentials, installed version, or device identifiers. HTTPS redirects are
 allowed for release asset hosting. The release host and its CDN can see the
-request's IP address and timing. No check fetches a listed artifact.
+request's IP address and timing. Installer downloads start when you choose
+**Update**.

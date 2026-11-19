@@ -1,0 +1,6 @@
+{
+  "identifier": "update-restart",
+  "platforms": ["linux"],
+  "windows": ["main"],
+  "permissions": ["process:allow-restart"]
+}

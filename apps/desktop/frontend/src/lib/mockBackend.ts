@@ -237,7 +237,7 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
     demoMode: opts.demoMode ?? false,
     autoReconnect: true,
     checkOnStartup: true,
-    checkForUpdates: false,
+    checkForUpdates: true,
     canCheckForUpdates: true,
     verboseLogging: false,
     allowLocalRelay: false,
@@ -497,6 +497,10 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
     async checkRelease() {
       return null;
     },
+    async installUpdate() {
+      throw new Error("Updates are unavailable with the mock backend.");
+    },
+    async relaunch() {},
     async openReleaseNotes() {},
     async activity(limit) {
       await wait();

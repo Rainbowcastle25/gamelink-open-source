@@ -279,7 +279,7 @@ export function SettingsPanel() {
           title="Check for updates"
           description={
             settings.canCheckForUpdates
-              ? "Check for signed release notices once a day while GameLink is open. You install updates yourself."
+              ? "Check for signed releases at startup and every four hours while GameLink is open."
               : "This build can't check for updates because it has no release verification key."
           }
         >

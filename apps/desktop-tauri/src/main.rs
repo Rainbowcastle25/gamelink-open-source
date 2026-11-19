@@ -6,17 +6,14 @@ mod host_connection;
 mod hosting;
 mod minecraft_lists;
 mod presence;
+mod updater;
 #[cfg(windows)]
 mod windows_notice;
 
-use gamelink_core::update;
 use serde_json::{json, Value};
-use std::{
-    path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use tauri::{Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -26,27 +23,6 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-fn release_notice(
-    checked: Result<Option<update::CheckResult>, &'static str>,
-    enabled_dir: impl FnOnce() -> Option<PathBuf>,
-    cached_notice: impl FnOnce(&Path) -> Option<update::CheckResult>,
-) -> Value {
-    let notice = match checked {
-        Ok(checked) => checked.filter(|notice| notice.available && enabled_dir().is_some()),
-        Err(error) => {
-            host::log_release_check_error(error);
-            enabled_dir().and_then(|dir| cached_notice(&dir))
-        }
-    };
-    notice.map_or(Value::Null, |notice| {
-        json!({
-            "version":notice.release.version,
-            "severity":notice.release.severity,
-            "releaseNotesUrl":notice.release.release_notes_url,
-        })
-    })
-}
 
 fn public_method(method: &str) -> bool {
     matches!(
@@ -95,7 +71,6 @@ fn public_method(method: &str) -> bool {
             | "copyText"
             | "pickExecutable"
             | "openConfigFolder"
-            | "checkRelease"
             | "openReleaseNotes"
     )
 }
@@ -133,19 +108,9 @@ fn native_or_manager(app: &tauri::AppHandle, request: Value) -> Result<Value, St
         return host_connection::call(request);
     }
     match request["method"].as_str().unwrap_or("") {
-        "checkRelease" => {
-            let Some(dir) = host::release_check_dir() else {
-                return Ok(Value::Null);
-            };
-            Ok(release_notice(
-                update::check_daily(&dir, VERSION, host::log_release_check_error),
-                host::release_check_dir,
-                |dir| update::cached_notice(dir, VERSION),
-            ))
-        }
         "openReleaseNotes" => {
-            if let Some(notice) =
-                host::release_check_dir().and_then(|dir| update::cached_notice(&dir, VERSION))
+            if let Some(notice) = host::release_check_dir()
+                .and_then(|dir| gamelink_core::update::cached_notice(&dir, VERSION))
             {
                 app.opener()
                     .open_url(notice.release.release_notes_url, None::<&str>)
@@ -252,6 +217,8 @@ fn main() {
         }));
     #[cfg(not(windows))]
     let builder = builder.plugin(tauri_plugin_notification::init());
+    #[cfg(target_os = "linux")]
+    let builder = builder.plugin(tauri_plugin_process::init());
     #[cfg(windows)]
     let builder = builder.on_window_event(|window, event| {
         if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
@@ -262,7 +229,13 @@ fn main() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![desktop])
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updater::UpdateState::default())
+        .invoke_handler(tauri::generate_handler![
+            desktop,
+            updater::check_release,
+            updater::install_update
+        ])
         .setup(move |app| {
             let session = bridge::Session::open().map_err(std::io::Error::other)?;
             app.manage(session);
@@ -320,45 +293,6 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn failed_release_check_returns_the_cached_notice_in_its_response() {
-        let dir = tempfile::tempdir().unwrap();
-        let response = release_notice(
-            Err("offline"),
-            || Some(dir.path().to_path_buf()),
-            |path| {
-                assert_eq!(path, dir.path());
-                Some(update::CheckResult {
-                    installed_version: VERSION.into(),
-                    checked_at: "2026-11-17T00:00:00Z".into(),
-                    available: true,
-                    release: update::Manifest {
-                        schema_version: 1,
-                        version: "1.1.0".into(),
-                        release_date: "2026-11-17".into(),
-                        severity: update::Severity::Security,
-                        release_notes_url: "https://example.org/releases/next".into(),
-                        artifacts: vec![],
-                    },
-                })
-            },
-        );
-        assert_eq!(
-            response,
-            json!({
-                "version": "1.1.0",
-                "severity": "security",
-                "releaseNotesUrl": "https://example.org/releases/next",
-            })
-        );
-        assert_eq!(
-            release_notice(Err("offline"), || None, |_| panic!("updates disabled")),
-            Value::Null
-        );
-    }
-
     #[test]
     fn webview_cannot_control_ownership() {
         for method in [

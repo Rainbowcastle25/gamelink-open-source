@@ -206,7 +206,15 @@ export interface ReleaseNotice {
   version: string;
   severity: "normal" | "security";
   releaseNotesUrl: string;
+  summary: string | null;
+  canInstall: boolean;
+  installerError: string | null;
 }
+
+export type UpdateProgress =
+  | { stage: "downloading"; downloaded: number; total: number | null }
+  | { stage: "verifying" }
+  | { stage: "installing" };
 
 /**
  * Event is one entry of the activity history.

@@ -172,5 +172,10 @@ jobs:
           if [[ "$RELEASE_TAG" == *-* ]]; then
             flags+=(--prerelease --latest=false)
           fi
+          notes="$(jq -r '.notes // ""' latest.json)"
+          if [[ -n "$notes" ]]; then
+            notes+=$'\n\n'
+          fi
+          notes+='Windows installers lack Authenticode signing, so Windows SmartScreen may warn when you run them.'
           gh release create "$RELEASE_TAG" ./* --repo "$GITHUB_REPOSITORY" "${flags[@]}" \
-            --notes 'Windows installers lack Authenticode signing, so Windows SmartScreen may warn when you run them.'
+            --notes "$notes"

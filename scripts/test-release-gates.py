@@ -107,6 +107,19 @@ class ReleaseGates(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "embedded Tauri updater pin"):
             check_binary_pins(f"{manifest} {other}requireSignedVersion".encode(), "desktop", pins, desktop=True)
 
+    def test_inline_summary_bytes_match_the_manifest_asset(self):
+        out = self.work / "summaries"
+        out.mkdir()
+        payloads = []
+        self.assertEqual(release.add_release_summary("", out, payloads), "")
+        self.assertEqual(payloads, [])
+        summary = release.add_release_summary("Fix connection drops.\n Add an updater.", out, payloads)
+        self.assertEqual(summary, "Fix connection drops. Add an updater.")
+        self.assertEqual([path.name for path in payloads], ["release-summary.txt"])
+        self.assertEqual(payloads[0].read_bytes(), summary.encode("utf-8"))
+        with self.assertRaisesRegex(ValueError, "512 UTF-8 bytes"):
+            release.add_release_summary("é" * 257, out, [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
