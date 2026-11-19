@@ -309,7 +309,8 @@ fn replace_appimage(
         .set_permissions(Permissions::from_mode(original.mode() & 0o755))?;
     staged.as_file().sync_all()?;
     staged.persist(live).map_err(|error| error.error)?;
-    Ok(())
+    // Make the rename itself durable before reporting success.
+    directory.sync_all()
 }
 
 #[cfg(any(windows, test))]

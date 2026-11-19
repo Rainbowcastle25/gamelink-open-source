@@ -75,9 +75,10 @@ signatures and the license archive.
 
 Once published, keep the artifacts and signed metadata immutable. Assign a
 newer version for any change. GitHub's latest alias excludes prereleases.
-To check a prerelease for release notices or to use a mirror, set
-`GAMELINK_UPDATE_MANIFEST_URL` in the environment before launching GameLink or
-running `gamelink-agent update check`. The URL must use HTTPS and have no
+Release builds always use the GitHub feed above. In debug builds only, you can
+check a prerelease or a mirror by setting `GAMELINK_UPDATE_MANIFEST_URL` in the
+environment before launching GameLink or running
+`gamelink-agent update check`. Release builds ignore it. The URL must use HTTPS and have no
 credentials, query or fragment. Serve the signature at the same URL with
 `.minisig` appended. The asset limits are 64 KiB for the manifest and 4 KiB for
 the signature.
