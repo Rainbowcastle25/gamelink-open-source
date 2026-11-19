@@ -176,6 +176,8 @@ export interface SettingsView {
     "autoReconnect": boolean;
     "checkOnStartup": boolean;
     "checkForUpdates": boolean;
+    /** Read-only: false when this build has no release verification key. */
+    "canCheckForUpdates": boolean;
     "verboseLogging": boolean;
     "allowLocalRelay": boolean;
     "minecraftServerList": boolean;

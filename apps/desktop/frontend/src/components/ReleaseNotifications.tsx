@@ -7,7 +7,7 @@ import type { ReleaseNotice, SettingsView } from "../lib/types";
 
 export function ReleaseNotifications() {
   const { settings } = useAppState();
-  return settings?.checkForUpdates && <EnabledNotifications settings={settings} />;
+  return settings?.checkForUpdates && settings.canCheckForUpdates && <EnabledNotifications settings={settings} />;
 }
 
 function EnabledNotifications({ settings }: { settings: SettingsView }) {

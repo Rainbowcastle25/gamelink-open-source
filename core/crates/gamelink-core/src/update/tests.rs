@@ -18,14 +18,23 @@ fn signed(key: &KeyPair, manifest: String, checked_at: u64) -> SignedRelease {
         .unwrap()
         .into_string();
     SignedRelease {
-        checked_at,
+        checked_at: Some(checked_at),
         manifest,
         signature,
     }
 }
 
+fn quiet(_: &'static str) {}
+
 fn verifier(key: &KeyPair) -> PublicKey {
     PublicKey::from_base64(&key.pk.to_base64()).unwrap()
+}
+
+fn corrupt_attempt_metadata(dir: &Path) {
+    let path = dir.join(CACHE);
+    let mut cache: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    cache["lastAttemptSucceeded"] = json!("damaged");
+    storage::write_atomic(&path, &serde_json::to_vec(&cache).unwrap()).unwrap();
 }
 
 #[test]
@@ -121,7 +130,7 @@ fn replay_below_last_verified_version_is_rejected() {
     let keys = &[verifier(&key)];
     let installed = Version::new(1, 0, 0);
     let check = |version, now| {
-        check_at(dir.path(), &installed, keys, false, now, |now| {
+        check_at(dir.path(), &installed, keys, false, now, quiet, |now| {
             Ok(signed(&key, manifest(version).to_string(), now))
         })
     };
@@ -130,7 +139,12 @@ fn replay_below_last_verified_version_is_rejected() {
         check("1.2.0", 2).unwrap_err(),
         "release manifest is older than the last verified release"
     );
-    let cache = load_cache(dir.path()).unwrap();
+    corrupt_attempt_metadata(dir.path());
+    assert_eq!(
+        check("1.2.0", 3).unwrap_err(),
+        "release manifest is older than the last verified release"
+    );
+    let cache = load_cache(dir.path(), quiet);
     assert!(!cache.last_attempt_succeeded);
     let retained = result(&installed, &cache.signed.unwrap(), keys).unwrap();
     assert_eq!(retained.release.version, "1.3.0");
@@ -143,12 +157,12 @@ fn automatic_checks_keep_a_24_hour_limit_even_after_failed_attempts() {
     let keys = &[verifier(&key)];
     let installed = Version::new(1, 0, 0);
     let check = |now| {
-        check_at(dir.path(), &installed, keys, true, now, |_| {
+        check_at(dir.path(), &installed, keys, true, now, quiet, |_| {
             Err("network failure")
         })
     };
     assert_eq!(check(10).unwrap_err(), "network failure");
-    assert!(check(9).unwrap().is_none(), "clock moved backwards");
+    assert!(check(11).unwrap().is_none());
     assert!(check(10 + DAY - 1).unwrap().is_none());
     assert_eq!(check(10 + DAY).unwrap_err(), "network failure");
 }
@@ -159,23 +173,160 @@ fn automatic_checks_reuse_verified_result_until_due() {
     let key = KeyPair::generate_unencrypted_keypair().unwrap();
     let keys = &[verifier(&key)];
     let installed = Version::new(1, 0, 0);
-    let first = check_at(dir.path(), &installed, keys, true, 1, |now| {
+    let first = check_at(dir.path(), &installed, keys, true, 1, quiet, |now| {
         Ok(signed(&key, manifest("1.1.0").to_string(), now))
     })
     .unwrap()
     .unwrap();
-    let second = check_at(dir.path(), &installed, keys, true, 2, |_| {
+    let second = check_at(dir.path(), &installed, keys, true, 2, quiet, |_| {
         panic!("early fetch")
     })
     .unwrap()
     .unwrap();
     assert_eq!(first.checked_at, second.checked_at);
     assert!(second.available);
-    let mut cache = load_cache(dir.path()).unwrap();
-    cache.signed.as_mut().unwrap().manifest.push('?');
+}
+
+#[test]
+fn signature_corruption_is_repaired_before_cooldown_expires() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = KeyPair::generate_unencrypted_keypair().unwrap();
+    let keys = &[verifier(&key)];
+    let installed = Version::new(1, 0, 0);
+    check_at(dir.path(), &installed, keys, true, 1, quiet, |now| {
+        Ok(signed(&key, manifest("1.1.0").to_string(), now))
+    })
+    .unwrap();
+    let mut cache = load_cache(dir.path(), quiet);
+    cache.signed.as_mut().unwrap().signature = "damaged".into();
     save_cache(dir.path(), &cache).unwrap();
-    assert!(check_at(dir.path(), &installed, keys, true, 3, |_| panic!(
-        "early fetch"
-    ))
-    .is_err());
+    let repaired = check_at(dir.path(), &installed, keys, true, 2, quiet, |now| {
+        Ok(signed(&key, manifest("1.2.0").to_string(), now))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(repaired.release.version, "1.2.0");
+    let cache = load_cache(dir.path(), quiet);
+    assert_eq!(
+        result(&installed, &cache.signed.unwrap(), keys)
+            .unwrap()
+            .release
+            .version,
+        "1.2.0"
+    );
+}
+
+#[test]
+fn failed_attempt_keeps_returning_the_verified_notice() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = KeyPair::generate_unencrypted_keypair().unwrap();
+    let keys = &[verifier(&key)];
+    let installed = Version::new(1, 0, 0);
+    check_at(dir.path(), &installed, keys, true, 1, quiet, |now| {
+        Ok(signed(&key, manifest("1.1.0").to_string(), now))
+    })
+    .unwrap();
+    assert_eq!(
+        check_at(dir.path(), &installed, keys, true, 1 + DAY, quiet, |_| Err(
+            "offline"
+        ))
+        .unwrap_err(),
+        "offline"
+    );
+    let reused = check_at(dir.path(), &installed, keys, true, 2 + DAY, quiet, |_| {
+        panic!("not due")
+    })
+    .unwrap()
+    .unwrap();
+    assert!(reused.available);
+    assert_eq!(reused.release.version, "1.1.0");
+}
+
+#[test]
+fn last_attempt_in_the_future_is_due() {
+    assert!(due(Some(20), 10));
+    assert!(!due(Some(10), 11));
+    let dir = tempfile::tempdir().unwrap();
+    let key = KeyPair::generate_unencrypted_keypair().unwrap();
+    let installed = Version::new(1, 0, 0);
+    let check = |now| {
+        check_at(
+            dir.path(),
+            &installed,
+            &[verifier(&key)],
+            true,
+            now,
+            quiet,
+            |_| Err("network failure"),
+        )
+    };
+    assert_eq!(check(10 * DAY).unwrap_err(), "network failure");
+    assert_eq!(
+        check(DAY).unwrap_err(),
+        "network failure",
+        "clock moved back"
+    );
+}
+
+#[test]
+fn corrupt_cache_is_treated_as_empty_and_repaired() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    fn debug(message: &'static str) {
+        assert_eq!(message, "ignoring invalid release check cache");
+        LOGGED.store(true, Ordering::SeqCst);
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(CACHE), b"not json").unwrap();
+    let key = KeyPair::generate_unencrypted_keypair().unwrap();
+    let keys = &[verifier(&key)];
+    let installed = Version::new(1, 0, 0);
+    let checked = check_at(dir.path(), &installed, keys, true, 1, debug, |now| {
+        Ok(signed(&key, manifest("1.1.0").to_string(), now))
+    })
+    .unwrap()
+    .unwrap();
+    assert!(checked.available);
+    assert!(LOGGED.load(Ordering::SeqCst));
+    let repaired = load_cache(dir.path(), |_| panic!("cache still corrupt"));
+    assert_eq!(
+        result(&installed, &repaired.signed.unwrap(), keys)
+            .unwrap()
+            .release
+            .version,
+        "1.1.0"
+    );
+}
+
+#[test]
+fn same_version_with_different_signed_bytes_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = KeyPair::generate_unencrypted_keypair().unwrap();
+    let keys = &[verifier(&key)];
+    let installed = Version::new(1, 0, 0);
+    let check = |manifest: String, now| {
+        check_at(dir.path(), &installed, keys, false, now, quiet, |now| {
+            Ok(signed(&key, manifest, now))
+        })
+    };
+    let original = manifest("1.1.0").to_string();
+    check(original.clone(), 1).unwrap();
+    let mut resigned = manifest("1.1.0");
+    resigned["releaseNotesUrl"] = json!("https://example.org/elsewhere");
+    assert_eq!(
+        check(resigned.to_string(), 2).unwrap_err(),
+        "release manifest changed after publication"
+    );
+    corrupt_attempt_metadata(dir.path());
+    assert_eq!(
+        check(resigned.to_string(), 3).unwrap_err(),
+        "release manifest changed after publication"
+    );
+    assert!(check(original, 4).is_ok(), "identical bytes stay accepted");
+    let cache = load_cache(dir.path(), quiet);
+    let kept = result(&installed, &cache.signed.unwrap(), keys).unwrap();
+    assert_eq!(
+        kept.release.release_notes_url,
+        "https://example.org/releases/next"
+    );
 }

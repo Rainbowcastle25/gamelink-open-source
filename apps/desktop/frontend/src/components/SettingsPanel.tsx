@@ -275,8 +275,20 @@ export function SettingsPanel() {
 
       <Section title="About">
         <Row title="Version" description={version ? `${version.app} ${version.version}` : "Unknown"} />
-        <Row title="Check for updates" description="Check for signed release notices once a day while GameLink is open. You install updates yourself.">
-          <Toggle label="Check for updates" checked={settings.checkForUpdates} onChange={(v) => void store.updateSettings({ checkForUpdates: v })} />
+        <Row
+          title="Check for updates"
+          description={
+            settings.canCheckForUpdates
+              ? "Check for signed release notices once a day while GameLink is open. You install updates yourself."
+              : "This build can't check for updates because it has no release verification key."
+          }
+        >
+          <Toggle
+            label="Check for updates"
+            checked={settings.checkForUpdates && settings.canCheckForUpdates}
+            disabled={!settings.canCheckForUpdates}
+            onChange={(v) => void store.updateSettings({ checkForUpdates: v })}
+          />
         </Row>
         <Row title="Transport" description={version?.transport ?? "Unknown"} />
         <Row

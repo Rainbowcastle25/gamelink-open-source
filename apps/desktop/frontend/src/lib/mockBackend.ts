@@ -238,6 +238,7 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
     autoReconnect: true,
     checkOnStartup: true,
     checkForUpdates: false,
+    canCheckForUpdates: true,
     verboseLogging: false,
     allowLocalRelay: false,
     minecraftServerList: false,

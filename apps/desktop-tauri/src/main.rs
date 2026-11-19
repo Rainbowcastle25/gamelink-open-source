@@ -10,9 +10,12 @@ mod windows_notice;
 
 use gamelink_core::update;
 use serde_json::{json, Value};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 use tauri::{Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -22,6 +25,27 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn release_notice(
+    checked: Result<Option<update::CheckResult>, &'static str>,
+    enabled_dir: impl FnOnce() -> Option<PathBuf>,
+    cached_notice: impl FnOnce(&Path) -> Option<update::CheckResult>,
+) -> Value {
+    let notice = match checked {
+        Ok(checked) => checked.filter(|notice| notice.available && enabled_dir().is_some()),
+        Err(error) => {
+            host::log_release_check_error(error);
+            enabled_dir().and_then(|dir| cached_notice(&dir))
+        }
+    };
+    notice.map_or(Value::Null, |notice| {
+        json!({
+            "version":notice.release.version,
+            "severity":notice.release.severity,
+            "releaseNotesUrl":notice.release.release_notes_url,
+        })
+    })
+}
 
 fn public_method(method: &str) -> bool {
     matches!(
@@ -109,20 +133,11 @@ fn native_or_manager(app: &tauri::AppHandle, request: Value) -> Result<Value, St
             let Some(dir) = host::release_check_dir() else {
                 return Ok(Value::Null);
             };
-            match update::check_daily(&dir, VERSION) {
-                Ok(Some(checked)) if checked.available && host::release_check_dir().is_some() => {
-                    Ok(json!({
-                        "version":checked.release.version,
-                        "severity":checked.release.severity,
-                        "releaseNotesUrl":checked.release.release_notes_url,
-                    }))
-                }
-                Ok(_) => Ok(Value::Null),
-                Err(error) => {
-                    host::log_release_check_error(error);
-                    Ok(Value::Null)
-                }
-            }
+            Ok(release_notice(
+                update::check_daily(&dir, VERSION, host::log_release_check_error),
+                host::release_check_dir,
+                |dir| update::cached_notice(dir, VERSION),
+            ))
         }
         "openReleaseNotes" => {
             if let Some(notice) =
@@ -293,6 +308,45 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_release_check_returns_the_cached_notice_in_its_response() {
+        let dir = tempfile::tempdir().unwrap();
+        let response = release_notice(
+            Err("offline"),
+            || Some(dir.path().to_path_buf()),
+            |path| {
+                assert_eq!(path, dir.path());
+                Some(update::CheckResult {
+                    installed_version: VERSION.into(),
+                    checked_at: "2026-11-17T00:00:00Z".into(),
+                    available: true,
+                    release: update::Manifest {
+                        schema_version: 1,
+                        version: "1.1.0".into(),
+                        release_date: "2026-11-17".into(),
+                        severity: update::Severity::Security,
+                        release_notes_url: "https://example.org/releases/next".into(),
+                        artifacts: vec![],
+                    },
+                })
+            },
+        );
+        assert_eq!(
+            response,
+            json!({
+                "version": "1.1.0",
+                "severity": "security",
+                "releaseNotesUrl": "https://example.org/releases/next",
+            })
+        );
+        assert_eq!(
+            release_notice(Err("offline"), || None, |_| panic!("updates disabled")),
+            Value::Null
+        );
+    }
+
     #[test]
     fn webview_cannot_control_ownership() {
         for method in [
