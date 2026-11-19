@@ -245,6 +245,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+          # Reuse Gradle's dependency and wrapper caches; fresh downloads from
+          # the plugin portal and Maven Central have failed this job before.
+          cache: gradle
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.100.0
