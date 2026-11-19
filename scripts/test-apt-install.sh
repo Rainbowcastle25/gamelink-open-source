@@ -36,21 +36,58 @@ else
 #!/bin/sh
 set -eu
 proof=/var/lib/gamelink-agent/apt-proof
+wants=/etc/systemd/system/multi-user.target.wants/gamelink-agent.service
+runtime_wants=/run/systemd/system/multi-user.target.wants/gamelink-agent.service
 case "$*" in
     daemon-reload) ;;
     'show --property=ActiveState --value gamelink-agent.service')
         if [ -e /run/gamelink-running ]; then echo active; else echo inactive; fi
         ;;
-    'is-active --quiet gamelink-agent.service')
+    'is-active --quiet gamelink-agent.service'|'--system --quiet is-active -- gamelink-agent.service')
         test -e /run/gamelink-running
         ;;
-    'stop gamelink-agent.service')
+    'is-enabled gamelink-agent.service'|'--system is-enabled -- gamelink-agent.service')
+        if [ -L /etc/systemd/system/gamelink-agent.service ] &&
+            [ "$(readlink /etc/systemd/system/gamelink-agent.service)" = /dev/null ]; then
+            echo masked
+            exit 1
+        elif [ -L "$wants" ]; then
+            echo enabled
+        elif [ -L "$runtime_wants" ]; then
+            echo enabled-runtime
+        else
+            echo disabled
+            exit 1
+        fi
+        ;;
+    'enable gamelink-agent.service')
+        install -d "${wants%/*}"
+        ln -sf /lib/systemd/system/gamelink-agent.service "$wants"
+        ;;
+    'enable --runtime gamelink-agent.service')
+        install -d "${runtime_wants%/*}"
+        ln -sf /lib/systemd/system/gamelink-agent.service "$runtime_wants"
+        ;;
+    'disable gamelink-agent.service'|'disable --now gamelink-agent.service')
+        if [ -L "$wants" ]; then unlink "$wants"; fi
+        if [ "$2" = --now ]; then systemctl stop "$3"; fi
+        ;;
+    'disable --runtime gamelink-agent.service')
+        if [ -L "$runtime_wants" ]; then unlink "$runtime_wants"; fi
+        ;;
+    'mask gamelink-agent.service')
+        ln -s /dev/null /etc/systemd/system/gamelink-agent.service
+        ;;
+    'unmask gamelink-agent.service')
+        unlink /etc/systemd/system/gamelink-agent.service
+        ;;
+    'stop gamelink-agent.service'|'--quiet --system stop gamelink-agent.service')
         if [ -e /run/gamelink-running ]; then
             stat -c %i /usr/bin/gamelink-agent > "$proof/stop-inode"
             unlink /run/gamelink-running
         fi
         ;;
-    'start gamelink-agent.service'|'reload-or-restart gamelink-agent.service')
+    'start gamelink-agent.service'|'reload-or-restart gamelink-agent.service'|'--quiet --system start gamelink-agent.service')
         stat -c %i /usr/bin/gamelink-agent > "$proof/start-inode"
         touch /run/gamelink-running
         ;;
@@ -63,7 +100,9 @@ cat > /usr/sbin/policy-rc.d <<'POLICY'
 #!/bin/sh
 [ "$1" = gamelink-agent.service ] || exit 101
 [ ! -e /run/gamelink-deny-service ] || exit 101
-if [ -e /run/gamelink-deny-start ] && [ "$2" != stop ]; then exit 101; fi
+if [ -e /run/gamelink-deny-start ]; then
+    case "$2" in start|restart) exit 101 ;; esac
+fi
 exit 0
 POLICY
 chmod 0755 /usr/sbin/policy-rc.d
@@ -125,6 +164,13 @@ useradd --system --no-create-home gamelink-collision
 gpasswd -a gamelink-collision gamelink
 reject_install "$account_error"
 gpasswd -d gamelink-collision gamelink
+# Reject a second name for the same numeric GID, with or without members.
+groupadd --non-unique --gid "$(id -g gamelink)" gamelink-alias
+gpasswd -a gamelink-collision gamelink-alias
+reject_install "$account_error"
+gpasswd -d gamelink-collision gamelink-alias
+reject_install "$account_error"
+groupdel --force gamelink-alias
 usermod --gid gamelink gamelink-collision
 reject_install "$account_error"
 userdel gamelink-collision
@@ -148,7 +194,6 @@ check_install() {
     getent passwd gamelink
     test "$(stat -c '%U:%G:%a' "$state")" = "gamelink:gamelink:700"
     test -f /lib/systemd/system/gamelink-agent.service
-    test ! -e /etc/systemd/system/multi-user.target.wants/gamelink-agent.service
     test ! -e /lib/systemd/system/gamelink-agent-update.path
 }
 check_state() {
@@ -162,10 +207,14 @@ check_inactive() {
         exit 1
     fi
 }
+check_disabled() {
+    test "$(systemctl is-enabled "$unit" || :)" = disabled
+}
 
 check_install "$previous"
 check_state
 check_inactive
+check_disabled
 
 ln -sfn /proof/upgrade /repo
 apt_get update
@@ -178,15 +227,18 @@ check_install "$current"
 grep -Fx '# Local full override' "/etc/systemd/system/$unit"
 unlink "/etc/systemd/system/$unit"
 check_inactive
+check_disabled
 test ! -e "$proof/start-inode"
 test "$(stat -c '%i:%z' "$state")" = "$state_before"
 
 apt_get install -y --allow-downgrades "gamelink-agent=$previous"
 check_install "$previous"
 check_inactive
+check_disabled
 test "$(stat -c '%i:%z' "$state")" = "$state_before"
 
 runuser -u gamelink -- env GAMELINK_AGENT_DIR="$state/config" gamelink-agent init
+systemctl enable "$unit"
 systemctl start "$unit"
 systemctl is-active --quiet "$unit"
 before=$(stat -c %i /usr/bin/gamelink-agent)
@@ -224,7 +276,7 @@ test ! -e "$restart"
 unlink "$proof/stop-inode"
 unlink "$proof/start-inode"
 
-# Policy can allow the stop and block restoration, including during rollback.
+# Policy can deny start and restart while still allowing reload-or-restart.
 touch /run/gamelink-deny-start
 reject_unpack /tmp/gamelink-abort.deb
 check_install "$previous"
@@ -257,11 +309,21 @@ systemctl is-active --quiet "$unit"
 test "$(stat -c %i /usr/bin/gamelink-agent)" = "$after"
 unlink /run/gamelink-deny-service
 
+systemctl disable "$unit"
 apt_get remove -y gamelink-agent
 check_inactive
 test "$(cat "$proof/stop-inode")" = "$after"
 test ! -e /usr/bin/gamelink-agent
 check_state
+# A package left in config-files state does not own a unit on disk.
+test "$(dpkg-query -W -f='${db:Status-Status}' gamelink-agent)" = config-files
+test ! -e "/lib/systemd/system/$unit"
+for path in "/etc/systemd/system/$unit" /usr/local/bin/gamelink-agent; do
+    ln -s /nonexistent "$path"
+    reject_install "GameLink manual installation found at $path"
+    test ! -e /usr/bin/gamelink-agent
+    unlink "$path"
+done
 apt_get purge -y gamelink-agent
 check_inactive
 check_state
@@ -276,12 +338,14 @@ groupdel gamelink
 apt_get install -y gamelink-agent
 check_install "$current"
 check_inactive
+check_disabled
 
 # v2 is still unpacked after v3 rolls back. v1's restart request
 # cannot restore v2 as part of v3's rollback or a later configure.
 apt_get install -y --allow-downgrades "gamelink-agent=$previous"
 runuser -u gamelink -- env GAMELINK_AGENT_DIR="$state/config" gamelink-agent init
 install -d -o gamelink -g gamelink -m 0700 "$proof"
+systemctl enable "$unit"
 systemctl start "$unit"
 unlink "$proof/start-inode"
 dpkg --unpack "$current_deb"
@@ -290,6 +354,22 @@ test -f "$restart"
 sed -i "s/^Version:.*/Version: $current+rollback-test/" /tmp/gamelink-abort/DEBIAN/control
 dpkg-deb --build --root-owner-group /tmp/gamelink-abort /tmp/gamelink-abort-newer.deb
 reject_unpack /tmp/gamelink-abort-newer.deb
+test "$(dpkg-query -W -f='${db:Status-Status} ${Version}' gamelink-agent)" = "unpacked $current"
+check_inactive
+test ! -e "$proof/start-inode"
+test ! -e "$restart"
+dpkg --configure gamelink-agent
+check_install "$current"
+check_inactive
+
+# Unpacking the same version twice must discard the first restart request
+# before the second unpack can roll back to an unconfigured package.
+systemctl start "$unit"
+unlink "$proof/start-inode"
+dpkg --unpack "$current_deb"
+check_inactive
+test -f "$restart"
+reject_unpack /tmp/gamelink-abort.deb
 test "$(dpkg-query -W -f='${db:Status-Status} ${Version}' gamelink-agent)" = "unpacked $current"
 check_inactive
 test ! -e "$proof/start-inode"
@@ -311,3 +391,50 @@ check_inactive
 test ! -e "$proof/start-inode"
 test ! -e "$restart"
 unlink /run/gamelink-deny-start
+
+# Respect enablement changes made after unpack stopped the running unit.
+for change in disable mask runtime; do
+    systemctl start "$unit"
+    unlink "$proof/start-inode"
+    dpkg --unpack "$current_deb"
+    check_inactive
+    test -f "$restart"
+    case "$change" in
+        disable) systemctl disable --now "$unit" ;;
+        mask) systemctl mask "$unit" ;;
+        runtime)
+            systemctl disable "$unit"
+            systemctl enable --runtime "$unit"
+            ;;
+    esac
+    dpkg --configure gamelink-agent
+    check_install "$current"
+    check_inactive
+    test ! -e "$proof/start-inode"
+    test ! -e "$restart"
+    case "$change" in
+        disable) check_disabled; systemctl enable "$unit" ;;
+        mask)
+            test "$(systemctl is-enabled "$unit" || :)" = masked
+            systemctl unmask "$unit"
+            ;;
+        runtime)
+            test "$(systemctl is-enabled "$unit")" = enabled-runtime
+            systemctl disable --runtime "$unit"
+            systemctl enable "$unit"
+            ;;
+    esac
+done
+
+# A manually started disabled unit is stopped for unpack and stays stopped.
+systemctl disable "$unit"
+systemctl start "$unit"
+unlink "$proof/start-inode"
+dpkg --unpack "$current_deb"
+check_inactive
+test ! -e "$restart"
+dpkg --configure gamelink-agent
+check_install "$current"
+check_inactive
+check_disabled
+test ! -e "$proof/start-inode"

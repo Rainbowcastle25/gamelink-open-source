@@ -30,10 +30,14 @@ case "$1" in
             system_id GID "$gid" || account_collision
             [ "$(id -g gamelink)" = "$gid" ] && \
                 [ "$(id -gn gamelink)" = gamelink ] || account_collision
-            case "${group##*:}" in
-                ''|gamelink) ;;
-                *) account_collision ;;
-            esac
+            group_entries=$(getent group) || account_collision
+            printf '%s\n' "$group_entries" | awk -F: -v gid="$gid" '
+                $3 == gid {
+                    if ($1 != "gamelink" || ($4 != "" && $4 != "gamelink")) exit 1
+                    found = 1
+                }
+                END { if (!found) exit 1 }
+            ' || account_collision
             accounts=$(getent passwd) || account_collision
             printf '%s\n' "$accounts" | awk -F: -v gid="$gid" '
                 $4 == gid && $1 != "gamelink" { exit 1 }
@@ -79,12 +83,20 @@ restart=/run/gamelink-agent-restart
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload
 fi
-if [ -f "$restart" ]; then
-    if [ -d /run/systemd/system ] && read -r old new < "$restart" &&
-        [ "$old" = "${2:-}" ] &&
-        [ "$new" = "$(dpkg-query -W -f='${Version}' gamelink-agent)" ]; then
-        # The unit may have been started manually while disabled.
-        deb-systemd-invoke reload-or-restart gamelink-agent.service
-    fi
+if [ -f "$restart" ] && read -r old new active enabled < "$restart" &&
+    [ "$old" = "${2:-}" ] &&
+    [ "$new" = "$(dpkg-query -W -f='${Version}' gamelink-agent)" ]; then
     unlink "$restart"
+    case "$active" in active|reloading|refreshing) ;; *) exit 0 ;; esac
+    unit=gamelink-agent.service
+    if [ -d /run/systemd/system ] && [ -n "$enabled" ] &&
+        current_enabled=$(systemctl is-enabled "$unit") && [ "$current_enabled" = "$enabled" ]; then
+        policy=${DPKG_ROOT:-}/usr/sbin/policy-rc.d
+        # Only an explicit allow from the policy permits restoration.
+        status=0
+        if [ -x "$policy" ]; then "$policy" "$unit" start || status=$?; fi
+        case "$status" in
+            0|104) deb-systemd-invoke start "$unit" ;;
+        esac
+    fi
 fi

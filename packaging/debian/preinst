@@ -6,14 +6,26 @@ case "$1" in
     *) exit 0 ;;
 esac
 
-for path in /usr/local/bin/gamelink-agent /etc/systemd/system/gamelink-agent.service \
+# dpkg serializes unpack and its rollback. Even a same-version retry owns
+# a new restart request, so discard the previous attempt's request first.
+restart=/run/gamelink-agent-restart
+if [ -e "$restart" ] || [ -L "$restart" ]; then
+    unlink "$restart"
+fi
+
+unit=gamelink-agent.service
+override=/etc/systemd/system/$unit
+packaged_unit=/lib/systemd/system/$unit
+for path in /usr/local/bin/gamelink-agent "$override" \
     /etc/systemd/system/gamelink-agent-update.path /etc/systemd/system/gamelink-agent-update.service \
     /usr/local/bin/.gamelink-agent-update-helper; do
-    if [ "$path" = /etc/systemd/system/gamelink-agent.service ] &&
-        { [ "$1" = upgrade ] || [ -n "${2:-}" ]; }; then
-        continue
-    fi
     if [ -e "$path" ] || [ -L "$path" ]; then
+        # dpkg already reports half-installed here. It passes "install" from
+        # config-files and "upgrade" when replacing a package's existing files.
+        if [ "$path" = "$override" ] && [ "$1" = upgrade ] && [ -f "$packaged_unit" ] &&
+            dpkg-query -L gamelink-agent | grep -Fxq "$packaged_unit"; then
+            continue
+        fi
         echo "GameLink manual installation found at $path. Migrate before installing the package:" >&2
         echo "https://github.com/Rainbowcastle25/gamelink-open-source/blob/master/docs/agent-setup.md#migrate-a-manual-install-to-apt" >&2
         exit 1
@@ -21,13 +33,13 @@ for path in /usr/local/bin/gamelink-agent /etc/systemd/system/gamelink-agent.ser
 done
 
 if [ "$1" = upgrade ] && [ -d /run/systemd/system ]; then
-    unit=gamelink-agent.service
     state=$(systemctl show --property=ActiveState --value "$unit") || state=
     case "$state" in
         inactive|failed) exit 0 ;;
         active|activating|reloading|refreshing|deactivating) ;;
         *) echo "GameLink could not determine the service state before upgrading." >&2; exit 1 ;;
     esac
+    enabled=$(systemctl is-enabled "$unit") || enabled=
     # deb-systemd-invoke returns success when policy-rc.d denies the stop.
     if ! deb-systemd-invoke stop "$unit" ||
         ! stopped=$(systemctl show --property=ActiveState --value "$unit") ||
@@ -35,9 +47,12 @@ if [ "$1" = upgrade ] && [ -d /run/systemd/system ]; then
         echo "GameLink could not stop the service before upgrading. Check policy-rc.d and systemctl status $unit." >&2
         exit 1
     fi
-    if [ "$state" != deactivating ]; then
-        restart=/run/gamelink-agent-restart
-        install -m 0600 /dev/null "$restart"
-        printf '%s %s\n' "$2" "$3" > "$restart"
-    fi
+    case "$state" in active|reloading|refreshing) ;; *) exit 0 ;; esac
+    case "$enabled" in
+        enabled|enabled-runtime)
+            pending=$(mktemp "$restart.XXXXXX")
+            printf '%s %s %s %s\n' "$2" "$3" "$state" "$enabled" > "$pending"
+            mv -f "$pending" "$restart"
+            ;;
+    esac
 fi

@@ -122,6 +122,11 @@ enabling the service. Leave the signed binary-swap helper and its path unit
 disabled on apt installations. Part 2 will make desktop **Update all** use
 apt for these installations.
 
+During an apt upgrade, the package stops a running service before replacing
+the binary. It starts the service again only if it was running and enabled
+when the upgrade began, its enablement is still the same, and local service
+policy permits starting it.
+
 **Done when** `gl status --json` reports `"running": false` and no games.
 Continue to step 4a or 4b.
 
