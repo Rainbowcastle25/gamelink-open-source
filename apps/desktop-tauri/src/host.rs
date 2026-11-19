@@ -553,9 +553,10 @@ impl App {
             "offline" | "unreachable" => self.presence.observe(id, false, Instant::now()),
             "unknown"
                 if agent_answered
-                    && self
-                        .server(id)
-                        .is_ok_and(|s| s["proto"] == "udp" && s["game"] != "minecraft-bedrock") =>
+                    && self.server(id).is_ok_and(|s| {
+                        s["proto"] == "udp"
+                            && !matches!(s["game"].as_str(), Some("minecraft-bedrock" | "factorio"))
+                    }) =>
             {
                 self.presence.observe(id, true, Instant::now());
             }
@@ -1800,6 +1801,23 @@ mod tests {
         e.app.pump().unwrap();
         assert_eq!(e.check_view("s1")["state"], "online");
         assert!(e.app.presence.take_notice(Instant::now()).is_none());
+    }
+
+    #[test]
+    fn factorio_presence_requires_a_game_reply() {
+        let mut e = env();
+        e.add("factorio", "factorio", "udp", 34197);
+        let app = &mut e.app;
+        app.presence.set_enabled(true, Instant::now());
+        app.observe_presence("factorio", &json!({"state":"unreachable"}), false);
+        app.observe_presence("factorio", &json!({"state":"unknown"}), true);
+        assert!(app.presence.take_notice(Instant::now()).is_none());
+
+        app.observe_presence("factorio", &json!({"state":"online"}), true);
+        assert_eq!(
+            app.presence.take_notice(Instant::now()).as_deref(),
+            Some("factorio")
+        );
     }
 
     #[test]
