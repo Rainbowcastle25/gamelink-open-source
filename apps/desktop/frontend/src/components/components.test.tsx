@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createMockBackend } from "../lib/mockBackend";
+import { type GameLinkStore, useStore } from "../lib/store";
 import { conn, renderApp, sv } from "../test/utils";
 import { ConnectionPanel } from "./ConnectionPanel";
 import { ServerCard } from "./ServerCard";
@@ -43,6 +44,27 @@ describe("ServerList", () => {
     await waitFor(() => expect(tile.querySelector("img")).toHaveAttribute("src", src));
     fireEvent.error(tile.querySelector("img")!);
     expect(tile.querySelector("img")).toBeNull();
+    expect(tile.querySelector("svg")).toBeInTheDocument();
+  });
+
+  it("drops a game's icon when its executable changes and the new lookup fails", async () => {
+    const backend = createMockBackend({ delayMs: 0 });
+    const src = "data:image/png;base64,AA==";
+    const icons = vi.spyOn(backend, "gameIcons").mockResolvedValue({ factorio: src });
+    vi.spyOn(backend, "servers").mockResolvedValue([sv({ game: "factorio" })]);
+    let store!: GameLinkStore;
+    function Grab() {
+      store = useStore();
+      return null;
+    }
+    renderApp(<><Grab /><ServerList /></>, { backend });
+
+    const card = await screen.findByRole("article", { name: "Test Server" });
+    const tile = within(card).getByRole("img", { name: "Factorio" });
+    await waitFor(() => expect(tile.querySelector("img")).toHaveAttribute("src", src));
+    icons.mockRejectedValue(new Error("lookup failed"));
+    await act(() => store.setExecutable("factorio", "/games/other/bin/x64/factorio"));
+    await waitFor(() => expect(tile.querySelector("img")).toBeNull());
     expect(tile.querySelector("svg")).toBeInTheDocument();
   });
 });

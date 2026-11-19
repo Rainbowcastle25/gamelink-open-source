@@ -54,6 +54,7 @@ export class GameLinkStore {
   private refreshing = false;
   private refreshAgain = false;
   private iconLookup: { executables: string } | null = null;
+  private iconExecutables: Record<string, string | undefined> = {};
   /** Servers the player pressed Play on: launch the game once they connect. */
   private pendingPlay = new Set<string>();
 
@@ -179,8 +180,18 @@ export class GameLinkStore {
 
   private async refreshGameIcons(settings: SettingsView): Promise<void> {
     if (!this.active) return;
-    const executables = JSON.stringify(settings.gameExecutables ?? {});
+    const current: Record<string, string | undefined> = settings.gameExecutables ?? {};
+    const executables = JSON.stringify(current);
     if (this.iconLookup?.executables === executables) return;
+    // Drop icons whose executable changed, so a failed lookup falls back to the tile.
+    const previous = this.iconExecutables;
+    this.iconExecutables = current;
+    const stale = Object.keys(this.state.gameIcons).filter((game) => previous[game] !== current[game]);
+    if (stale.length) {
+      const gameIcons = { ...this.state.gameIcons };
+      for (const game of stale) delete gameIcons[game];
+      this.set({ gameIcons });
+    }
     const lookup = { executables };
     this.iconLookup = lookup;
     try {
