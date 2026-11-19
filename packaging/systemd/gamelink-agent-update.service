@@ -4,7 +4,7 @@ Description=Verify and install a staged GameLink agent update
 [Service]
 Type=oneshot
 User=root
-ExecStart=/usr/local/bin/gamelink-agent update install-staged
+ExecStart=/usr/local/bin/.gamelink-agent-update-helper update install-staged
 # Let the helper finish recovery even if stopping or starting the agent is slow.
 TimeoutStartSec=infinity
 

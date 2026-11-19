@@ -7,10 +7,11 @@ use gamelink_core::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{self, File, OpenOptions},
+    ffi::CString,
+    fs::{self, File, Metadata, OpenOptions},
     io::{self, Read, Write},
     os::unix::{
-        fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+        fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
         process::CommandExt,
     },
     path::{Path, PathBuf},
@@ -28,6 +29,7 @@ const REQUEST: &str = "request";
 const STAGE_STATUS: &str = "status.json";
 const PENDING: &str = "pending.json";
 const CLAIMED_REQUEST: &str = "claimed-request";
+const QUARANTINE: &str = "quarantine";
 const INSTALL_STATUS: &str = "install-status.json";
 const SWAP_LOCK: &str = "swap.lock";
 const HEALTH_WINDOW: Duration = Duration::from_secs(10);
@@ -60,6 +62,11 @@ impl Paths {
 
     fn backup(&self) -> PathBuf {
         self.installed.with_file_name(".gamelink-agent.previous")
+    }
+
+    fn helper(&self) -> PathBuf {
+        self.installed
+            .with_file_name(".gamelink-agent-update-helper")
     }
 
     fn candidate(&self) -> PathBuf {
@@ -272,7 +279,9 @@ impl Stage {
             .map_err(|_| QueueError::Unavailable)?;
         let check_cooldown = || {
             let status = paths.status(owner);
-            if status.updated_at != 0 && now.saturating_sub(status.updated_at) < COOLDOWN.as_secs()
+            if status.updated_at != 0
+                && status.updated_at <= now.saturating_add(COOLDOWN.as_secs())
+                && now.saturating_sub(status.updated_at) < COOLDOWN.as_secs()
             {
                 return Err(QueueError::Cooldown);
             }
@@ -281,10 +290,18 @@ impl Stage {
         check_cooldown()?;
         lock.try_lock().map_err(|_| QueueError::Busy)?;
         let previous = check_cooldown()?;
-        for path in [paths.update.join(PENDING), paths.marker()] {
-            if present(&path).map_err(|_| QueueError::Unavailable)? {
-                return Err(QueueError::Busy);
+        if present(&paths.update.join(PENDING)).map_err(|_| QueueError::Unavailable)? {
+            return Err(QueueError::Busy);
+        }
+        match fs::symlink_metadata(paths.marker()) {
+            // PathExists cannot trigger on a dangling symlink. Retire it
+            // under the staging lock without following its target.
+            Ok(meta) if meta.is_symlink() => {
+                remove_if_present(&paths.marker()).map_err(|_| QueueError::Unavailable)?;
             }
+            Ok(_) => return Err(QueueError::Busy),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => return Err(QueueError::Unavailable),
         }
         let status = Status {
             attempt: previous.attempt.saturating_add(1),
@@ -344,7 +361,7 @@ impl Stage {
             status.state = Phase::Staged;
             save_stage_status(&status_path, &status)?;
             // Publish the request only after all staged files and status exist.
-            storage::write_atomic(&self.paths.marker(), b"")?;
+            publish_request(&self.paths)?;
             Ok(version)
         })();
         if let Err(reason) = &result {
@@ -357,6 +374,11 @@ impl Stage {
         }
         result
     }
+}
+
+fn publish_request(paths: &Paths) -> Result<()> {
+    storage::write_atomic(&paths.marker(), b"")?;
+    sync_dir(&paths.staged()).map_err(|error| format!("could not sync staged request: {error}"))
 }
 
 fn require_expected(expected: Option<&str>, latest: &str) -> Result<()> {
@@ -510,6 +532,7 @@ enum InstallPhase {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Checkpoint {
+    Published(InstallPhase),
     Recorded(InstallPhase),
     Verified,
 }
@@ -557,8 +580,10 @@ impl Transaction {
                 temp.persist(paths.update.join(PENDING))
                     .map_err(|error| error.error)
             })
-            .and_then(|_| sync_dir(&paths.update))
             .map_err(|error| format!("could not save installer transaction: {error}"))?;
+        checkpoint(Checkpoint::Published(phase));
+        sync_dir(&paths.update)
+            .map_err(|error| format!("could not sync installer transaction: {error}"))?;
         checkpoint(Checkpoint::Recorded(phase));
         Ok(())
     }
@@ -581,6 +606,8 @@ fn lock_within(lock: &File, wait: Duration, name: &str) -> Result<()> {
 }
 
 fn sync_dir(path: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    tests::check_sync(path)?;
     open_dir(path)?.sync_all()
 }
 
@@ -599,22 +626,83 @@ fn claim_request(paths: &Paths, owner: u32) -> Result<()> {
         .map_err(|error| format!("could not claim the update request: {error}"))
 }
 
-fn retire_request(path: &Path) -> io::Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) if meta.is_dir() => fs::remove_dir_all(path),
-        Ok(_) => remove_if_present(path),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
+fn rename_noreplace(source: &Path, dest: &Path) -> io::Result<()> {
+    let source = CString::new(source.as_os_str().as_encoded_bytes())?;
+    let dest = CString::new(dest.as_os_str().as_encoded_bytes())?;
+    // SAFETY: Both paths are NUL-terminated and live throughout the syscall.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            dest.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
 
-fn finish(paths: &Paths) -> Result<()> {
+fn retire_request(paths: &Paths, staged_owner: u32) -> io::Result<()> {
+    let claimed = paths.update.join(CLAIMED_REQUEST);
+    match read_file(&claimed, 0, staged_owner) {
+        Ok(_) => return remove_if_present(&claimed),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => {}
+    }
+    let quarantine = paths.update.join(QUARANTINE);
+    match fs::DirBuilder::new().mode(0o700).create(&quarantine) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    let dir = open_dir(&quarantine)?;
+    check_metadata(&dir, paths.installer_uid, 0o700)?;
+    let slot = quarantine.join(REQUEST);
+    match slot.symlink_metadata() {
+        Ok(_) => {
+            // Keep one quarantined entry. Return the old entry to staging
+            // under an inactive name so gamelink can dispose of it without root.
+            tempfile::Builder::new()
+                .prefix(".retired-request-")
+                .disable_cleanup(true)
+                .make_in(paths.staged(), |dest| rename_noreplace(&slot, dest))?;
+            sync_dir(&paths.staged())?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::rename(claimed, slot)?;
+    dir.sync_all()
+}
+
+fn refresh_helper(paths: &Paths) -> io::Result<()> {
+    let next = paths.helper().with_extension("next");
+    remove_if_present(&next)?;
+    fs::hard_link(&paths.installed, &next)?;
+    fs::rename(&next, paths.helper())?;
+    // Recovery can replay this rename with both names already hard-linked.
+    remove_if_present(&next)
+}
+
+fn finish(paths: &Paths, staged_owner: u32, phase: InstallPhase) -> Result<()> {
     // The terminal phase must be durable before retiring rollback data.
     // Leave the root-owned path trigger in place until cleanup is durable.
-    remove_if_present(&paths.candidate())
+    sync_dir(&paths.update)
+        .and_then(|()| {
+            if phase == InstallPhase::Committed {
+                refresh_helper(paths)?;
+            }
+            Ok(())
+        })
+        .and_then(|()| remove_if_present(&paths.candidate()))
         .and_then(|()| remove_if_present(&paths.backup()))
         .and_then(|()| sync_dir(paths.bin_dir()))
-        .and_then(|()| retire_request(&paths.update.join(CLAIMED_REQUEST)))
+        .and_then(|()| retire_request(paths, staged_owner))
         .and_then(|()| sync_dir(&paths.update))
         .and_then(|()| {
             fs::rename(
@@ -647,6 +735,7 @@ where
     fn roll_back(
         &self,
         paths: &Paths,
+        staged_owner: u32,
         mut transaction: Transaction,
         reason: String,
         checkpoint: &impl Fn(Checkpoint),
@@ -656,7 +745,7 @@ where
         let reason = format!("{reason}; previous agent restarted");
         transaction.reason = Some(reason.clone());
         transaction.save(paths, InstallPhase::RolledBack, checkpoint)?;
-        finish(paths)?;
+        finish(paths, staged_owner, transaction.phase)?;
         Err(reason)
     }
 
@@ -677,16 +766,16 @@ where
                 }
                 transaction.reason = Some(reason);
                 transaction.save(paths, InstallPhase::Failed, checkpoint)?;
-                finish(paths)
+                finish(paths, staged_owner, transaction.phase)
             }
             InstallPhase::Stopping | InstallPhase::Swapped | InstallPhase::HealthChecking => {
                 // The exclusive CLI lock was acquired before these phases.
                 // The pending record guards new commands while recovering,
                 // so recovery needs only the root-owned installer lock.
-                self.roll_back(paths, transaction, reason, checkpoint)
+                self.roll_back(paths, staged_owner, transaction, reason, checkpoint)
             }
             InstallPhase::Committed | InstallPhase::RolledBack | InstallPhase::Failed => {
-                finish(paths)
+                finish(paths, staged_owner, transaction.phase)
             }
         }
     }
@@ -697,7 +786,7 @@ fn install<S, V>(
     staged_owner: u32,
     installed_version: &str,
     service: &Service<S, V>,
-    verify_installed: impl FnOnce() -> Result<()>,
+    verify_helper: impl FnOnce() -> Result<()>,
     checkpoint: impl Fn(Checkpoint),
 ) -> Result<()>
 where
@@ -726,7 +815,7 @@ where
         .map_err(|error| format!("could not open installer lock: {error}"))?;
     run.try_lock()
         .map_err(|_| "an agent installer is already running")?;
-    verify_installed()?;
+    verify_helper()?;
 
     if let Some(transaction) = paths.transaction(PENDING)? {
         return service.recover(paths, staged_owner, transaction, &checkpoint);
@@ -788,7 +877,7 @@ where
         Err(reason) => {
             transaction.reason = Some(String::clone(&reason));
             transaction.save(paths, InstallPhase::Failed, &checkpoint)?;
-            finish(paths)?;
+            finish(paths, staged_owner, transaction.phase)?;
             return Err(reason);
         }
     };
@@ -802,18 +891,18 @@ where
             .map_err(|error| format!("could not sync the new agent binary: {error}"))
     })();
     if let Err(reason) = swapped {
-        return service.roll_back(paths, transaction, reason, &checkpoint);
+        return service.roll_back(paths, staged_owner, transaction, reason, &checkpoint);
     }
     transaction.save(paths, InstallPhase::Swapped, &checkpoint)?;
     if let Err(reason) = service.action("start") {
-        return service.roll_back(paths, transaction, reason, &checkpoint);
+        return service.roll_back(paths, staged_owner, transaction, reason, &checkpoint);
     }
     transaction.save(paths, InstallPhase::HealthChecking, &checkpoint)?;
     if let Err(reason) = service.health(&paths.installed, &version) {
-        return service.roll_back(paths, transaction, reason, &checkpoint);
+        return service.roll_back(paths, staged_owner, transaction, reason, &checkpoint);
     }
     transaction.save(paths, InstallPhase::Committed, &checkpoint)?;
-    finish(paths)
+    finish(paths, staged_owner, transaction.phase)
 }
 
 fn verify_staged(
@@ -883,19 +972,30 @@ fn gamelink_account() -> Result<(u32, u32)> {
     Ok((account.pw_uid, account.pw_gid))
 }
 
-fn verify_current_binary(paths: &Paths) -> Result<()> {
+fn same_file(a: &Metadata, b: &Metadata) -> bool {
+    (a.dev(), a.ino()) == (b.dev(), b.ino())
+}
+
+fn verify_running_helper(paths: &Paths) -> Result<()> {
     let parent = fs::symlink_metadata(paths.bin_dir()).map_err(|error| error.to_string())?;
-    let installed = fs::symlink_metadata(&paths.installed).map_err(|error| error.to_string())?;
+    let helper = fs::symlink_metadata(paths.helper()).map_err(|error| error.to_string())?;
     let running = fs::metadata("/proc/self/exe").map_err(|error| error.to_string())?;
     if !parent.is_dir()
-        || parent.uid() != 0
+        || parent.uid() != paths.installer_uid
         || parent.mode() & 0o022 != 0
-        || !installed.is_file()
-        || installed.uid() != 0
-        || installed.mode() & 0o7022 != 0
-        || (installed.dev(), installed.ino()) != (running.dev(), running.ino())
+        || !helper.is_file()
+        || helper.uid() != paths.installer_uid
+        || helper.mode() & 0o7777 != 0o755
+        || !same_file(&helper, &running)
     {
-        return Err("install-staged must run from the current root-owned installed agent".into());
+        return Err("install-staged must run from the root-owned update helper".into());
+    }
+    if !present(&paths.update.join(PENDING))? {
+        let installed =
+            fs::symlink_metadata(&paths.installed).map_err(|error| error.to_string())?;
+        if !same_file(&helper, &installed) {
+            return Err("relink the update helper to the current installed agent".into());
+        }
     }
     Ok(())
 }
@@ -933,7 +1033,7 @@ pub fn install_staged() -> Result<()> {
         uid,
         VERSION,
         &service,
-        || verify_current_binary(&paths),
+        || verify_running_helper(&paths),
         |_| {},
     )
 }

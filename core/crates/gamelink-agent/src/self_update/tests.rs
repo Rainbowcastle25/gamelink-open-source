@@ -1,11 +1,25 @@
 use super::*;
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     os::unix::fs::symlink,
     panic::{catch_unwind, panic_any, AssertUnwindSafe},
 };
 
 const OLD: &[u8] = b"#!/bin/sh\nprintf 'gamelink-agent 0.1.0\\n'\n";
+
+thread_local! {
+    static FAIL_SYNC: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+pub(super) fn check_sync(path: &Path) -> io::Result<()> {
+    FAIL_SYNC.with_borrow_mut(|target| {
+        if target.as_deref() == Some(path) {
+            target.take();
+            return Err(io::Error::other("injected directory sync failure"));
+        }
+        Ok(())
+    })
+}
 
 fn sandbox(root: &Path) -> Paths {
     let paths = Paths {
@@ -190,7 +204,7 @@ fn staging_lock_timeout_retires_the_request_without_stopping_the_service() {
 }
 
 #[test]
-fn malformed_requests_are_claimed_and_retired() {
+fn malformed_requests_are_quarantined_in_one_private_slot() {
     let dir = tempfile::tempdir().unwrap();
     let paths = sandbox(dir.path());
     let marker = paths.marker();
@@ -213,8 +227,52 @@ fn malformed_requests_are_claimed_and_retired() {
     fs::create_dir(&marker).unwrap();
     symlink(&paths.installed, marker.join("child")).unwrap();
     check();
+    let quarantine = paths.update.join(QUARANTINE);
+    check_metadata(&open_dir(&quarantine).unwrap(), effective_uid(), 0o700).unwrap();
+    let slot = quarantine.join(REQUEST);
+    assert_eq!(fs::read_link(slot.join("child")).unwrap(), paths.installed);
+
     symlink(paths.staged().join("missing"), &marker).unwrap();
     check();
+    assert_eq!(
+        fs::read_link(&slot).unwrap(),
+        paths.staged().join("missing")
+    );
+    assert_eq!(fs::read_dir(&quarantine).unwrap().count(), 1);
+    let mut retired = fs::read_dir(paths.staged()).unwrap();
+    let previous = retired.next().unwrap().unwrap().path();
+    assert!(retired.next().is_none());
+    assert_eq!(
+        fs::read_link(previous.join("child")).unwrap(),
+        paths.installed
+    );
+}
+
+#[test]
+fn a_dangling_request_symlink_does_not_block_staging() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = sandbox(dir.path());
+    let target = paths.staged().join("missing");
+    symlink(&target, paths.marker()).unwrap();
+    assert!(!paths.marker().exists());
+    let stage = Stage::acquire(paths.clone(), now_seconds()).unwrap();
+    assert!(!present(&paths.marker()).unwrap());
+    assert!(!present(&target).unwrap());
+    publish_request(&stage.paths).unwrap();
+    assert!(paths.marker().exists());
+}
+
+#[test]
+fn publishing_a_request_requires_a_staging_directory_sync() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = sandbox(dir.path());
+    FAIL_SYNC.with_borrow_mut(|target| *target = Some(paths.staged()));
+    let result = publish_request(&paths);
+    FAIL_SYNC.with_borrow_mut(|target| target.take());
+    assert!(result
+        .unwrap_err()
+        .contains("could not sync staged request: injected directory sync failure"));
+    assert!(paths.marker().exists());
 }
 
 #[test]
@@ -271,6 +329,57 @@ fn committed_recovery_retires_the_backup_without_rolling_back() {
 }
 
 #[test]
+fn interrupted_terminal_rename_requires_sync_before_backup_deletion() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = sandbox(dir.path());
+    fs::rename(&paths.installed, paths.backup()).unwrap();
+    fs::write(&paths.installed, b"committed replacement").unwrap();
+    let mut transaction = Transaction {
+        phase: InstallPhase::HealthChecking,
+        attempt: 1,
+        updated_at: 0,
+        version: Some("2.0.0".into()),
+        reason: None,
+    };
+    transaction
+        .save(&paths, InstallPhase::HealthChecking, &|_| {})
+        .unwrap();
+    let interrupted = catch_unwind(AssertUnwindSafe(|| {
+        transaction
+            .save(&paths, InstallPhase::Committed, &|point| {
+                if point == Checkpoint::Published(InstallPhase::Committed) {
+                    panic_any(point);
+                }
+            })
+            .unwrap();
+    }));
+    assert_eq!(
+        interrupted.unwrap_err().downcast_ref::<Checkpoint>(),
+        Some(&Checkpoint::Published(InstallPhase::Committed))
+    );
+    assert_eq!(
+        paths.transaction(PENDING).unwrap().unwrap().phase,
+        InstallPhase::Committed
+    );
+    FAIL_SYNC.with_borrow_mut(|target| *target = Some(paths.update.clone()));
+    let recover = || {
+        install(
+            &paths,
+            effective_uid(),
+            VERSION,
+            &no_service(),
+            || Ok(()),
+            |_| {},
+        )
+    };
+    let error = recover().unwrap_err();
+    assert!(error.contains("injected directory sync failure"));
+    assert_eq!(fs::read(paths.backup()).unwrap(), OLD);
+    recover().unwrap();
+    assert_retired(&paths);
+}
+
+#[test]
 fn cooldown_survives_failed_staging_and_returns_429() {
     use crate::host_admin::request_update;
 
@@ -304,6 +413,31 @@ fn cooldown_survives_failed_staging_and_returns_429() {
 }
 
 #[test]
+fn cooldown_ignores_an_implausible_future_staging_timestamp() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = sandbox(dir.path());
+    let now = now_seconds();
+    let request = || {
+        crate::host_admin::request_update(b"{}", |_| Stage::acquire(paths.clone(), now).map(drop))
+    };
+    for (offset, response) in [
+        (COOLDOWN.as_secs(), Err(429)),
+        (COOLDOWN.as_secs() + 1, Ok(202)),
+    ] {
+        save_stage_status(
+            &paths.staged().join(STAGE_STATUS),
+            &Status {
+                updated_at: now + offset,
+                state: Phase::Staged,
+                ..Status::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(request().map(|ok| ok.0).map_err(|err| err.0), response);
+    }
+}
+
+#[test]
 fn staging_cannot_report_installer_outcomes() {
     let dir = tempfile::tempdir().unwrap();
     let paths = sandbox(dir.path());
@@ -318,7 +452,7 @@ fn staging_cannot_report_installer_outcomes() {
     transaction
         .save(&paths, InstallPhase::Failed, &|_| {})
         .unwrap();
-    finish(&paths).unwrap();
+    finish(&paths, owner, transaction.phase).unwrap();
 
     for forged in [
         Phase::Installing,
@@ -457,6 +591,10 @@ fn signed_stage_install_tamper_and_rollback() {
     install_fixture("active", &|_| {}).unwrap();
     assert_eq!(paths.status(owner).state, Phase::Succeeded);
     assert_new();
+    assert!(same_file(
+        &fs::metadata(&paths.installed).unwrap(),
+        &fs::metadata(paths.helper()).unwrap()
+    ));
     assert_retired(&paths);
     eprintln!("installed signed agent {version} and recorded success");
     fs::write(&paths.installed, OLD).unwrap();
@@ -554,4 +692,105 @@ fn signed_stage_install_tamper_and_rollback() {
         }
         eprintln!("interrupted {phase:?} recovered to {outcome:?}");
     }
+
+    let trusted = paths.bin_dir().join("trusted");
+    fs::copy(std::env::current_exe().unwrap(), &trusted).unwrap();
+    fs::set_permissions(&trusted, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::rename(trusted, &paths.installed).unwrap();
+    refresh_helper(&paths).unwrap();
+    let old_inode = fs::metadata(paths.helper()).unwrap();
+    fs::write(&log, b"").unwrap();
+    stage();
+    let interrupted = catch_unwind(AssertUnwindSafe(|| {
+        install_fixture("active", &|point| {
+            if point == Checkpoint::Recorded(Swapped) {
+                fs::set_permissions(&paths.installed, fs::Permissions::from_mode(0o644)).unwrap();
+                panic_any(Swapped);
+            }
+        })
+    }));
+    assert_eq!(
+        interrupted.unwrap_err().downcast_ref::<InstallPhase>(),
+        Some(&Swapped)
+    );
+    assert_eq!(
+        Command::new(&paths.installed)
+            .arg("--version")
+            .output()
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    let unit = include_str!("../../../../../packaging/systemd/gamelink-agent-update.service");
+    let exec = unit
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("ExecStart=")?
+                .strip_suffix(" update install-staged")
+        })
+        .unwrap();
+    let executable = paths.bin_dir().join(Path::new(exec).file_name().unwrap());
+    let output = Command::new(&executable)
+        .args([
+            "--ignored",
+            "--exact",
+            "self_update::tests::stable_helper_recovery_child",
+        ])
+        .env("GAMELINK_TEST_RECOVERY_ROOT", dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(Path::new(exec), Paths::system().helper());
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(same_file(
+        &old_inode,
+        &fs::metadata(&paths.installed).unwrap()
+    ));
+    assert!(same_file(
+        &old_inode,
+        &fs::metadata(paths.helper()).unwrap()
+    ));
+    assert!(same_file(&old_inode, &fs::metadata(executable).unwrap()));
+    assert_eq!(paths.status(owner).state, Phase::RolledBack);
+    assert_eq!(fs::read_to_string(&log).unwrap(), "stop\nstop\nstart\n");
+    assert_retired(&paths);
+    eprintln!("the packaged helper executable recovered after an unlaunchable candidate swap");
+}
+
+#[test]
+#[ignore = "subprocess entry point for the signed recovery test"]
+fn stable_helper_recovery_child() {
+    let root = PathBuf::from(std::env::var_os("GAMELINK_TEST_RECOVERY_ROOT").unwrap());
+    let paths = Paths {
+        update: root.join("update"),
+        installed: root.join("bin/gamelink-agent"),
+        installer_uid: effective_uid(),
+    };
+    let service = Service {
+        systemctl: |args: &[&str]| {
+            command_output(
+                Command::new(root.join("fake-systemctl"))
+                    .arg(root.join("fake-systemctl.log"))
+                    .arg("active")
+                    .args(args),
+            )
+        },
+        version: |_: &Path| panic!("unexpected version check"),
+        health_window: Duration::ZERO,
+        lock_wait: Duration::ZERO,
+    };
+    let error = install(
+        &paths,
+        effective_uid(),
+        VERSION,
+        &service,
+        || verify_running_helper(&paths),
+        |_| {},
+    )
+    .unwrap_err();
+    assert!(error.contains("previous agent restarted"), "{error}");
 }
