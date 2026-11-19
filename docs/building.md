@@ -7,6 +7,7 @@
 | Go | 1.27.x (see `go.mod`) |
 | Node.js | 22 LTS |
 | Desktop shell | Tauri 2; pinned standalone `apps/desktop-tauri/Cargo.lock` |
+| Release packaging | Python 3.11+, Tauri CLI 2.12.4 via npm, Minisign, NSIS for the Windows installer |
 | Desktop Windows GNU | MinGW-w64 gcc/binutils (including windres); Zig remains the Go cgo compiler |
 | Desktop Linux | GTK 3 and WebKitGTK 4.1 development packages |
 | Windows | WebView2 runtime (preinstalled on current Windows 11) |
@@ -105,10 +106,11 @@ for development/tests. Zig builds the Go Windows archive; MinGW links the
 Tauri GNU host and compiles its Windows resources. Set
 `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` to override the MinGW linker.
 
-Artifacts and notices are staged in `dist/desktop/<triple>/`. On Windows ship
+The standalone executable and notices are staged in `dist/desktop/<triple>/`.
+For manual Windows copies, keep
 `GameLink.exe` **and `WebView2Loader.dll` together**, with the copied notices and
-licenses. The system WebView2 runtime is also required. This is an unsigned
-application, not an installer or public release.
+licenses. The system WebView2 runtime is also required. The release pipeline
+uses this same build script before packaging the NSIS installer and AppImage.
 
 For everyday use, launch the staged desktop executable with `GAMELINK_HOME`
 unset. See [where GameLink saves your servers](getting-started.md#where-gamelink-saves-your-servers).
@@ -355,16 +357,47 @@ Xbox/PlayStation tests are tracked separately in the
 [Console Bridge guide](android-console-bridge.md); do not infer console
 compatibility from a successful build or echo test.
 
-## Releasing (manual for now)
+## Releasing
 
-1. Update the package versions in the desktop and agent `Cargo.toml` files
-   and prepare the release notes.
-2. Run everything above on a clean checkout. CI does this on every push.
-3. Build the artifacts with the release verification keys embedded. Publish
-   checksums and the signed release manifest alongside the downloads using the
-   [release manifest guide](release-manifest.md). Windows binaries are unsigned.
-   Say so in the release notes.
-4. Regenerate [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) if dependencies changed.
+1. For the first release, [generate the keys, commit the public pins and add
+   the three Actions secrets](release-manifest.md#set-up-the-signing-keys).
+2. Set matching versions in `apps/desktop-tauri/Cargo.toml` and
+   `core/crates/gamelink-agent/Cargo.toml` and update both checked-in Cargo
+   lockfiles. Use SemVer without build metadata. Regenerate
+   [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) if dependencies changed.
+3. After CI passes, tag the release commit and push the tag. For example,
+   `git tag v0.3.0` and `git push origin v0.3.0`. For a security release use
+   `git tag -a v0.3.0 -m 'GameLink v0.3.0' -m 'GameLink-Release-Severity: security'`.
+   To run the workflow manually, choose **Release → Run workflow** in GitHub
+   Actions and enter an existing tag.
+4. Review the draft release's notes and assets before clicking **Publish
+   release**. The Windows installer has a Tauri updater signature. It has no
+   Authenticode signature and can trigger Windows SmartScreen warnings, which
+   the draft notes disclose. Publish a stable release as latest to activate
+   the two standard update feeds. Prerelease tags produce prerelease drafts.
+
+The workflow builds static Linux agents for amd64 and arm64, the Linux x86_64
+AppImage and the Windows x64 NSIS installer. It uses the same GNU Windows
+cross-build as desktop CI, then packages the executable and
+`WebView2Loader.dll` with NSIS on Ubuntu. The draft contains the installers,
+raw agent binaries, signatures, feeds, checksums and license archive. If an
+upload fails after draft creation, inspect or discard the incomplete draft
+before retrying the same tag. Published releases are immutable.
+
+The **Release** workflow also runs on pull requests with freshly generated
+keys and read-only repository permissions. It builds the amd64 agent and
+AppImage, verifies the updater signature and checksums, and runs the Rust
+manifest verifier with the temporary pins. The PR run skips the ARM agent
+and NSIS installer. To run the same validation locally, use the normal
+toolchain wrapper with Minisign, the Linux GUI prerequisites, AppImage
+packaging tools (on Ubuntu 24.04, `libfuse2t64`), and the amd64 musl Rust
+target installed:
+
+```sh
+mkdir -p .tools
+release_work="$(mktemp -d "$PWD/.tools/release.XXXXXXXX")"
+TMPDIR="$release_work" python3 scripts/release.py --validate --output "$release_work/assets"
+```
 
 ### Console protocol policy
 

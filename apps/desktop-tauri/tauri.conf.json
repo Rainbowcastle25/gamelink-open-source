@@ -7,5 +7,22 @@
     "windows": [{ "label": "main", "title": "GameLink", "width": 1280, "height": 800, "minWidth": 1000, "minHeight": 680, "backgroundColor": "#080d1a", "theme": "Dark" }],
     "security": { "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; connect-src ipc: http://ipc.localhost" }
   },
-  "bundle": { "active": false }
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "icon": ["icons/icon.png", "icons/icon.ico"],
+    "license": "GPL-3.0-only",
+    "resources": {
+      "../../LICENSE": "LICENSE",
+      "../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "../../third_party/licenses/": "licenses/"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": ["https://github.com/Rainbowcastle25/gamelink-open-source/releases/latest/download/latest.json"],
+      "requireSignedVersion": true
+    }
+  }
 }

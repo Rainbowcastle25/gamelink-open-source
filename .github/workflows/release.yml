@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GameLink version tag (e.g. v0.3.0)
+        required: true
+        type: string
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build, sign and verify release assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          persist-credentials: false
+      - name: Record source commit
+        id: source
+        run: |
+          commit="$(git rev-parse HEAD)"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Check release secrets
+        if: github.event_name != 'pull_request'
+        env:
+          GAMELINK_RELEASE_SIGNING_KEY: ${{ secrets.GAMELINK_RELEASE_SIGNING_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          for secret in GAMELINK_RELEASE_SIGNING_KEY TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
+            if [[ -z "${!secret}" ]]; then
+              echo "::error::Missing release secret $secret"
+              missing=1
+            fi
+          done
+          exit "${missing:-0}"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: npm
+          cache-dependency-path: apps/desktop/frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+          components: llvm-tools
+          targets: x86_64-unknown-linux-musl
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+          workspaces: |
+            core
+            apps/desktop-tauri
+      - name: Install Linux bundle and signing tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev libfuse2t64 minisign
+      - name: Install ARM target and Windows cross-bundling tools
+        if: github.event_name != 'pull_request'
+        run: |
+          rustup target add aarch64-unknown-linux-musl x86_64-pc-windows-gnu
+          sudo apt-get install -y gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 nsis
+      - name: Validate Linux artifacts with throwaway keys
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/release.py --validate
+      - name: Build and verify the complete release
+        if: github.event_name != 'pull_request'
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          GAMELINK_RELEASE_SIGNING_KEY: ${{ secrets.GAMELINK_RELEASE_SIGNING_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: python3 scripts/release.py --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/release/
+          if-no-files-found: error
+          compression-level: 0
+
+  draft:
+    name: Create draft GitHub Release
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Upload verified assets to a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          BUILT_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          tagged_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$RELEASE_TAG" --jq .sha)"
+          if [[ "$tagged_commit" != "$BUILT_COMMIT" ]]; then
+            echo "::error::Tag $RELEASE_TAG moved after the build"
+            exit 1
+          fi
+          release_tags="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[].tag_name')"
+          if grep -Fxq -- "$RELEASE_TAG" <<< "$release_tags"; then
+            echo "::error::A release or draft already exists for $RELEASE_TAG"
+            exit 1
+          fi
+          (cd release-assets && sha256sum --check SHA256SUMS)
+          flags=(--draft --verify-tag --title "GameLink $RELEASE_TAG" --generate-notes)
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            flags+=(--prerelease --latest=false)
+          fi
+          gh release create "$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" "${flags[@]}" \
+            --notes 'Windows installers lack Authenticode signing, so Windows SmartScreen may warn when you run them.'

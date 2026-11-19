@@ -49,6 +49,27 @@ fn valid_minisign_signature_and_overlapping_pins() {
 }
 
 #[test]
+#[ignore = "requires a signed release manifest and compiled-in release pins"]
+fn verifies_release_pipeline_manifest() {
+    let dir = std::env::var_os("GAMELINK_TEST_SIGNED_RELEASE_DIR")
+        .expect("set GAMELINK_TEST_SIGNED_RELEASE_DIR to the staged release directory");
+    let dir = Path::new(&dir);
+    let mut signed = SignedRelease {
+        manifest: std::fs::read_to_string(dir.join("release-manifest.json")).unwrap(),
+        signature: std::fs::read_to_string(dir.join("release-manifest.json.minisig")).unwrap(),
+        checked_at: None,
+    };
+    let keys = keys().expect("compile with GAMELINK_UPDATE_PUBLIC_KEYS");
+    verify(&signed, &keys).expect("verify the staged release manifest");
+
+    signed.manifest.push(' ');
+    assert_eq!(
+        verify(&signed, &keys).unwrap_err(),
+        "release signature verification failed"
+    );
+}
+
+#[test]
 fn wrong_key_and_tampered_bytes_are_rejected_before_parsing() {
     let key = KeyPair::generate_unencrypted_keypair().unwrap();
     let other = KeyPair::generate_unencrypted_keypair().unwrap();

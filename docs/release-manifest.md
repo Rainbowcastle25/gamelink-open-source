@@ -4,11 +4,13 @@ GameLink desktop and the Linux agent share a verifier for release notices. A
 release check fetches only the JSON manifest and its detached Minisign signature.
 Users follow the release notes link to get and install updates themselves.
 
-## Publish a release
+## Release files
 
-Produce the artifacts first, then compute the SHA-256 of each final asset.
-Generate a UTF-8 JSON file named `release-manifest.json` with this shape.
-The version, date and digest below are examples.
+The [release workflow](../.github/workflows/release.yml) builds the binaries,
+signs the release files and uploads them to a **draft** GitHub Release. See
+[building and releasing](building.md#releasing) for the tag and publish steps.
+It generates UTF-8 `release-manifest.json` with the following schema. The
+version, date and digest below are examples.
 
 ```json
 {
@@ -30,30 +32,36 @@ The version, date and digest below are examples.
   desktop package versions in their respective `Cargo.toml` files to match it.
   GameLink compares SemVer precedence, including prereleases and excluding build
   metadata.
-- `releaseDate` is the UTC calendar date in `YYYY-MM-DD` format.
-- `severity` is `normal` or `security`. Use `security` when the release
-  includes fixes that users should prioritize.
+- `releaseDate` is the UTC calendar date when the workflow stages the release,
+  in `YYYY-MM-DD` format.
+- `severity` is `normal` by default. Set the annotated tag trailer
+  `GameLink-Release-Severity: security` for fixes users should prioritize.
 - `releaseNotesUrl` is an HTTPS URL without embedded credentials. Point it at
   the notes for this specific release.
 - `artifacts` lists the published binaries or archives and their SHA-256
   digests. Use unique asset basenames with ASCII letters, digits, periods,
   underscores or hyphens. Encode each digest as 64 hex digits.
 
-Sign the exact bytes after generating the file. A release-signing script can
-generate this JSON from the release metadata and the same artifact hashes used
-for `SHA256SUMS`, then run the following commands. Use current Minisign's
-default prehashed signature format.
+The pipeline signs the exact manifest bytes and each raw agent binary using
+Minisign's default prehashed signature format. Each gets a detached `.minisig`.
+To verify a downloaded manifest or binary, use the second line of the
+signer's Minisign public file:
 
 ```sh
-minisign -S -s /path/to/offline-release.key -m release-manifest.json
 minisign -Vm release-manifest.json -P "$release_public_key"
+minisign -Vm gamelink-agent-linux-amd64 -P "$release_public_key"
 ```
 
-Publish `release-manifest.json` and `release-manifest.json.minisig` alongside
-the release artifacts. Treat a version's signed metadata as immutable and assign
-a newer version if the artifacts or release metadata change. The standard feed
-is the GitHub Releases [latest manifest asset][manifest]. GitHub's `latest`
-alias normally excludes prereleases. To check a prerelease or a mirror, set
+Tauri signs the Windows x64 NSIS installer and Linux x86_64 AppImage, producing
+detached `.sig` files. The pipeline copies those signatures into `latest.json`
+with tag-specific download URLs. The [Tauri feed][tauri-feed] and [GameLink
+manifest feed][manifest] both use GitHub's latest stable release alias.
+`SHA256SUMS` covers all other uploaded files, including the two feeds,
+signatures and the license archive.
+
+Once published, keep the artifacts and signed metadata immutable. Assign a
+newer version for any change. GitHub's latest alias excludes prereleases.
+To check a prerelease for release notices or to use a mirror, set
 `GAMELINK_UPDATE_MANIFEST_URL` in the environment before launching GameLink or
 running `gamelink-agent update check`. The URL must use HTTPS and have no
 credentials, query or fragment. Serve the signature at the same URL with
@@ -61,33 +69,64 @@ credentials, query or fragment. Serve the signature at the same URL with
 the signature.
 
 [manifest]: https://github.com/Rainbowcastle25/gamelink-open-source/releases/latest/download/release-manifest.json
+[tauri-feed]: https://github.com/Rainbowcastle25/gamelink-open-source/releases/latest/download/latest.json
 
-## Embed and rotate the verification keys
+## Set up the signing keys
 
-Build both binaries with `GAMELINK_UPDATE_PUBLIC_KEYS` set to the base64
-public key line from `minisign.pub` (the value accepted by `minisign -P`).
-For example, with the public key value in `release_public_key`:
+Use two key pairs. Tauri's signer wraps its Minisign key and signature
+records in an extra layer of base64 and binds the release version in the
+installer signature. Separate keys allow independent rotation and limit a
+compromised key to one signing purpose.
+
+Before the first release, generate the pairs in a private directory outside
+the checkout. Minisign's `-W` creates a key for unattended signing. The Tauri
+signer prompts for a password. Set a nonempty password and retain private
+backups of both keys and the password.
 
 ```sh
-export GAMELINK_UPDATE_PUBLIC_KEYS="$release_public_key"
-bash scripts/build-agent.sh amd64
-bash scripts/build-desktop.sh x86_64-pc-windows-gnu
+keydir="$(mktemp -d)"
+minisign -G -W -s "$keydir/manifest.key" -p "$keydir/manifest.pub"
+npx --yes @tauri-apps/cli@2.12.4 signer generate --write-keys "$keydir/tauri.key"
+
+sed -n '2p' "$keydir/manifest.pub" > release/keys/manifest.pub
+cp "$keydir/tauri.key.pub" release/keys/tauri.pub
 ```
 
-The build environment accepts whitespace-separated public keys for planned
-rotation. The verifier accepts a signature under any embedded pin. Builds
-with no pins make no release requests: the desktop shows **Check for updates**
-as unavailable, and `gamelink-agent update check` exits nonzero. Keep the private signing key offline.
-The feed URL override changes where the app fetches metadata. Trust still
-comes from the keys in the binary.
+Commit the two public files. Add these GitHub Actions repository secrets with
+the exact file contents or password:
 
-For planned rotation, ship a transition release that embeds both public keys
-and publish its manifest with the existing signing key. Give users time to
-install that release before switching the feed to the new signing key.
-Subsequent builds should drop the retired key. Users still running builds
-that only trust the retired key need to upgrade manually after the switch.
-If a signing key is compromised, use a trusted out-of-band channel to publish
-the incident and distribute replacement builds with the compromised pin removed.
+| Secret | Value |
+| --- | --- |
+| `GAMELINK_RELEASE_SIGNING_KEY` | Full contents of `manifest.key` |
+| `TAURI_SIGNING_PRIVATE_KEY` | Full contents of `tauri.key` |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password set during Tauri key generation |
+
+From an authenticated checkout, you can set the file secrets with
+`gh secret set GAMELINK_RELEASE_SIGNING_KEY < "$keydir/manifest.key"` and
+`gh secret set TAURI_SIGNING_PRIVATE_KEY < "$keydir/tauri.key"`. Use
+`gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to enter the password
+interactively. The release job fails if any secret or public file is missing.
+
+The pipeline passes the checked-in Minisign public key lines as
+`GAMELINK_UPDATE_PUBLIC_KEYS` to both the agent and desktop builds. It injects
+the checked-in Tauri key as `plugins.updater.pubkey` at build and bundle time.
+Plain local builds without Minisign pins have release checks disabled.
+The notification feed URL override uses the same compiled-in pins.
+
+## Rotate verification keys
+
+For a planned Minisign rotation, add the next public key on a new line in
+`release/keys/manifest.pub` and ship a transition release signed by the
+existing key. Give users time to install it before changing the signing secret
+and dropping the old public key from future builds. Clients with only the old
+pin need a manual upgrade after the switch.
+
+Tauri's updater config has one public key. The pipeline requires signatures
+that verify against the key embedded in the new bundle. Once the updater is
+in use, changing this key requires users of the old key to install a trusted
+new bundle manually unless a separate migration is implemented. If either
+signing key is compromised, announce the incident through a trusted channel
+and distribute replacement builds with the compromised key removed.
 
 ## Check behavior
 
