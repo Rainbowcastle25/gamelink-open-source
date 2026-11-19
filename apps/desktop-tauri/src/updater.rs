@@ -12,7 +12,7 @@ use tauri::{
     utils::{config::BundleType, platform::bundle_type},
     AppHandle, Manager, State,
 };
-use tauri_plugin_updater::{Error, Update, UpdaterExt};
+use tauri_plugin_updater::{Error, Update, UpdaterBuilder, UpdaterExt};
 use url::Url;
 
 const RELEASE_DOWNLOAD: &str =
@@ -21,6 +21,8 @@ const SUMMARY_ASSET: &str = "release-summary.txt";
 const DOWNLOAD_INTERVAL: Duration = Duration::from_millis(100);
 const INSTALLER_UNAVAILABLE: &str =
     "The installer is unavailable. Try again or open the release notes.";
+const INSTALL_FAILED: &str =
+    "Could not install the update. Check installation permissions or open the release notes.";
 
 #[derive(Default)]
 pub struct UpdateState(Mutex<Option<PreparedUpdate>>);
@@ -99,15 +101,34 @@ fn matching_installer(release: &Manifest, name: &str, version: &str, url: &Url) 
     version == release.version && url.as_str() == format!("{RELEASE_DOWNLOAD}/v{version}/{name}")
 }
 
-async fn prepare_update(app: &AppHandle) -> tauri_plugin_updater::Result<Option<Update>> {
-    app.updater_builder()
-        .header("User-Agent", "GameLink")?
-        .timeout(Duration::from_secs(8))
-        .no_proxy()
-        .configure_client(|client| client.https_only(true))
-        .build()?
-        .check()
+async fn prepare_update(app: &AppHandle) -> Result<Option<Update>, Error> {
+    let endpoint = app.config().plugins.0["updater"]["endpoints"]
+        .get(0)
+        .and_then(serde_json::Value::as_str)
+        .ok_or(Error::EmptyEndpoints)?
+        .parse()?;
+    let feed = spawn_blocking(move || update::fetch_updater_feed(endpoint))
         .await
+        .map_err(std::io::Error::other)?
+        .map_err(std::io::Error::other)?;
+    installer_updater(app)?.build()?.restore_update(feed)
+}
+
+fn installer_updater<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<UpdaterBuilder, Error> {
+    Ok(app
+        .updater_builder()
+        .header("User-Agent", "GameLink")?
+        .no_proxy()
+        .configure_client(|client| {
+            // The bounded feed bypasses Updater::check, which normally sets up rustls.
+            if rustls::crypto::CryptoProvider::get_default().is_none() {
+                let _ = rustls::crypto::ring::default_provider().install_default();
+            }
+            client.https_only(true)
+        })
+        // The built-in installer exits after ShellExecuteW succeeds. Its default
+        // cleanup hook hides the window before ShellExecuteW reports an error.
+        .on_before_exit(|| {}))
 }
 
 fn appimage_running(app: &AppHandle) -> bool {
@@ -217,8 +238,111 @@ fn download_error(error: Error) -> &'static str {
     }
 }
 
+fn install_verified(
+    update: &Update,
+    bytes: &[u8],
+    digest: &str,
+    verify_current: impl FnOnce() -> Result<(), &'static str>,
+    install: impl FnOnce(&[u8]) -> Result<(), &'static str>,
+) -> Result<(), &'static str> {
+    update.verify(bytes).map_err(download_error)?;
+    if !matches_digest(bytes, digest) {
+        return Err("The installer does not match the signed release manifest.");
+    }
+    verify_current()?;
+    install(bytes)
+}
+
+#[cfg(target_os = "linux")]
+fn install_package(app: &AppHandle, _update: &Update, bytes: &[u8]) -> Result<(), &'static str> {
+    let path = app.env().appimage.ok_or(INSTALL_FAILED)?;
+    if !bytes.starts_with(b"\x7fELF") {
+        return Err(INSTALL_FAILED);
+    }
+    replace_appimage(Path::new(&path), |file| {
+        std::io::Write::write_all(file, bytes)
+    })
+    .map_err(|_| INSTALL_FAILED)
+}
+
+#[cfg(target_os = "linux")]
+fn replace_appimage(
+    path: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    use std::{
+        fs::{self, File, Permissions},
+        io::{Error, ErrorKind},
+        os::{
+            fd::AsRawFd,
+            unix::fs::{MetadataExt, PermissionsExt},
+        },
+    };
+
+    let name = path.file_name().ok_or(ErrorKind::InvalidInput)?;
+    let directory = File::open(path.parent().ok_or(ErrorKind::InvalidInput)?)?;
+    let parent = directory.metadata()?;
+    let uid = rustix::process::geteuid().as_raw();
+    if (parent.uid() != uid && parent.uid() != 0)
+        || (parent.mode() & 0o022 != 0 && parent.mode() & 0o1000 == 0)
+    {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "AppImage directory allows file substitution",
+        ));
+    }
+
+    // Anchor both names to the opened directory even if an ancestor is renamed.
+    let directory_path = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    let live = directory_path.join(name);
+    let original = fs::symlink_metadata(&live)?;
+    if !original.is_file() || (original.uid() != uid && original.uid() != 0) {
+        return Err(ErrorKind::PermissionDenied.into());
+    }
+    let mut staged = tempfile::Builder::new()
+        .prefix(".gamelink-update-")
+        .permissions(Permissions::from_mode(0o700))
+        .tempfile_in(&directory_path)?;
+    write(staged.as_file_mut())?;
+    staged
+        .as_file()
+        .set_permissions(Permissions::from_mode(original.mode() & 0o755))?;
+    staged.as_file().sync_all()?;
+    staged.persist(live).map_err(|error| error.error)?;
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
+fn launch_windows_installer<T, E>(
+    launch: impl FnOnce() -> Result<T, E>,
+    restore: impl FnOnce(),
+) -> Result<T, E> {
+    launch().inspect_err(|_| restore())
+}
+
+#[cfg(windows)]
+fn install_package(app: &AppHandle, update: &Update, bytes: &[u8]) -> Result<(), &'static str> {
+    launch_windows_installer(
+        || update.install(bytes),
+        || {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        },
+    )
+    .map_err(|_| INSTALL_FAILED)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn install_package(_app: &AppHandle, _update: &Update, _bytes: &[u8]) -> Result<(), &'static str> {
+    Err(INSTALL_FAILED)
+}
+
 #[tauri::command]
 pub async fn install_update(
+    app: AppHandle,
     state: State<'_, UpdateState>,
     version: String,
     progress: Channel<UpdateProgress>,
@@ -231,7 +355,7 @@ pub async fn install_update(
         .as_ref()
         .filter(|prepared| prepared.update.version == version)
         .ok_or("The available update changed. Check again for the current version.")?;
-    let verify_current = || {
+    let verify_current = move || {
         ensure_install_allowed(&version, enabled_dir().as_deref(), |dir| {
             update::cached_notice(dir, VERSION)
         })
@@ -263,16 +387,16 @@ pub async fn install_update(
         .await
         .map_err(download_error)?;
 
-    if !matches_digest(&bytes, &prepared.artifact_digest) {
-        return Err("The installer does not match the signed release manifest.".into());
-    }
-    verify_current()?;
-    let _ = progress.send(UpdateProgress::Installing);
     let update = prepared.update.clone();
-    spawn_blocking(move || update.install(bytes))
-        .await
-        .map_err(|_| "Could not start the GameLink installer.")?
-        .map_err(|_| "Could not install the update. Check installation permissions or open the release notes.")?;
+    let digest = prepared.artifact_digest.clone();
+    spawn_blocking(move || {
+        install_verified(&update, &bytes, &digest, verify_current, |bytes| {
+            let _ = progress.send(UpdateProgress::Installing);
+            install_package(&app, &update, bytes)
+        })
+    })
+    .await
+    .map_err(|_| "Could not start the GameLink installer.")??;
     *state = None;
     Ok(())
 }
@@ -363,5 +487,168 @@ mod tests {
         assert!(ensure_install_allowed("1.1.1", Some(dir), |_| Some(notice())).is_err());
         assert!(ensure_install_allowed("1.1.0", Some(dir), |_| None).is_err());
         assert!(ensure_install_allowed("1.1.0", None, |_| panic!("updates disabled")).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_replacement_leaves_live_bytes_in_place_until_commit() {
+        use std::{fs, io::Write, os::unix::fs::PermissionsExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("GameLink.AppImage");
+        fs::write(&live, b"old").unwrap();
+        fs::set_permissions(&live, fs::Permissions::from_mode(0o751)).unwrap();
+
+        let result = replace_appimage(&live, |staged| {
+            assert_eq!(staged.metadata()?.permissions().mode() & 0o777, 0o700);
+            staged.write_all(b"partial")?;
+            assert_eq!(fs::read(&live)?, b"old");
+            Err(std::io::ErrorKind::Interrupted.into())
+        });
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Interrupted);
+        assert_eq!(fs::read(&live).unwrap(), b"old");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+
+        replace_appimage(&live, |staged| {
+            staged.write_all(b"new")?;
+            assert_eq!(fs::read(&live)?, b"old");
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(fs::read(&live).unwrap(), b"new");
+        assert_eq!(
+            fs::metadata(live).unwrap().permissions().mode() & 0o777,
+            0o751
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_replacement_rejects_a_directory_where_other_users_can_swap_the_stage() {
+        use std::{fs, os::unix::fs::PermissionsExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("GameLink.AppImage");
+        fs::write(&live, b"old").unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o777)).unwrap();
+        let result = replace_appimage(&live, |_| panic!("would stage in a shared directory"));
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o1777)).unwrap();
+        replace_appimage(&live, |_| Ok(())).unwrap();
+    }
+
+    #[test]
+    fn windows_installer_launch_precedes_any_window_change() {
+        let steps = std::cell::RefCell::new(Vec::new());
+        let launch = |result| {
+            launch_windows_installer(
+                || {
+                    assert!(steps.borrow().is_empty());
+                    steps.borrow_mut().push("launch");
+                    result
+                },
+                || steps.borrow_mut().push("restore"),
+            )
+        };
+        assert_eq!(launch(Ok(())), Ok(()));
+        assert_eq!(steps.replace(Vec::new()), ["launch"]);
+        assert_eq!(launch(Err("launch rejected")), Err("launch rejected"));
+        assert_eq!(steps.into_inner(), ["launch", "restore"]);
+    }
+
+    fn update_signed_by(
+        signer: &minisign::KeyPair,
+        pinned: &minisign::KeyPair,
+        bytes: &[u8],
+    ) -> Update {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let signature = minisign::sign(
+            Some(&signer.pk),
+            &signer.sk,
+            bytes,
+            Some("file:installer\tversion:1.1.0"),
+            None,
+        )
+        .unwrap();
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.config_mut().plugins.0.insert(
+            "updater".into(),
+            serde_json::json!({
+                "pubkey": STANDARD.encode(pinned.pk.to_box().unwrap().into_string()),
+                "endpoints": ["https://example.org/latest.json"],
+            }),
+        );
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .build(context)
+            .unwrap();
+        installer_updater(app.handle())
+            .unwrap()
+            .executable_path("test/GameLink")
+            .build()
+            .unwrap()
+            .restore_update(serde_json::json!({
+                "version": "1.1.0",
+                "url": "https://127.0.0.1:0/installer",
+                "signature": STANDARD.encode(signature.into_string()),
+            }))
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn restored_update_can_build_its_download_client_without_tauris_feed_check() {
+        let key = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let mut update = update_signed_by(&key, &key, b"installer");
+        update.timeout = Some(Duration::from_secs(1));
+        let result = tauri::async_runtime::block_on(update.download(|_, _| {}, || {}));
+        assert!(matches!(result, Err(Error::Reqwest(_))));
+    }
+
+    #[test]
+    fn valid_tauri_signature_cannot_install_bytes_outside_the_signed_manifest() {
+        let key = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let bytes = b"valid Tauri installer";
+        let update = update_signed_by(&key, &key, bytes);
+        assert!(update.verify(bytes).is_ok());
+        let digest = format!("{:x}", Sha256::digest(b"different installer"));
+
+        let result = install_verified(
+            &update,
+            bytes,
+            &digest,
+            || Ok(()),
+            |_| panic!("installer reached the platform handoff"),
+        );
+        assert_eq!(
+            result,
+            Err("The installer does not match the signed release manifest.")
+        );
+    }
+
+    #[test]
+    fn manifest_matching_bytes_with_an_invalid_tauri_signature_cannot_install() {
+        let key = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let other_key = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let bytes = b"manifest-matching installer";
+        let update = update_signed_by(&other_key, &key, bytes);
+        let digest = format!("{:x}", Sha256::digest(bytes));
+
+        let result = install_verified(
+            &update,
+            bytes,
+            &digest,
+            || Ok(()),
+            |_| panic!("installer reached the platform handoff"),
+        );
+        assert_eq!(
+            result,
+            Err("The installer signature could not be verified.")
+        );
     }
 }

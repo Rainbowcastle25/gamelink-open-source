@@ -91,6 +91,24 @@ describe("Release notifications", () => {
     await waitFor(() => expect(relaunch).toHaveBeenCalledOnce());
   });
 
+  it("retries only the restart when launching the installed update fails", async () => {
+    const backend = createMockBackend({ delayMs: 0 });
+    vi.spyOn(backend, "checkRelease").mockResolvedValue(update);
+    const install = vi.spyOn(backend, "installUpdate").mockResolvedValue(undefined);
+    const relaunch = vi.spyOn(backend, "relaunch")
+      .mockRejectedValueOnce("Could not restart GameLink. Try restarting again.")
+      .mockResolvedValueOnce(undefined);
+    const user = userEvent.setup();
+
+    render(<App backend={backend} />);
+    await user.click(await screen.findByRole("button", { name: "Update" }));
+    expect(await screen.findByText("Could not restart GameLink. Try restarting again."))
+      .toHaveAttribute("role", "alert");
+    await user.click(screen.getByRole("button", { name: "Restart GameLink" }));
+    expect(relaunch).toHaveBeenCalledTimes(2);
+    expect(install).toHaveBeenCalledOnce();
+  });
+
   it("keeps the notes link and retries when the installer feed is unavailable", async () => {
     const backend = createMockBackend({ delayMs: 0 });
     vi.spyOn(backend, "checkRelease")

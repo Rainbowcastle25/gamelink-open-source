@@ -101,16 +101,19 @@ fn https_url(value: &str) -> Result<Url> {
 }
 
 fn manifest_url() -> Result<Url> {
-    let configured = match std::env::var("GAMELINK_UPDATE_MANIFEST_URL") {
-        Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => DEFAULT_URL.to_owned(),
+    #[cfg(debug_assertions)]
+    match std::env::var("GAMELINK_UPDATE_MANIFEST_URL") {
+        Ok(value) => {
+            let url = https_url(&value)?;
+            if url.query().is_some() || url.fragment().is_some() {
+                return Err("manifest URL must not contain a query or fragment");
+            }
+            return Ok(url);
+        }
+        Err(std::env::VarError::NotPresent) => {}
         Err(_) => return Err("invalid manifest URL"),
-    };
-    let url = https_url(&configured)?;
-    if url.query().is_some() || url.fragment().is_some() {
-        return Err("manifest URL must not contain a query or fragment");
     }
-    Ok(url)
+    https_url(DEFAULT_URL)
 }
 
 fn verify(signed: &SignedRelease, keys: &[PublicKey]) -> Result<(Manifest, Version)> {
@@ -157,7 +160,7 @@ fn verify(signed: &SignedRelease, keys: &[PublicKey]) -> Result<(Manifest, Versi
     Ok((manifest, version))
 }
 
-fn fetch(agent: &ureq::Agent, mut url: Url, limit: usize) -> Result<String> {
+fn fetch(agent: &ureq::Agent, mut url: Url) -> Result<ureq::Body> {
     let start = Instant::now();
     for _ in 0..=MAX_REDIRECTS {
         let remaining = FETCH_TIMEOUT
@@ -171,7 +174,7 @@ fn fetch(agent: &ureq::Agent, mut url: Url, limit: usize) -> Result<String> {
             .call()
             .map_err(|_| "release metadata request failed")?;
         match response.status().as_u16() {
-            200 => return read_metadata(response.into_body().into_reader(), limit),
+            200 => return Ok(response.into_body()),
             301 | 302 | 303 | 307 | 308 => {
                 let location = response
                     .headers()
@@ -201,18 +204,32 @@ fn read_metadata(body: impl Read, limit: usize) -> Result<String> {
     String::from_utf8(bytes).map_err(|_| "release metadata is not UTF-8")
 }
 
-fn download(now: u64) -> Result<SignedRelease> {
-    let url = manifest_url()?;
-    let signature_url = https_url(&format!("{url}.minisig"))?;
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+fn metadata_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
         .https_only(true)
         .max_redirects(0)
         .proxy(None)
         .user_agent("GameLink")
         .build()
-        .into();
-    let manifest = fetch(&agent, url, MAX_MANIFEST)?;
-    let signature = fetch(&agent, signature_url, MAX_SIGNATURE)?;
+        .into()
+}
+
+/// Fetches the Tauri updater feed as untrusted metadata, with the same bound as the manifest.
+pub fn fetch_updater_feed(url: Url) -> Result<serde_json::Value> {
+    read_updater_feed(fetch(&metadata_agent(), url)?.into_reader())
+}
+
+fn read_updater_feed(body: impl Read) -> Result<serde_json::Value> {
+    let feed = read_metadata(body, MAX_MANIFEST)?;
+    serde_json::from_str(&feed).map_err(|_| "invalid updater feed")
+}
+
+fn download(now: u64) -> Result<SignedRelease> {
+    let url = manifest_url()?;
+    let signature_url = https_url(&format!("{url}.minisig"))?;
+    let agent = metadata_agent();
+    let manifest = read_metadata(fetch(&agent, url)?.into_reader(), MAX_MANIFEST)?;
+    let signature = read_metadata(fetch(&agent, signature_url)?.into_reader(), MAX_SIGNATURE)?;
     Ok(SignedRelease {
         checked_at: Some(now),
         manifest,

@@ -78,6 +78,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `cssparser-0.37.0` | MPL-2.0 | [texts](cssparser-0.37.0/) |
 | `cssparser-0.38.0` | MPL-2.0 | [texts](cssparser-0.38.0/) |
 | `cssparser-macros-0.7.1` | MPL-2.0 | [texts](cssparser-macros-0.7.1/) |
+| `ct-codecs-1.1.8` | MIT | [texts](ct-codecs-1.1.8/) |
 | `ctor-1.0.14` | Apache-2.0 OR MIT | [texts](ctor-1.0.14/) |
 | `darling-0.23.0` | MIT | [texts](darling-0.23.0/) |
 | `darling_core-0.23.0` | MIT | [texts](darling_core-0.23.0/) |
@@ -232,6 +233,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `memchr-2.8.3` | Unlicense OR MIT | [texts](memchr-2.8.3/) |
 | `memoffset-0.9.1` | MIT | [texts](memoffset-0.9.1/) |
 | `mime-0.3.18` | MIT OR Apache-2.0 | [texts](mime-0.3.18/) |
+| `minisign-0.10.0` | MIT | [texts](minisign-0.10.0/) |
 | `minisign-verify-0.3.0` | MIT | [texts](minisign-verify-0.3.0/) |
 | `miniz_oxide-0.8.9` | MIT OR Zlib OR Apache-2.0 | [texts](miniz_oxide-0.8.9/) |
 | `miniz_oxide-0.9.1` | MIT OR Zlib OR Apache-2.0 | [texts](miniz_oxide-0.9.1/) |
@@ -278,6 +280,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `parking-2.2.1` | Apache-2.0 OR MIT | [texts](parking-2.2.1/) |
 | `parking_lot-0.12.5` | MIT OR Apache-2.0 | [texts](parking_lot-0.12.5/) |
 | `parking_lot_core-0.9.12` | MIT OR Apache-2.0 | [texts](parking_lot_core-0.9.12/) |
+| `pbkdf2-0.12.2` | MIT OR Apache-2.0 | [texts](pbkdf2-0.12.2/) |
 | `percent-encoding-2.3.2` | MIT OR Apache-2.0 | [texts](percent-encoding-2.3.2/) |
 | `petgraph-0.8.3` | MIT OR Apache-2.0 | [texts](petgraph-0.8.3/) |
 | `phf-0.13.1` | MIT | [texts](phf-0.13.1/) |
@@ -327,6 +330,8 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `reqwest-0.13.5` | MIT OR Apache-2.0 | [texts](reqwest-0.13.5/) |
 | `rfd-0.17.2` | MIT | [texts](rfd-0.17.2/) |
 | `ring-0.17.14` | Apache-2.0 AND ISC | [texts](ring-0.17.14/) |
+| `rpassword-7.5.5` | Apache-2.0 | [texts](rpassword-7.5.5/) |
+| `rtoolbox-0.0.6` | Apache-2.0 | [texts](rtoolbox-0.0.6/) |
 | `rustc-hash-2.1.3` | Apache-2.0 OR MIT | [texts](rustc-hash-2.1.3/) |
 | `rustc_version-0.4.1` | MIT OR Apache-2.0 | [texts](rustc_version-0.4.1/) |
 | `rustix-1.1.6` | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | [texts](rustix-1.1.6/) |
@@ -337,6 +342,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `rustls-platform-verifier-android-0.2.0` | MIT OR Apache-2.0 | [texts](rustls-platform-verifier-android-0.2.0/) |
 | `rustls-webpki-0.103.17` | ISC | [texts](rustls-webpki-0.103.17/) |
 | `rustversion-1.0.23` | MIT OR Apache-2.0 | [texts](rustversion-1.0.23/) |
+| `salsa20-0.10.2` | MIT OR Apache-2.0 | [texts](salsa20-0.10.2/) |
 | `same-file-1.0.6` | Unlicense/MIT | [texts](same-file-1.0.6/) |
 | `schannel-0.1.30` | MIT | [texts](schannel-0.1.30/) |
 | `schemars-0.8.22` | MIT | [texts](schemars-0.8.22/) |
@@ -344,6 +350,7 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `schemars-1.2.3` | MIT | [texts](schemars-1.2.3/) |
 | `schemars_derive-0.8.22` | MIT | [texts](schemars_derive-0.8.22/) |
 | `scopeguard-1.2.0` | MIT OR Apache-2.0 | [texts](scopeguard-1.2.0/) |
+| `scrypt-0.11.0` | MIT OR Apache-2.0 | [texts](scrypt-0.11.0/) |
 | `security-framework-3.7.0` | MIT OR Apache-2.0 | [texts](security-framework-3.7.0/) |
 | `security-framework-sys-2.17.0` | MIT OR Apache-2.0 | [texts](security-framework-sys-2.17.0/) |
 | `selectors-0.38.0` | MPL-2.0 | [texts](selectors-0.38.0/) |
@@ -406,7 +413,6 @@ Resolved by `apps/desktop-tauri/Cargo.lock`; includes build-time and target-spec
 | `tauri-plugin-fs-2.7.1` | Apache-2.0 OR MIT | [texts](tauri-plugin-fs-2.7.1/) |
 | `tauri-plugin-notification-2.8.1` | Apache-2.0 OR MIT | [texts](tauri-plugin-notification-2.8.1/) |
 | `tauri-plugin-opener-2.7.3` | Apache-2.0 OR MIT | [texts](tauri-plugin-opener-2.7.3/) |
-| `tauri-plugin-process-2.4.0` | Apache-2.0 OR MIT | [texts](tauri-plugin-process-2.4.0/) |
 | `tauri-plugin-single-instance-2.5.5` | Apache-2.0 OR MIT | [texts](tauri-plugin-single-instance-2.5.5/) |
 | `tauri-plugin-updater-2.14.1` | Apache-2.0 OR MIT | [texts](tauri-plugin-updater-2.14.1/) |
 | `tauri-runtime-2.12.2` | Apache-2.0 OR MIT | [texts](tauri-runtime-2.12.2/) |

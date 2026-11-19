@@ -6,6 +6,8 @@ mod host_connection;
 mod hosting;
 mod minecraft_lists;
 mod presence;
+#[cfg(target_os = "linux")]
+mod restart;
 mod updater;
 #[cfg(windows)]
 mod windows_notice;
@@ -203,6 +205,8 @@ impl Drop for Worker {
 }
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    restart::wait_for_parent();
     let running = Arc::new(AtomicBool::new(true));
     let active = running.clone();
     let for_setup = running.clone();
@@ -218,7 +222,7 @@ fn main() {
     #[cfg(not(windows))]
     let builder = builder.plugin(tauri_plugin_notification::init());
     #[cfg(target_os = "linux")]
-    let builder = builder.plugin(tauri_plugin_process::init());
+    let builder = builder.manage(restart::Handoff::default());
     #[cfg(windows)]
     let builder = builder.on_window_event(|window, event| {
         if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
@@ -234,7 +238,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             desktop,
             updater::check_release,
-            updater::install_update
+            updater::install_update,
+            #[cfg(target_os = "linux")]
+            restart::restart_game_link
         ])
         .setup(move |app| {
             let session = bridge::Session::open().map_err(std::io::Error::other)?;
