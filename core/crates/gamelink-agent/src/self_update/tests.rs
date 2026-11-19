@@ -303,6 +303,7 @@ fn committed_recovery_retires_the_backup_without_rolling_back() {
     let mut transaction = Transaction {
         phase: InstallPhase::Committed,
         attempt: 1,
+        attempt_id: None,
         updated_at: 0,
         version: Some("2.0.0".into()),
         reason: None,
@@ -337,6 +338,7 @@ fn interrupted_terminal_rename_requires_sync_before_backup_deletion() {
     let mut transaction = Transaction {
         phase: InstallPhase::HealthChecking,
         attempt: 1,
+        attempt_id: None,
         updated_at: 0,
         version: Some("2.0.0".into()),
         reason: None,
@@ -387,8 +389,11 @@ fn cooldown_survives_failed_staging_and_returns_429() {
     let paths = sandbox(dir.path());
     let now = now_seconds();
     let stage = Stage::acquire(paths.clone(), now).unwrap();
-    let request_at =
-        |time| request_update(b"{}", |_| Stage::acquire(paths.clone(), time).map(drop));
+    let request_at = |time| {
+        request_update(b"{}", |_| {
+            Stage::acquire(paths.clone(), time).map(|stage| stage.attempt_id().to_owned())
+        })
+    };
     assert_eq!(request_at(now).unwrap_err().0, 429);
     assert_eq!(
         stage.run(
@@ -413,12 +418,38 @@ fn cooldown_survives_failed_staging_and_returns_429() {
 }
 
 #[test]
+fn accepted_attempt_id_survives_in_the_installer_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = sandbox(dir.path());
+    let owner = effective_uid();
+    let (code, accepted) = crate::host_admin::request_update(b"{}", |_| {
+        let stage = Stage::acquire(paths.clone(), now_seconds())?;
+        publish_request(&paths).unwrap();
+        Ok(stage.attempt_id().to_owned())
+    })
+    .unwrap();
+    assert_eq!(code, 202);
+    let attempt_id = accepted["attemptId"].as_str().unwrap();
+    assert_eq!(attempt_id.len(), 32);
+    assert_eq!(paths.status(owner).host_view(true)["attemptId"], attempt_id);
+    install(&paths, owner, VERSION, &no_service(), || Ok(()), |_| {}).unwrap_err();
+    fs::remove_file(paths.staged().join(STAGE_STATUS)).unwrap();
+
+    // Read from disk with no in-memory reservation or staging record.
+    let status = paths.status(owner);
+    assert_eq!(status.state, Phase::Failed);
+    assert_eq!(status.host_view(true)["attemptId"], attempt_id);
+}
+
+#[test]
 fn cooldown_ignores_an_implausible_future_staging_timestamp() {
     let dir = tempfile::tempdir().unwrap();
     let paths = sandbox(dir.path());
     let now = now_seconds();
     let request = || {
-        crate::host_admin::request_update(b"{}", |_| Stage::acquire(paths.clone(), now).map(drop))
+        crate::host_admin::request_update(b"{}", |_| {
+            Stage::acquire(paths.clone(), now).map(|stage| stage.attempt_id().to_owned())
+        })
     };
     for (offset, response) in [
         (COOLDOWN.as_secs(), Err(429)),
@@ -445,6 +476,7 @@ fn staging_cannot_report_installer_outcomes() {
     let mut transaction = Transaction {
         phase: InstallPhase::Failed,
         attempt: 1,
+        attempt_id: None,
         updated_at: 0,
         version: None,
         reason: Some("installer rejected the binary".into()),
@@ -464,6 +496,7 @@ fn staging_cannot_report_installer_outcomes() {
             &paths.staged().join(STAGE_STATUS),
             &Status {
                 attempt: 2,
+                attempt_id: None,
                 state: forged,
                 reason: Some("forged status".into()),
                 ..Status::default()
@@ -504,12 +537,13 @@ fn signed_stage_install_tamper_and_rollback() {
         let mut worker = None;
         let (code, _) = crate::host_admin::request_update(br#"{"version":"99.0.0"}"#, |expected| {
             let stage = Stage::acquire(paths.clone(), now_seconds())?;
+            let attempt_id = stage.attempt_id().to_owned();
             worker = Some(scope.spawn(move || {
                 stage.run(expected.as_deref(), latest, |_| {
                     panic!("wrong version must not download")
                 })
             }));
-            Ok(())
+            Ok(attempt_id)
         })
         .unwrap();
         assert_eq!(code, 202);

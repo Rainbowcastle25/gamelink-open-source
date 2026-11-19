@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import App from "../App";
 import { createMockBackend } from "../lib/mockBackend";
+import { GameLinkProvider, useStore } from "../lib/store";
+import { ReleaseNotifications } from "./ReleaseNotifications";
 import type { AgentUpdateProgress, ReleaseNotice } from "../lib/types";
 
 const update: ReleaseNotice = {
@@ -17,7 +19,7 @@ const update: ReleaseNotice = {
 
 const linkedUpdate: ReleaseNotice = {
   ...update,
-  linkedAgent: { kind: "available", nodeName: "games.example.org" },
+  linkedAgent: { kind: "available", nodeName: "games.example.org", offerId: "old-offer" },
 };
 const manualAgentUpdate = "Update the GameLink agent on your server with the setup guide or your package manager.";
 
@@ -69,7 +71,7 @@ describe("Release notifications", () => {
     const { backend, server, app, relaunch, user } = setupLinkedUpdate();
     let progress!: (phase: AgentUpdateProgress) => void;
     let succeed!: () => void;
-    server.mockImplementation((_version, onProgress) => {
+    server.mockImplementation((_version, _offerId, onProgress) => {
       progress = onProgress;
       return new Promise<void>((resolve) => { succeed = resolve; });
     });
@@ -81,7 +83,7 @@ describe("Release notifications", () => {
     expect(app).not.toHaveBeenCalled();
 
     await user.click(button);
-    expect(server).toHaveBeenCalledWith(update.version, expect.any(Function));
+    expect(server).toHaveBeenCalledWith(update.version, "old-offer", expect.any(Function));
     expect(screen.getByText("Preparing the server update…")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Update this app only" })).toBeDisabled();
     for (const [phase, text] of [
@@ -117,6 +119,37 @@ describe("Release notifications", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(server).toHaveBeenCalledTimes(2);
     expect(app).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes a relinked server after the pending update settles and waits for a fresh click", async () => {
+    const { backend, server, app, user } = setupLinkedUpdate();
+    const check = vi.mocked(backend.checkRelease).mockResolvedValueOnce(linkedUpdate);
+    let fail!: (error: unknown) => void;
+    server.mockResolvedValue(undefined).mockImplementationOnce(() => new Promise<void>((_, reject) => { fail = reject; }));
+    function Relink() {
+      const store = useStore();
+      return <button onClick={() => void store.configureHost("https://new.example.org", "test-token")}>
+        Relink
+      </button>;
+    }
+    render(<GameLinkProvider backend={backend}><ReleaseNotifications /><Relink /></GameLinkProvider>);
+    await user.click(await screen.findByRole("button", { name: "Update all" }));
+    check.mockResolvedValue({
+      ...linkedUpdate,
+      linkedAgent: { kind: "available", nodeName: "new.example.org", offerId: "new-offer" },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Relink" }));
+    expect(check).toHaveBeenCalledOnce();
+    await act(async () => fail({ kind: "failed", message: "Old server failed." }));
+
+    expect(await screen.findByText("Update this PC and your server new.example.org.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(server).toHaveBeenCalledOnce();
+    expect(app).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Update all" }));
+    expect(server).toHaveBeenCalledTimes(2);
+    expect(server).toHaveBeenLastCalledWith(update.version, "new-offer", expect.any(Function));
   });
 
   it("updates only the app when selected", async () => {

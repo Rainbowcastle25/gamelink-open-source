@@ -261,6 +261,7 @@ fn verify_install_version(version: &str) -> Result<(), &'static str> {
 pub async fn update_linked_agent(
     state: State<'_, UpdateState>,
     version: String,
+    offer_id: String,
     progress: Channel<AgentUpdateProgress>,
 ) -> Result<(), LinkedUpdateError> {
     let state = state
@@ -278,7 +279,7 @@ pub async fn update_linked_agent(
     })?;
     verify_install_version(&version).map_err(LinkedUpdateError::failed)?;
     spawn_blocking(move || {
-        agent.run(&version, |phase| {
+        agent.run(&version, &offer_id, |phase| {
             let _ = progress.send(phase);
         })
     })

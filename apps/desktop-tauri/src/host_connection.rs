@@ -12,7 +12,10 @@ use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     time::{Duration, Instant},
 };
 use url::Url;
@@ -72,13 +75,17 @@ struct PendingDevice {
     last_seen: String,
 }
 
-fn project_snapshot(raw: Value) -> Result<Value> {
+fn has_legacy_games(raw: &Value) -> bool {
     // Current agents include the field even when a game has no readable keys.
-    let legacy_agent = raw["games"].as_array().is_some_and(|games| {
+    raw["games"].as_array().is_some_and(|games| {
         games
             .iter()
             .any(|game| game.get("serverFingerprint").is_none())
-    });
+    })
+}
+
+fn project_snapshot(raw: Value) -> Result<Value> {
+    let legacy_agent = has_legacy_games(&raw);
     let mut snapshot: HostSnapshot =
         serde_json::from_value(raw).map_err(|_| "host returned an invalid status")?;
     for game in &mut snapshot.games {
@@ -155,6 +162,8 @@ fn refresh(saved: &SavedConnection) -> Result<Value> {
 struct SavedConnection {
     endpoint: String,
     token: String,
+    #[serde(default)]
+    generation: String,
 }
 
 #[derive(Serialize)]
@@ -275,9 +284,18 @@ fn configure(dir: &Path, endpoint: &str, token: &str) -> Result<SavedConnection>
     } else {
         storage::seal(token).map_err(|_| "could not protect the administrator token")?
     };
+    let mut generation = [0u8; 16];
+    rustls::crypto::ring::default_provider()
+        .secure_random
+        .fill(&mut generation)
+        .map_err(|_| "could not generate a host connection ID")?;
     let saved = SavedConnection {
         endpoint,
         token: sealed,
+        generation: generation
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
     };
     let data = serde_json::to_vec(&saved).map_err(|_| "could not save the host connection")?;
     storage::write_atomic(&file_path(dir), &data)
@@ -356,7 +374,7 @@ pub enum LinkedAgent {
     rename_all_fields = "camelCase"
 )]
 pub enum LinkedAgentNotice {
-    Available { node_name: String },
+    Available { node_name: String, offer_id: String },
     Manual,
     Unreachable,
 }
@@ -366,6 +384,7 @@ impl LinkedAgent {
         match self {
             Self::Available(update) => LinkedAgentNotice::Available {
                 node_name: update.node_name.clone(),
+                offer_id: update.offer_id.clone(),
             },
             Self::Manual => LinkedAgentNotice::Manual,
             Self::Unreachable => LinkedAgentNotice::Unreachable,
@@ -377,6 +396,7 @@ impl LinkedAgent {
 pub struct LinkedAgentUpdate {
     connection: SavedConnection,
     node_name: String,
+    offer_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -408,10 +428,16 @@ pub enum AgentUpdateProgress {
 struct AgentStatus {
     agent_version: Option<String>,
     update: Option<AgentUpdateStatus>,
+    #[serde(skip)]
+    supports_attempt_ids: bool,
+    #[serde(skip)]
+    legacy_agent: bool,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AgentUpdateStatus {
+    attempt_id: Option<String>,
     state: AgentUpdateState,
     supported: Option<bool>,
     version: Option<String>,
@@ -436,16 +462,13 @@ enum AgentUpdateState {
 
 fn agent_status(saved: &SavedConnection, timeout: u64) -> Result<AgentStatus> {
     let value = host_request(saved, "GET", "/v1/host/status", Value::Null, timeout)?;
-    serde_json::from_value(value)
-        .map_err(|_| "The server returned an invalid agent update status.".into())
-}
-
-fn supports_update(status: &AgentStatus) -> bool {
-    // The first agents with the update route report phases without the flag.
-    status
-        .update
-        .as_ref()
-        .is_some_and(|update| update.supported != Some(false))
+    let supports_attempt_ids = value["update"].get("attemptId").is_some();
+    let legacy_agent = has_legacy_games(&value);
+    let mut status: AgentStatus = serde_json::from_value(value)
+        .map_err(|_| "The server returned an invalid agent update status.")?;
+    status.supports_attempt_ids = supports_attempt_ids;
+    status.legacy_agent = legacy_agent;
+    Ok(status)
 }
 
 pub fn linked_agent(version: &str) -> Result<Option<LinkedAgent>> {
@@ -468,7 +491,7 @@ fn linked_agent_in(dir: &Path, version: &str) -> Result<Option<LinkedAgent>> {
     if newer == Some(false) {
         return Ok(None);
     }
-    if !supports_update(&status) {
+    if !status.supports_update() {
         return Ok(Some(LinkedAgent::Manual));
     }
     if newer.is_none() {
@@ -479,10 +502,9 @@ fn linked_agent_in(dir: &Path, version: &str) -> Result<Option<LinkedAgent>> {
         .host_str()
         .ok_or("invalid linked server hostname")?
         .to_owned();
-    Ok(Some(LinkedAgent::Available(LinkedAgentUpdate {
-        connection,
-        node_name,
-    })))
+    Ok(Some(LinkedAgent::Available(LinkedAgentUpdate::new(
+        connection, node_name,
+    ))))
 }
 
 enum AgentPoll {
@@ -491,15 +513,31 @@ enum AgentPoll {
 }
 
 impl AgentStatus {
-    fn outcome(&self, version: &str) -> std::result::Result<AgentPoll, LinkedUpdateError> {
+    fn supports_update(&self) -> bool {
+        !self.legacy_agent
+            && self.supports_attempt_ids
+            && self
+                .update
+                .as_ref()
+                .is_some_and(|update| update.supported != Some(false))
+    }
+
+    fn outcome(
+        &self,
+        version: &str,
+        attempt_id: &str,
+    ) -> std::result::Result<AgentPoll, LinkedUpdateError> {
         use AgentUpdateProgress as Progress;
         use AgentUpdateState as Phase;
 
-        let Some(update) = &self.update else {
+        let Some(update) = self.update.as_ref().filter(|_| self.supports_update()) else {
             return Err(LinkedUpdateError::Manual {
                 message: MANUAL_AGENT_UPDATE,
             });
         };
+        if update.attempt_id.as_deref() != Some(attempt_id) {
+            return Ok(AgentPoll::Pending(Progress::Preparing));
+        }
         let running_target = self.agent_version.as_deref() == Some(version);
         match update.state {
             Phase::Succeeded if running_target && update.version.as_deref() == Some(version) => {
@@ -532,7 +570,7 @@ impl AgentStatus {
 fn request_agent_update(
     saved: &SavedConnection,
     version: &str,
-) -> std::result::Result<(), LinkedUpdateError> {
+) -> std::result::Result<String, LinkedUpdateError> {
     let response = host_request(
         saved,
         "POST",
@@ -541,8 +579,12 @@ fn request_agent_update(
         AGENT_STATUS_TIMEOUT,
     );
     match response {
-        Ok(response) if response["accepted"] == true => Ok(()),
-        Err(error) if matches!(error.as_str(), "HTTP transport returned status 404" | "HTTP transport returned status 503") => {
+        Ok(response) if response["accepted"] == true => response["attemptId"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .ok_or(LinkedUpdateError::Manual { message: MANUAL_AGENT_UPDATE }),
+        Err(error) if error == "HTTP transport returned status 404" => {
             Err(LinkedUpdateError::Manual { message: MANUAL_AGENT_UPDATE })
         }
         Err(error) if error == "HTTP transport returned status 429" => {
@@ -567,13 +609,34 @@ fn restarting(error: &str) -> bool {
 }
 
 impl LinkedAgentUpdate {
+    fn new(connection: SavedConnection, node_name: String) -> Self {
+        // The updater stores this issued ID alongside the verified release and this connection.
+        static NEXT_OFFER_ID: AtomicU64 = AtomicU64::new(1);
+        Self {
+            connection,
+            node_name,
+            offer_id: NEXT_OFFER_ID.fetch_add(1, Ordering::Relaxed).to_string(),
+        }
+    }
+
     pub fn run(
         &self,
         version: &str,
+        offer_id: &str,
         progress: impl FnMut(AgentUpdateProgress),
     ) -> std::result::Result<(), LinkedUpdateError> {
-        let saved = config_dir().and_then(|dir| read_configured(&dir));
-        if saved.as_ref() != Ok(&self.connection) {
+        let dir = config_dir().map_err(LinkedUpdateError::failed)?;
+        self.run_in(&dir, version, offer_id, progress)
+    }
+
+    fn run_in(
+        &self,
+        dir: &Path,
+        version: &str,
+        offer_id: &str,
+        progress: impl FnMut(AgentUpdateProgress),
+    ) -> std::result::Result<(), LinkedUpdateError> {
+        if self.offer_id != offer_id || read_configured(dir).as_ref() != Ok(&self.connection) {
             return Err(LinkedUpdateError::failed(
                 "The linked server changed. Check for updates again.",
             ));
@@ -592,7 +655,7 @@ impl LinkedAgentUpdate {
             return Err(LinkedUpdateError::failed("Invalid agent release version."));
         }
 
-        request_agent_update(&self.connection, version)?;
+        let attempt_id = request_agent_update(&self.connection, version)?;
         let started = Instant::now();
         let mut last_progress = AgentUpdateProgress::Preparing;
         progress(last_progress);
@@ -608,7 +671,7 @@ impl LinkedAgentUpdate {
                 break;
             }
             let phase = match status {
-                Ok(status) => match status.outcome(version)? {
+                Ok(status) => match status.outcome(version, &attempt_id)? {
                     AgentPoll::Succeeded => return Ok(()),
                     AgentPoll::Pending(phase) => phase,
                 },
@@ -695,7 +758,8 @@ mod tests {
     ) -> Value {
         json!({
             "agentVersion": running,
-            "update": {"state":phase,"version":version,"reason":reason}
+            "update": {"state":phase,"version":version,"reason":reason,
+                       "attemptId": if phase == "idle" { None } else { Some("current-attempt") }}
         })
     }
 
@@ -708,7 +772,8 @@ mod tests {
             status_json("0.3.0-rc.1", "idle", None, None),
             status_json("0.3.0", "idle", None, None),
             status_json("0.10.0", "idle", None, None),
-            json!({"agentVersion":"0.2.0","update":{"state":"idle","supported":false}}),
+            json!({"agentVersion":"0.2.0","update":{"state":"idle","supported":false,"attemptId":null}}),
+            json!({"agentVersion":"0.2.0","update":{"state":"idle","supported":true}}),
             json!({"games":[],"refreshedAt":""}),
         ];
         let mut replies = replies.into_iter();
@@ -719,18 +784,116 @@ mod tests {
             Ok(replies.next().expect("unexpected status request"))
         });
         let agent = linked_agent_in(dir.path(), TARGET).unwrap().unwrap();
-        assert_eq!(
-            json!(agent.notice()),
-            json!({"kind":"available","nodeName":"node.example"})
-        );
+        let notice = json!(agent.notice());
+        assert_eq!(notice["kind"], "available");
+        assert_eq!(notice["nodeName"], "node.example");
+        assert!(notice["offerId"].is_string());
         assert!(linked_agent_in(dir.path(), TARGET).unwrap().is_none());
         assert!(linked_agent_in(dir.path(), TARGET).unwrap().is_none());
-        for _ in 0..2 {
+        for _ in 0..3 {
             assert!(matches!(
                 linked_agent_in(dir.path(), TARGET).unwrap(),
                 Some(LinkedAgent::Manual)
             ));
         }
+    }
+
+    #[test]
+    fn rejects_stale_click_after_a_same_version_relink() {
+        let dir = tempfile::tempdir().unwrap();
+        let _fake = bridge::fake::install(|request| {
+            assert_eq!(request["verb"], "GET", "stale offer must never send a POST");
+            Ok(status_json("0.2.0", "idle", None, None))
+        });
+        let link = |host: &str| {
+            configure(dir.path(), host, "test-token").unwrap();
+            let Some(LinkedAgent::Available(offer)) = linked_agent_in(dir.path(), TARGET).unwrap()
+            else {
+                panic!("a linked server update must be available");
+            };
+            offer
+        };
+        let old = link("https://old.example");
+        let new = link("https://new.example");
+        // The native check sees the new host before the UI replaces the old offer.
+        let error = new
+            .run_in(dir.path(), TARGET, &old.offer_id, |_| {})
+            .unwrap_err();
+        assert_eq!(
+            json!(error)["message"],
+            "The linked server changed. Check for updates again."
+        );
+        // Re-linking the same endpoint and token also retires the original offer.
+        link("https://old.example");
+        assert!(old
+            .run_in(dir.path(), TARGET, &old.offer_id, |_| {})
+            .is_err());
+    }
+
+    #[test]
+    fn update_eligibility_rejects_legacy_games_and_accepts_empty_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        configure(dir.path(), "https://node.example", "test-token").unwrap();
+        let mut replies = [json!([{"id": "old-game"}]), json!([])].into_iter();
+        let _fake = bridge::fake::install(move |_| {
+            let mut status = status_json("0.2.0", "idle", None, None);
+            status["games"] = replies.next().unwrap();
+            Ok(status)
+        });
+        assert!(matches!(
+            linked_agent_in(dir.path(), TARGET).unwrap(),
+            Some(LinkedAgent::Manual)
+        ));
+        assert!(matches!(
+            linked_agent_in(dir.path(), TARGET).unwrap(),
+            Some(LinkedAgent::Available(_))
+        ));
+    }
+
+    #[test]
+    fn update_does_not_finish_on_a_previous_attempts_success_or_rollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let connection = configure(dir.path(), "https://node.example", "test-token").unwrap();
+        let agent = LinkedAgentUpdate::new(connection, "node.example".into());
+        let status = |running, phase, id, reason| {
+            let mut response = status_json(running, phase, Some(TARGET), reason);
+            response["update"]["attemptId"] = json!(id);
+            response
+        };
+        let mut replies = [
+            json!({"accepted": true, "attemptId": "current-attempt"}),
+            status(TARGET, "succeeded", "stale-success", None),
+            status(
+                "0.2.0",
+                "rolledBack",
+                "stale-rollback",
+                Some("previous failure"),
+            ),
+            status(
+                "0.2.0",
+                "rolledBack",
+                "current-attempt",
+                Some("current failure"),
+            ),
+        ]
+        .into_iter();
+        let _fake = bridge::fake::install(move |_| Ok(replies.next().unwrap()));
+        let error = agent
+            .run_update(TARGET, Duration::from_secs(1), Duration::ZERO, |_| {})
+            .unwrap_err();
+        assert_eq!(
+            json!(error)["message"],
+            "The server rolled back the agent update. current failure"
+        );
+    }
+
+    #[test]
+    fn missing_accepted_attempt_id_requires_a_manual_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = configure(dir.path(), "https://node.example", "test-token").unwrap();
+        let _fake = bridge::fake::install(|_| Ok(json!({"accepted": true})));
+        let error = request_agent_update(&saved, TARGET).unwrap_err();
+        assert_eq!(json!(error)["kind"], "manual");
     }
 
     #[test]
@@ -751,11 +914,13 @@ mod tests {
                     json!(error),
                     json!({"kind":"failed","message":"Try again in a few minutes."})
                 );
-            } else {
+            } else if code == 404 {
                 assert_eq!(
                     json!(error),
                     json!({"kind":"manual","message":MANUAL_AGENT_UPDATE})
                 );
+            } else {
+                assert_eq!(json!(error)["kind"], "failed");
             }
         }
     }
@@ -764,12 +929,9 @@ mod tests {
     fn polls_through_restart_and_requires_success_for_the_exact_running_version() {
         let dir = tempfile::tempdir().unwrap();
         let connection = configure(dir.path(), "https://node.example", "test-token").unwrap();
-        let agent = LinkedAgentUpdate {
-            connection,
-            node_name: "node.example".into(),
-        };
+        let agent = LinkedAgentUpdate::new(connection, "node.example".into());
         let responses = [
-            Ok(json!({"accepted":true})),
+            Ok(json!({"accepted":true,"attemptId":"current-attempt"})),
             Ok(status_json("0.2.0", "checking", Some(TARGET), None)),
             Ok(status_json("0.2.0", "installing", Some(TARGET), None)),
             Err("HTTP transport request failed".into()),
@@ -818,15 +980,19 @@ mod tests {
             ("failed", "The server agent update failed."),
             ("rolledBack", "The server rolled back the agent update."),
         ] {
-            let status: AgentStatus = serde_json::from_value(status_json(
-                "0.2.0",
-                phase,
-                Some(TARGET),
-                Some("The service failed its health check."),
-            ))
-            .unwrap();
+            let _fake = bridge::fake::install(move |_| {
+                Ok(status_json(
+                    "0.2.0",
+                    phase,
+                    Some(TARGET),
+                    Some("The service failed its health check."),
+                ))
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let saved = configure(dir.path(), "https://node.example", "test-token").unwrap();
+            let status = agent_status(&saved, AGENT_STATUS_TIMEOUT).unwrap();
             assert!(matches!(
-                status.outcome(TARGET),
+                status.outcome(TARGET, "current-attempt"),
                 Err(LinkedUpdateError::Failed { message: actual }) if actual == format!("{message} The service failed its health check.")
             ));
         }
@@ -836,12 +1002,9 @@ mod tests {
     fn polling_times_out_after_the_update_is_accepted() {
         let dir = tempfile::tempdir().unwrap();
         let connection = configure(dir.path(), "https://node.example", "test-token").unwrap();
-        let agent = LinkedAgentUpdate {
-            connection,
-            node_name: "node.example".into(),
-        };
+        let agent = LinkedAgentUpdate::new(connection, "node.example".into());
         let _fake = bridge::fake::install(|request| match request["verb"].as_str() {
-            Some("POST") => Ok(json!({"accepted":true})),
+            Some("POST") => Ok(json!({"accepted":true,"attemptId":"current-attempt"})),
             Some("GET") => Err("HTTP transport request failed".into()),
             _ => panic!("unexpected update request"),
         });

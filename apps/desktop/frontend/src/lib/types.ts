@@ -213,7 +213,7 @@ export interface ReleaseNotice {
 }
 
 export type LinkedAgentNotice =
-  | { kind: "available"; nodeName: string }
+  | { kind: "available"; nodeName: string; offerId: string }
   | { kind: "manual" }
   | { kind: "unreachable" };
 

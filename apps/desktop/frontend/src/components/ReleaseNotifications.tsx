@@ -33,6 +33,7 @@ function EnabledNotifications() {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [installed, setInstalled] = useState(false);
   const busy = useRef(false);
+  const refreshAfterUpdate = useRef(false);
   const version = notice?.version;
   const linkedAgent = notice?.canInstall && !installed ? notice.linkedAgent : null;
   const updateAll = linkedAgent?.kind === "available";
@@ -53,7 +54,11 @@ function EnabledNotifications() {
         setCheckError(errorMessage(error));
       }
     }
-    void refresh();
+    if (busy.current) {
+      refreshAfterUpdate.current = true;
+    } else {
+      void refresh();
+    }
     const timer = setInterval(() => void refresh(), CHECK_INTERVAL);
     return () => {
       active = false;
@@ -61,31 +66,32 @@ function EnabledNotifications() {
     };
   }, [backend, hostConnection, retry]);
 
-  async function install(includeServer = false) {
-    if (busy.current || (!version && !installed)) return;
+  async function install(offerId?: string) {
+    if (busy.current || progress || (!version && !installed)) return;
     busy.current = true;
     setInstallError(null);
     setServerError(null);
     try {
       if (!installed && version) {
-        if (includeServer) {
+        if (offerId) {
           let receivingServerProgress = true;
           setProgress({ stage: "server", phase: "preparing" });
           try {
-            await backend.updateLinkedAgent(version, (phase) => {
+            await backend.updateLinkedAgent(version, offerId, (phase) => {
               if (receivingServerProgress) setProgress({ stage: "server", phase });
             });
-            setNotice((current) => current?.version === version ? { ...current, linkedAgent: null } : current);
+            setNotice((current) => current?.linkedAgent?.kind === "available" && current.linkedAgent.offerId === offerId
+              ? { ...current, linkedAgent: null }
+              : current);
           } catch (error) {
             if (error && typeof error === "object" && "kind" in error && error.kind === "manual") {
-              setNotice((current) => current?.version === version
+              setNotice((current) => current?.linkedAgent?.kind === "available" && current.linkedAgent.offerId === offerId
                 ? { ...current, linkedAgent: { kind: "manual" } }
                 : current);
             } else {
               setServerError(errorMessage(error));
             }
             setProgress(null);
-            busy.current = false;
             return;
           } finally {
             receivingServerProgress = false;
@@ -100,7 +106,13 @@ function EnabledNotifications() {
     } catch (error) {
       setProgress(null);
       setInstallError(errorMessage(error));
+    } finally {
       busy.current = false;
+      if (refreshAfterUpdate.current) {
+        refreshAfterUpdate.current = false;
+        setNotice(null);
+        setRetry((count) => count + 1);
+      }
     }
   }
 
@@ -157,7 +169,7 @@ function EnabledNotifications() {
           {updateAll ? (
             <>
               <Button disabled={!!progress} onClick={() => void install()}>Update this app only</Button>
-              <Button variant="primary" disabled={!!progress} onClick={() => void install(true)}>
+              <Button variant="primary" disabled={!!progress} onClick={() => void install(linkedAgent.offerId)}>
                 {progress?.stage === "server" ? "Updating server…" : serverError ? "Retry" : "Update all"}
               </Button>
             </>

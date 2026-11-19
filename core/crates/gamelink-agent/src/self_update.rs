@@ -206,6 +206,8 @@ struct Status {
     #[serde(default)]
     attempt: u64,
     #[serde(default)]
+    attempt_id: Option<String>,
+    #[serde(default)]
     updated_at: u64,
     state: Phase,
     version: Option<String>,
@@ -216,10 +218,19 @@ pub fn status() -> serde_json::Value {
     let paths = Paths::system();
     let owner = effective_uid();
     let supported = can_stage(owner) && paths.staging_lock(owner).is_ok();
-    let status = paths.status(owner);
-    serde_json::json!({
-        "supported":supported,"state":status.state,"version":status.version,"reason":status.reason
-    })
+    paths.status(owner).host_view(supported)
+}
+
+impl Status {
+    fn host_view(&self, supported: bool) -> serde_json::Value {
+        serde_json::json!({
+            "supported": supported,
+            "state": self.state,
+            "version": self.version,
+            "reason": self.reason,
+            "attemptId": self.attempt_id,
+        })
+    }
 }
 
 fn can_stage(owner: u32) -> bool {
@@ -318,8 +329,13 @@ impl Stage {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(_) => return Err(QueueError::Unavailable),
         }
+        let mut random = [0u8; 16];
+        File::open("/dev/urandom")
+            .and_then(|mut file| file.read_exact(&mut random))
+            .map_err(|_| QueueError::Unavailable)?;
         let status = Status {
             attempt: previous.attempt.saturating_add(1),
+            attempt_id: Some(random.iter().map(|byte| format!("{byte:02x}")).collect()),
             updated_at: now,
             state: Phase::Checking,
             ..Status::default()
@@ -339,6 +355,13 @@ impl Stage {
             return Err(QueueError::Unavailable);
         }
         Self::acquire(paths, now_seconds())
+    }
+
+    fn attempt_id(&self) -> &str {
+        self.status
+            .attempt_id
+            .as_deref()
+            .expect("reserved attempt ID")
     }
 
     fn run(
@@ -431,8 +454,9 @@ pub fn stage(expected: Option<&str>) -> Result<String> {
         )
 }
 
-pub fn queue(expected: Option<String>) -> std::result::Result<(), QueueError> {
+pub fn queue(expected: Option<String>) -> std::result::Result<String, QueueError> {
     let stage = Stage::system()?;
+    let attempt_id = stage.attempt_id().to_owned();
     thread::Builder::new()
         .name("agent-update".into())
         .spawn(move || {
@@ -445,7 +469,7 @@ pub fn queue(expected: Option<String>) -> std::result::Result<(), QueueError> {
             }
         })
         .map_err(|_| QueueError::Unavailable)?;
-    Ok(())
+    Ok(attempt_id)
 }
 
 // Regular CLI commands hold a shared lock when the updater is configured.
@@ -556,6 +580,8 @@ enum Checkpoint {
 struct Transaction {
     phase: InstallPhase,
     attempt: u64,
+    #[serde(default)]
+    attempt_id: Option<String>,
     updated_at: u64,
     version: Option<String>,
     reason: Option<String>,
@@ -575,6 +601,7 @@ impl Transaction {
         Status {
             state,
             attempt: self.attempt,
+            attempt_id: self.attempt_id,
             updated_at: self.updated_at,
             version: self.version,
             reason: self.reason,
@@ -842,9 +869,11 @@ where
     if present(&paths.backup())? {
         return Err("previous agent backup exists without an active installer transaction".into());
     }
+    let staged = paths.staging_status(staged_owner).unwrap_or_default();
     let mut transaction = Transaction {
         phase: InstallPhase::Staged,
-        attempt: paths.status(staged_owner).attempt,
+        attempt: staged.attempt,
+        attempt_id: staged.attempt_id,
         updated_at: 0,
         version: None,
         reason: None,

@@ -186,10 +186,12 @@ previous `/v1` routes for these actions. The admin token also authorizes
 `POST /v2/host/update` on nodes with
 [signed updates enabled](agent-setup.md#signed-agent-updates). Send an empty
 request or `{"version":"<expected>"}`. The API returns HTTP 202 when the
-request is queued. If the expected version differs from the latest signed
-manifest, staging fails before the binary download. Poll `GET /v1/host/status`
-for `agentVersion` and `update`. Requests still require a bearer token and
-must omit the `Origin` header.
+request is queued, with `accepted: true` and an `attemptId` in the response.
+If the expected version differs from the latest signed manifest, staging fails
+before the binary download. Poll `GET /v1/host/status` for `agentVersion` and
+match `update.attemptId` to the queued request before using the result.
+`update.attemptId` is null when there is no recorded attempt ID. Requests still
+require a bearer token and must omit the `Origin` header.
 
 The interface exposes no shell, console commands, file transfer, arbitrary
 destinations, game power controls, or Panel credentials.
