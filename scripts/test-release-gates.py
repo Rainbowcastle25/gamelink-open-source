@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 import apt_repo
 import release
@@ -131,21 +132,24 @@ class ReleaseGates(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, error):
                         check_deb_pins(*args)
 
-    @unittest.skipUnless(shutil.which("gpg"), "requires GnuPG")
+    @unittest.skipUnless(all(shutil.which(tool) for tool in ("gpg", "gpgconf", "gpgv")), "requires GnuPG")
     def test_apt_signing_fails_closed(self):
         key_work = self.work / "apt-test-keys"
         key_work.mkdir()
-        gpg = apt_repo.gpg_home(key_work)
+        home = key_work / "gnupg"
+        home.mkdir(mode=0o700)
+        gpg = apt_repo.gpg_home(home)
         public = key_work / "apt.asc"
-        private = None
+        keys = {}
         for identity in ("One", "Two"):
             user = f"{identity} <{identity.lower()}@example.invalid>"
             run(key_work, *gpg, "--pinentry-mode", "loopback", "--passphrase", "",
                 "--quick-generate-key", user, "ed25519", "sign", "1d")
             if identity == "One":
                 run(key_work, *gpg, "--armor", "--output", public, "--export", user)
-            else:
-                private = run(key_work, *gpg, "--armor", "--export-secret-keys", user).stdout
+            keys[identity] = run(key_work, *gpg, "--armor", "--export-secret-keys", user).stdout
+        fingerprint = apt_repo.public_fingerprint(gpg, public)
+        run(key_work, "gpgconf", "--homedir", home, "--kill", "gpg-agent")
 
         repo = self.work / "apt-unsigned-fixture"
         release_file = repo / "dists/stable/Release"
@@ -154,19 +158,30 @@ class ReleaseGates(unittest.TestCase):
         shutil.copyfile(public, repo / "apt.asc")
         placeholder = key_work / "placeholder.asc"
         placeholder.write_text("Placeholder for the apt public key.")
-        for case, pin, key, exception in (
-            ("missing-pin", key_work / "missing.asc", private, ValueError),
-            ("placeholder-pin", placeholder, private, ValueError),
-            ("missing-secret", public, "", ValueError),
-            ("wrong-secret", public, private, subprocess.CalledProcessError),
+        for case, pin, expected, key, exception in (
+            ("missing-pin", key_work / "missing.asc", fingerprint, keys["One"], ValueError),
+            ("placeholder-pin", placeholder, fingerprint, keys["One"], ValueError),
+            ("wrong-fingerprint", public, "A" * 40, keys["One"], ValueError),
+            ("missing-secret", public, fingerprint, "", ValueError),
+            ("wrong-secret", public, fingerprint, keys["Two"], subprocess.CalledProcessError),
+            ("success", public, fingerprint, keys["One"], None),
         ):
             with self.subTest(case=case):
                 work = self.work / f"apt-sign-{case}"
                 work.mkdir()
-                with self.assertRaises(exception):
-                    apt_repo.sign_repository(repo, work, pin, key)
-                self.assertFalse(release_file.with_name("InRelease").exists())
-                self.assertFalse(release_file.with_suffix(".gpg").exists())
+                public.with_suffix(".fingerprint").write_text(expected + "\n")
+                with patch.object(apt_repo, "run", wraps=apt_repo.run) as signing_run:
+                    if exception is None:
+                        apt_repo.sign_repository(repo, work, pin, key)
+                    else:
+                        with self.assertRaises(exception):
+                            apt_repo.sign_repository(repo, work, pin, key)
+                last_command = signing_run.call_args.args
+                self.assertEqual(last_command[:2], ("gpgconf", "--homedir"))
+                self.assertEqual(last_command[3:], ("--kill", "gpg-agent"))
+                self.assertFalse(Path(last_command[2]).exists())
+                self.assertEqual(release_file.with_name("InRelease").exists(), exception is None)
+                self.assertEqual(release_file.with_suffix(".gpg").exists(), exception is None)
 
     def test_wrong_desktop_updater_pin_is_rejected(self):
         manifest = fixture_pin(b"A")

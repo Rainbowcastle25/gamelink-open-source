@@ -1,8 +1,21 @@
 #!/bin/sh
 set -eu
 
+restart=/run/gamelink-agent-restart
 case "$1" in
+    abort-upgrade)
+        # dpkg calls the new postrm before the old postinst, which may not
+        # support abort-upgrade yet.
+        if [ -d /run/systemd/system ] && [ -f "$restart" ]; then
+            systemctl daemon-reload
+            systemctl start gamelink-agent.service
+            unlink "$restart"
+        fi
+        ;;
     remove|purge)
+        if [ -f "$restart" ]; then
+            unlink "$restart"
+        fi
         if [ -d /run/systemd/system ]; then
             systemctl daemon-reload
         fi

@@ -1,12 +1,57 @@
 #!/bin/sh
 set -eu
 
+account_collision() {
+    echo "GameLink cannot reuse the existing gamelink account or group. Use a dedicated system user and group with a nologin shell and no privileged group memberships, or rename the conflicting account or group before retrying configuration." >&2
+    exit 1
+}
+
+system_id() {
+    awk -v kind="$1" -v id="$2" '
+        BEGIN { min = 101; regular_min = 1000 }
+        $1 == kind "_MIN" { regular_min = $2 }
+        $1 == "SYS_" kind "_MIN" { min = $2 }
+        $1 == "SYS_" kind "_MAX" { max = $2 }
+        END {
+            if (max == "") max = regular_min - 1
+            exit !(id ~ /^[0-9]+$/ && id > 0 && id >= min && id <= max)
+        }
+    ' /etc/login.defs
+}
+
 case "$1" in
     configure)
         state=/var/lib/gamelink-agent
-        if ! getent passwd gamelink >/dev/null; then
-            useradd --system --user-group --no-create-home \
+        if group=$(getent group gamelink); then
+            gid=$(printf '%s\n' "$group" | cut -d: -f3)
+            system_id GID "$gid" || account_collision
+        else
+            gid=
+        fi
+        if account=$(getent passwd gamelink); then
+            uid=$(printf '%s\n' "$account" | cut -d: -f3)
+            system_id UID "$uid" || account_collision
+            [ -n "$gid" ] && [ "$(id -g gamelink)" = "$gid" ] && \
+                [ "$(id -gn gamelink)" = gamelink ] || account_collision
+            case "${account##*:}" in
+                /usr/sbin/nologin|/sbin/nologin) ;;
+                *) account_collision ;;
+            esac
+            groups=$(id -Gn gamelink)
+            for group in $groups; do
+                case "$group" in
+                    root|sudo|wheel|adm|docker|lxd|disk|shadow|libvirt|incus|incus-admin) account_collision ;;
+                esac
+            done
+        else
+            if [ -z "$gid" ]; then
+                groupadd --system gamelink
+                group=$(getent group gamelink)
+                gid=$(printf '%s\n' "$group" | cut -d: -f3)
+            fi
+            useradd --system --gid gamelink --no-create-home \
                 --home-dir "$state" --shell /usr/sbin/nologin gamelink
+            uid=$(id -u gamelink)
         fi
         if [ ! -e "$state" ] && [ ! -L "$state" ]; then
             mkdir -m 0700 "$state"
@@ -17,14 +62,21 @@ case "$1" in
             echo "GameLink state path must be a directory: $state" >&2
             exit 1
         fi
-        chown -h root:gamelink "$state"
-        chmod 0700 "$state"
-        chown -h gamelink:gamelink "$state"
-        if [ -d /run/systemd/system ]; then
-            systemctl daemon-reload
-            if [ -n "${2:-}" ]; then
-                deb-systemd-invoke try-restart gamelink-agent.service
-            fi
+        if [ "$(stat -c '%u:%g:%a' "$state")" != "$uid:$gid:700" ]; then
+            chown -h root:gamelink "$state"
+            chmod 0700 "$state"
+            chown -h gamelink:gamelink "$state"
         fi
         ;;
+    abort-upgrade) ;;
+    *) exit 0 ;;
 esac
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    restart=/run/gamelink-agent-restart
+    if [ -f "$restart" ]; then
+        systemctl start gamelink-agent.service
+        unlink "$restart"
+    fi
+fi

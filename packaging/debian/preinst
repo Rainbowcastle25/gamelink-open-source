@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+case "$1" in
+    install|upgrade) ;;
+    *) exit 0 ;;
+esac
+
+for path in /usr/local/bin/gamelink-agent /etc/systemd/system/gamelink-agent.service \
+    /etc/systemd/system/gamelink-agent-update.path /etc/systemd/system/gamelink-agent-update.service \
+    /usr/local/bin/.gamelink-agent-update-helper; do
+    if [ -e "$path" ] || [ -L "$path" ]; then
+        echo "GameLink manual installation found at $path. Migrate before installing the package:" >&2
+        echo "https://github.com/Rainbowcastle25/gamelink-open-source/blob/master/docs/agent-setup.md#migrate-a-manual-install-to-apt" >&2
+        exit 1
+    fi
+done
+
+if [ "$1" = upgrade ] && [ -d /run/systemd/system ]; then
+    unit=gamelink-agent.service
+    case "$(systemctl show --property=ActiveState --value "$unit")" in
+        active|activating|reloading|refreshing)
+            install -m 0600 /dev/null /run/gamelink-agent-restart
+            systemctl stop "$unit"
+            ;;
+        deactivating) systemctl stop "$unit" ;;
+        inactive|failed) ;;
+        *) echo "GameLink could not determine the service state before upgrading." >&2; exit 1 ;;
+    esac
+fi

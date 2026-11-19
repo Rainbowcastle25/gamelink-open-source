@@ -165,11 +165,15 @@ apt_signer='GameLink apt archive <apt@gamelink.invalid>'
 gpg --homedir "$apt_keydir" --batch --pinentry-mode loopback --passphrase '' \
   --quick-generate-key "$apt_signer" ed25519 sign 2y
 gpg --homedir "$apt_keydir" --armor --export "$apt_signer" > release/keys/apt.asc
+gpg --homedir "$apt_keydir" --batch --with-colons --fingerprint "$apt_signer" \
+  | awk -F: '$1 == "fpr" { print $10; exit }' > release/keys/apt.fingerprint
 gpg --homedir "$apt_keydir" --batch --pinentry-mode loopback --passphrase '' \
   --armor --export-secret-keys "$apt_signer" > "$apt_keydir/apt-secret.asc"
 ```
 
-Commit only the public `release/keys/apt.asc` and merge it to `master`.
+Replace the fingerprint placeholder in [the apt setup guide](agent-setup.md#install-with-apt-recommended)
+with the same value. Merge the public `release/keys/apt.asc`,
+`release/keys/apt.fingerprint`, and the guide to `master`.
 Create an `apt-repo` GitHub Actions environment and restrict deployments to
 the `master` branch. Add the full ASCII-armored private export as its
 `GAMELINK_APT_SIGNING_KEY` environment secret. From an authenticated checkout:
@@ -191,11 +195,15 @@ if the preceding signed release shipped no Debian packages. Keep the
 Minisign verifier pins for both versions while their packages remain in
 the repository.
 
-Only the signing step receives the apt secret. It verifies both the
-clear-signed `InRelease` and the detached `Release.gpg` against the committed
-public key before the deploy job publishes the Pages artifact. Publishing
-fails if the public key is still a placeholder or the required key or
-signatures fail verification. To rebuild the repository, run the workflow
+The same workflow runs weekly from `master` to rebuild and re-sign metadata
+from the published releases. The release index expires 60 days after its
+`Date`. The scheduled run only republishes the apt repository on Pages.
+
+Only the signing step receives the apt secret. It verifies `InRelease` and
+`Release.gpg` against the committed public key, then removes its temporary
+keyring. The deploy job receives the signed site and publishes it to Pages.
+Publishing requires the committed key to match the published fingerprint and
+both signatures to verify. To rebuild the repository, run the workflow
 manually from `master`. Renew the key and update the distributed keyring
 before its expiry.
 

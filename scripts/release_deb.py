@@ -59,6 +59,7 @@ def build_deb(nfpm, binary, licenses, work, version, arch, package, env):
             for src, dst, mode in contents
         ],
         "scripts": {
+            "preinstall": str(PACKAGING / "preinst"),
             "preremove": str(PACKAGING / "prerm"),
             "postinstall": str(PACKAGING / "postinst"),
             "postremove": str(PACKAGING / "postrm"),

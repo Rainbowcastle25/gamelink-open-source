@@ -440,7 +440,9 @@ Add `--linux-only` to validate the amd64 agent and its Debian package and the
 AppImage with the Linux dependencies and amd64 musl target. Run the full
 validation with `--test-apt` to add the apt install and upgrade test. It
 requires `dpkg-deb`, `apt-ftparchive` (from `apt-utils`), GnuPG and Docker or
-Podman.
+Podman. Set `GAMELINK_APT_SYSTEMD_IMAGE` to a local Debian or Ubuntu image with
+systemd and apt to repeat the lifecycle test with systemd as PID 1. That
+container needs privileged mode and runs with networking disabled.
 
 ### Console protocol policy
 

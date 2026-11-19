@@ -8,8 +8,10 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 
 from release import (KEYS, LICENSES_ASSET, NUMBER, ROOT, agent_name, load_manifest_pins,
                      run, sign_minisign, verify_minisign, write_json)
@@ -29,9 +31,7 @@ def scratch_directory():
                     capture_output=True, text=True).stdout.strip())
 
 
-def gpg_home(work):
-    home = work / "gnupg"
-    home.mkdir(mode=0o700)
+def gpg_home(home):
     return ("gpg", "--no-options", "--homedir", home, "--batch", "--no-tty")
 
 
@@ -53,9 +53,23 @@ def public_fingerprint(gpg, public_key):
     return fingerprint
 
 
-def sign_repository(repo, work, public_key, private_key):
-    gpg = gpg_home(work)
+def pinned_fingerprint(gpg, public_key):
     fingerprint = public_fingerprint(gpg, public_key)
+    if fingerprint != public_key.with_suffix(".fingerprint").read_text().strip():
+        raise ValueError("apt public key does not match the committed fingerprint")
+    return fingerprint
+
+
+def sign_repository(repo, work, public_key, private_key):
+    with TemporaryDirectory(prefix="gnupg-", dir=work) as home:
+        try:
+            sign_release_file(repo, work, public_key, private_key, gpg_home(home))
+        finally:
+            run("gpgconf", "--homedir", home, "--kill", "gpg-agent")
+
+
+def sign_release_file(repo, work, public_key, private_key, gpg):
+    fingerprint = pinned_fingerprint(gpg, public_key)
     if not private_key:
         raise ValueError(f"missing apt signing secret: {APT_SECRET}")
     if (repo / "apt.asc").read_bytes() != public_key.read_bytes():
@@ -65,7 +79,7 @@ def sign_repository(repo, work, public_key, private_key):
     detached = work / "Release.gpg"
     keyring = work / "apt.gpg"
     run(*gpg, "--dearmor", "--output", keyring, public_key)
-    # Import only into this job's private home and select the committed key
+    # Import only into the temporary home and select the committed key
     # explicitly. The secret never appears in argv or a repository file.
     run(*gpg, "--quiet", "--import", input=private_key, text=True)
     signer = (*gpg, "--local-user", fingerprint, "--pinentry-mode", "loopback", "--passphrase", "",
@@ -168,6 +182,7 @@ def build_repository(repo, packages, public_key, env):
             "-o", "APT::FTPArchive::Release::Codename=stable",
             "-o", "APT::FTPArchive::Release::Architectures=amd64 arm64",
             "-o", "APT::FTPArchive::Release::Components=main",
+            "-o", f"APT::FTPArchive::Release::ValidTime={60 * 24 * 60 * 60}",
             "release", release.parent, cwd=repo, env=env, stdout=output)
     staged_release.rename(repo / release)
 
@@ -190,7 +205,9 @@ def validate_repository(version, assets, work, minisign, manifest_key, pins, env
     })
     sign_minisign(minisign, [old_manifest, *old_debs], manifest_key, pins, env)
 
-    gpg = gpg_home(work)
+    home = work / "gnupg"
+    home.mkdir(mode=0o700)
+    gpg = gpg_home(home)
     identity = "GameLink apt CI <apt-ci@example.invalid>"
     run(*gpg, "--pinentry-mode", "loopback", "--passphrase", "", "--quick-generate-key",
         identity, "ed25519", "sign", "1d", env=env)
@@ -198,6 +215,7 @@ def validate_repository(version, assets, work, minisign, manifest_key, pins, env
     test_root.mkdir()
     public_key = test_root / "apt.asc"
     run(*gpg, "--armor", "--output", public_key, "--export", identity, env=env)
+    public_key.with_suffix(".fingerprint").write_text(public_fingerprint(gpg, public_key) + "\n")
     private_key = run(*gpg, "--armor", "--export-secret-keys", identity, env=env,
                       capture_output=True, text=True).stdout
     packages = []
@@ -213,14 +231,32 @@ def validate_repository(version, assets, work, minisign, manifest_key, pins, env
         sign_repository(repo, signing_work, public_key, private_key)
     keyring = test_root / "apt.gpg"
     run(*gpg, "--dearmor", "--output", keyring, public_key, env=env)
+    run("gpgconf", "--homedir", home, "--kill", "gpg-agent", env=env)
     runtime = shutil.which("docker") or shutil.which("podman")
     if runtime is None:
         raise ValueError("apt install validation requires Docker or Podman")
-    run(runtime, "run", "--network", "none",
+    mounts = (
         "--mount", f"type=bind,source={test_root},target=/proof,readonly",
         "--mount", f"type=bind,source={ROOT / 'scripts/test-apt-install.sh'},target=/test-apt-install.sh,readonly",
-        "debian:bookworm-slim", "sh", "/test-apt-install.sh",
-        deb_version(previous), deb_version(version), version, env=env)
+    )
+    test_command = ("sh", "/test-apt-install.sh", deb_version(previous), deb_version(version), version)
+    run(runtime, "run", "--network", "none", *mounts, "debian:bookworm-slim", *test_command, env=env)
+    if image := env.get("GAMELINK_APT_SYSTEMD_IMAGE"):
+        container = run(
+            runtime, "run", "--detach", "--network", "none", "--privileged", "--cgroupns", "private",
+            "--user", "0:0", "--tmpfs", "/run", "--tmpfs", "/tmp", "--env", "container=docker",
+            "--stop-signal", "SIGRTMIN+3", *mounts, "--entrypoint", "/sbin/init", image,
+            env=env, capture_output=True, text=True,
+        ).stdout.strip()
+        try:
+            wait_for_systemd = (
+                'while ! systemctl show --property=Version >/dev/null 2>&1; do sleep 1; done; '
+                'case "$(systemctl is-system-running --wait)" in running|degraded) exit 0;; *) exit 1;; esac'
+            )
+            run(runtime, "exec", container, "timeout", "30", "sh", "-ec", wait_for_systemd, env=env)
+            run(runtime, "exec", container, *test_command, env=env)
+        finally:
+            run(runtime, "stop", "--time", "10", container, env=env)
 
 
 def main():
@@ -236,9 +272,13 @@ def main():
     public_key = KEYS / "apt.asc"
     try:
         if args.sign:
+            # Let cancellation unwind through the temporary keyring cleanup.
+            signal.signal(signal.SIGTERM, lambda signum, _: sys.exit(128 + signum))
             sign_repository(repo, work, public_key, private_key)
         else:
-            public_fingerprint(gpg_home(work), public_key)
+            home = work / "gnupg"
+            home.mkdir(mode=0o700)
+            pinned_fingerprint(gpg_home(home), public_key)
             pins = load_manifest_pins(KEYS)
             minisign = install_tool("minisign", SIGNERS["minisign"], work, work, os.environ)
             packages = list(published_packages(args.build, work, minisign, pins, os.environ))
