@@ -293,17 +293,17 @@ impl Host {
             }
             (
                 "POST",
-                "/v1/host/import"
-                | "/v1/host/invitation"
-                | "/v1/host/requests/approve"
-                | "/v1/host/requests/dismiss",
+                "/v2/host/import"
+                | "/v2/host/invitation"
+                | "/v2/host/requests/approve"
+                | "/v2/host/requests/dismiss",
             ) => {
                 let body: Value = serde_json::from_slice(&request.body)
                     .map_err(|_| (400, "Invalid game request".into()))?;
                 let result = match request.path.as_str() {
-                    "/v1/host/import" => self.import(&body),
-                    "/v1/host/invitation" => self.invitation(&body),
-                    "/v1/host/requests/approve" => self.resolve_request(&body, true),
+                    "/v2/host/import" => self.import(&body),
+                    "/v2/host/invitation" => self.invitation(&body),
+                    "/v2/host/requests/approve" => self.resolve_request(&body, true),
                     _ => self.resolve_request(&body, false),
                 };
                 // Only fixed selection errors are specific; others stay generic.
@@ -321,10 +321,10 @@ impl Host {
                 _,
                 "/v1/host/status"
                 | "/v1/host/refresh"
-                | "/v1/host/import"
-                | "/v1/host/invitation"
-                | "/v1/host/requests/approve"
-                | "/v1/host/requests/dismiss",
+                | "/v2/host/import"
+                | "/v2/host/invitation"
+                | "/v2/host/requests/approve"
+                | "/v2/host/requests/dismiss",
             ) => return Err((405, "Unsupported host request method".into())),
             _ => return Err((404, "Unknown host operation".into())),
         }

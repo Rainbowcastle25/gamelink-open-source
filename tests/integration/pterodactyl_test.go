@@ -211,11 +211,12 @@ func TestRustAgentPterodactylManualRefresh(t *testing.T) {
 		t.Fatal("host status exposed a full server public key")
 	}
 	selection := map[string]any{"gameId": id, "serverFingerprint": selected["serverFingerprint"]}
-	if _, err := request("POST", "/v1/host/invitation", selection, false, 401); err != nil {
+	call("POST", "/v1/host/invitation", selection, 404)
+	if _, err := request("POST", "/v2/host/invitation", selection, false, 401); err != nil {
 		t.Fatal(err)
 	}
-	call("POST", "/v1/host/invitation", map[string]any{"gameId": otherID, "serverFingerprint": selected["serverFingerprint"]}, 400)
-	result := call("POST", "/v1/host/invitation", selection, 200)
+	call("POST", "/v2/host/invitation", map[string]any{"gameId": otherID, "serverFingerprint": selected["serverFingerprint"]}, 400)
+	result := call("POST", "/v2/host/invitation", selection, 200)
 	copied, details, err := invite.Parse(result["invitation"].(string), invite.Options{})
 	if err != nil || copied.Name != selectedName || serverFingerprint(details.ServerPublicKey) != selected["serverFingerprint"] {
 		t.Fatal("copied invitation did not import as the selected game")
@@ -235,12 +236,16 @@ func TestRustAgentPterodactylManualRefresh(t *testing.T) {
 	otherDevice, otherPublic := newKey()
 	// Import approves only the game whose current identity was selected.
 	imported := map[string]any{"gameId": otherID, "serverFingerprint": selected["serverFingerprint"], "publicKey": otherPublic}
-	rejects("/v1/host/import", imported, changedGame)
+	rejects("/v2/host/import", imported, changedGame)
 	if statusFor(call("GET", "/v1/host/status", nil, 200), otherID)["approvedDevices"] != float64(0) {
 		t.Fatal("a rejected import approved a device")
 	}
 	imported["serverFingerprint"] = other["serverFingerprint"]
-	call("POST", "/v1/host/import", imported, 200)
+	call("POST", "/v1/host/import", imported, 404)
+	if statusFor(call("GET", "/v1/host/status", nil, 200), otherID)["approvedDevices"] != float64(0) {
+		t.Fatal("the retired import route approved a device")
+	}
+	call("POST", "/v2/host/import", imported, 200)
 
 	// The copy endpoint enforces production relay policy. Switch only the
 	// relay for the wire test, keeping the keys from the copied invitation.
@@ -322,24 +327,26 @@ func TestRustAgentPterodactylManualRefresh(t *testing.T) {
 
 	// Dismiss requires the same selection as approval, then ignores the key.
 	dismissal := map[string]any{"gameId": id, "serverFingerprint": other["serverFingerprint"], "requestId": pendingIDs(snapshot, id)[strangerPublic], "publicKey": strangerPublic}
-	rejects("/v1/host/requests/dismiss", dismissal, changedGame)
+	rejects("/v2/host/requests/dismiss", dismissal, changedGame)
 	dismissal["serverFingerprint"], dismissal["publicKey"] = selected["serverFingerprint"], friendPublic
-	rejects("/v1/host/requests/dismiss", dismissal, notPending)
+	rejects("/v2/host/requests/dismiss", dismissal, notPending)
 	dismissal["publicKey"] = strangerPublic
-	call("POST", "/v1/host/requests/dismiss", dismissal, 200)
+	call("POST", "/v1/host/requests/dismiss", dismissal, 404)
+	call("POST", "/v2/host/requests/dismiss", dismissal, 200)
 	snapshot = knockUntil(stranger, probe)
 	if pending := pendingIDs(snapshot, id); pending[strangerPublic] != nil || pending[friendPublic] != requestID {
 		t.Fatal("a dismissed device was listed again before rotation")
 	}
 
 	approval := map[string]any{"gameId": otherID, "serverFingerprint": other["serverFingerprint"], "requestId": requestID, "publicKey": friendPublic, "label": "Friend"}
-	rejects("/v1/host/requests/approve", approval, notPending)
+	rejects("/v2/host/requests/approve", approval, notPending)
 	approval["gameId"] = id
-	rejects("/v1/host/requests/approve", approval, changedGame)
+	rejects("/v2/host/requests/approve", approval, changedGame)
 	approval["serverFingerprint"], approval["publicKey"] = selected["serverFingerprint"], otherPublic
-	rejects("/v1/host/requests/approve", approval, notPending)
+	rejects("/v2/host/requests/approve", approval, notPending)
 	approval["publicKey"] = friendPublic
-	call("POST", "/v1/host/requests/approve", approval, 200)
+	call("POST", "/v1/host/requests/approve", approval, 404)
+	call("POST", "/v2/host/requests/approve", approval, 200)
 	var handled struct {
 		Games map[string]struct {
 			Pending   []struct{ PublicKey string }

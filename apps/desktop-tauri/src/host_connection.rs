@@ -188,9 +188,9 @@ fn call_in(request: Value, dir: &Path) -> Result<Value> {
         "refreshHost" => refresh(&read_configured(dir)?),
         "approveLinkedRequest" | "dismissLinkedRequest" => {
             let path = if request["method"] == "approveLinkedRequest" {
-                "/v1/host/requests/approve"
+                "/v2/host/requests/approve"
             } else {
-                "/v1/host/requests/dismiss"
+                "/v2/host/requests/dismiss"
             };
             game_request(&game_connection(dir)?, path, json!({
                 "gameId":request["id"],"serverFingerprint":request["serverFingerprint"],
@@ -332,7 +332,13 @@ fn host_request(
 }
 
 fn game_request(saved: &SavedConnection, path: &str, body: Value) -> Result<Value> {
-    host_request(saved, "POST", path, body, 15)
+    host_request(saved, "POST", path, body, 15).map_err(|error| {
+        if error == "HTTP transport returned status 404" {
+            UPDATE_AGENT.into()
+        } else {
+            error
+        }
+    })
 }
 
 pub fn invitation(request: &Value) -> Result<String> {
@@ -342,7 +348,7 @@ pub fn invitation(request: &Value) -> Result<String> {
 fn invitation_from(request: &Value, dir: &Path) -> Result<String> {
     let result = game_request(
         &game_connection(dir)?,
-        "/v1/host/invitation",
+        "/v2/host/invitation",
         json!({
             "gameId":request["id"],"serverFingerprint":request["serverFingerprint"]
         }),
@@ -368,7 +374,7 @@ fn import_game(saved: &SavedConnection, game_id: &str, fingerprint: &Value) -> R
         .ok_or("could not read this device's public key")?;
     let result = game_request(
         saved,
-        "/v1/host/import",
+        "/v2/host/import",
         json!({"gameId":game_id,"serverFingerprint":fingerprint,"publicKey":public_key}),
     )?;
     let invitation = invitation_text(&result)?;
@@ -519,6 +525,43 @@ mod tests {
             ]
         );
         assert_eq!(http_calls.get(), 0);
+    }
+
+    #[test]
+    fn cached_current_snapshot_cannot_approve_after_agent_downgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = configure(dir.path(), "https://downgraded.example", "admin").unwrap();
+        let snapshot = {
+            let _fake = bridge::fake::install(|request| {
+                assert_eq!(request["url"], "https://downgraded.example/v1/host/refresh");
+                Ok(json!({"games":[{
+                    "id":"game","name":"Game","type":"factorio","serverFingerprint":"fingerprint",
+                    "disabled":false,"approvedDevices":0,"state":"running","detail":""
+                }],"refreshedAt":""}))
+            });
+            refresh(&saved).unwrap()
+        };
+        assert_eq!(snapshot["games"][0]["legacyAgent"], false);
+
+        let approved = std::rc::Rc::new(std::cell::Cell::new(false));
+        let approved_on_node = approved.clone();
+        let _fake = bridge::fake::install(move |request| match request["url"].as_str() {
+            Some("https://downgraded.example/v2/host/requests/approve") => {
+                Err("HTTP transport returned status 404".into())
+            }
+            Some("https://downgraded.example/v1/host/requests/approve") => {
+                approved_on_node.set(true);
+                Ok(json!({}))
+            }
+            _ => panic!("unexpected host operation"),
+        });
+        let result = call_in(
+            json!({"method":"approveLinkedRequest","id":"game","serverFingerprint":snapshot["games"][0]["serverFingerprint"],
+                "requestId":1,"publicKey":"device-key","label":""}),
+            dir.path(),
+        );
+        assert!(!approved.get(), "approval reached the legacy route");
+        assert_eq!(result.unwrap_err(), UPDATE_AGENT);
     }
 
     #[test]
