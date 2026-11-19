@@ -267,12 +267,22 @@ Install the two helper files from
 source tree.
 
 ```sh
-sudo install -m 0644 packaging/systemd/gamelink-agent-update.path /etc/systemd/system/
-sudo install -m 0644 packaging/systemd/gamelink-agent-update.service /etc/systemd/system/
-sudo ln /usr/local/bin/gamelink-agent /usr/local/bin/.gamelink-agent-update-helper
-sudo systemctl daemon-reload
-sudo systemctl enable --now gamelink-agent-update.path
+helper=/usr/local/bin/.gamelink-agent-update-helper
+sudo install -m 0644 packaging/systemd/gamelink-agent-update.path /etc/systemd/system/ &&
+  sudo install -m 0644 packaging/systemd/gamelink-agent-update.service /etc/systemd/system/ &&
+  { sudo test -e "$helper" || sudo ln /usr/local/bin/gamelink-agent "$helper"; } &&
+  sudo test ! -L "$helper" &&
+  test "$(sudo stat -c '%u:%a' "$helper")" = '0:755' &&
+  sudo "$helper" --version &&
+  sudo systemctl daemon-reload &&
+  sudo systemctl enable --now gamelink-agent-update.path
 ```
+
+The chain only enables the watcher once the helper exists, is root-owned and
+runs. If it stops, fix the helper before enabling the path unit. Otherwise
+staged requests would wait for a helper that can't start. If you later replace
+the agent by hand, the helper keeps the previous trusted version until the next
+signed update advances it.
 
 Stage the latest signed release with `gl update stage`. Add
 `--version <expected>` to require an exact match with the latest signed
