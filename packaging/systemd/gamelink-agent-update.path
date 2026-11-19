@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for a staged GameLink agent update
+
+[Path]
+PathExists=/var/lib/gamelink-agent/update/staged/request
+Unit=gamelink-agent-update.service
+
+[Install]
+WantedBy=multi-user.target

@@ -40,6 +40,10 @@ fn legacy_help(text: &str) -> String {
         "",
     )
     .replace(
+        "  update stage [--version VER]  stage the latest signed agent release for installation\n  update install-staged         verify and install the staged release (root helper)\n",
+        "",
+    )
+    .replace(
         "\nMachine-readable output: status, games list, devices list, requests list and host refresh accept --json.\n  host detect --panel-url URL --token-file PATH [--node-id N] [--out PATH] [--json]\n  host check --config PATH [--listen 127.0.0.1:8467] [--json]\nDetect exits 3 when a node decision is needed; check exits 1 if any check fails.\n",
         "",
     )
@@ -109,6 +113,27 @@ fn update_check_without_a_verification_key_fails_clearly() {
         );
     }
     assert!(!temp.path().join("release-check.json").exists());
+}
+
+#[test]
+fn update_commands_expose_no_download_or_install_path_options() {
+    let dir = tempfile::tempdir().unwrap();
+    for args in [
+        ["update", "stage", "--url", "https://example.com/release"],
+        ["update", "install-staged", "--path", "/tmp/agent"],
+    ] {
+        assert_eq!(run(dir.path(), &args).status.code(), Some(2), "{args:?}");
+    }
+    let version = Command::new(env!("CARGO_BIN_EXE_gamelink-agent"))
+        .env_clear()
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(version.status.success());
+    assert_eq!(
+        version.stdout,
+        concat!("gamelink-agent ", env!("CARGO_PKG_VERSION"), "\n").as_bytes()
+    );
 }
 
 #[test]

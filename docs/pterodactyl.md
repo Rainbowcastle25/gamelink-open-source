@@ -182,7 +182,14 @@ current identity.
 - `/v2/host/import` approves the importing device and returns its invitation.
 
 These actions require an updated desktop and agent. The agent rejects the
-previous `/v1` routes for these actions. The interface exposes no shell,
-console commands, files, arbitrary destinations, game power controls, or Panel
-credentials. The admin token authorizes device approval for this node's
-registered games.
+previous `/v1` routes for these actions. The admin token also authorizes
+`POST /v2/host/update` on nodes with
+[signed updates enabled](agent-setup.md#signed-agent-updates). Send an empty
+request or `{"version":"<expected>"}`. The API returns HTTP 202 when the
+request is queued. If the expected version differs from the latest signed
+manifest, staging fails before the binary download. Poll `GET /v1/host/status`
+for `agentVersion` and `update`. Requests still require a bearer token and
+must omit the `Origin` header.
+
+The interface exposes no shell, console commands, file transfer, arbitrary
+destinations, game power controls, or Panel credentials.
