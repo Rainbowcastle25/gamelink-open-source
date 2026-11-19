@@ -14,6 +14,7 @@ import sys
 import tarfile
 import tomllib
 
+from release_pins import check_binary_pins, check_bundle_pins
 from release_tools import bundle_environment, install_signers, sha256, verify_signers
 
 
@@ -86,6 +87,10 @@ def release_metadata(tag, env):
     head = run("git", "rev-parse", "HEAD", env=env, capture_output=True).stdout
     if tagged_commit != head:
         raise ValueError(f"{tag} does not point to the checked-out commit")
+    return desktop, tag_severity(ref, env)
+
+
+def tag_severity(ref, env):
     severity = run(
         "git", "for-each-ref",
         "--format=%(trailers:key=GameLink-Release-Severity,valueonly)",
@@ -93,7 +98,32 @@ def release_metadata(tag, env):
     ).stdout.strip() or "normal"
     if severity not in ("normal", "security"):
         raise ValueError("GameLink-Release-Severity must be normal or security")
-    return desktop, severity
+    return severity
+
+
+def release_version(tag):
+    if not tag.startswith("v") or not VERSION.fullmatch(tag[1:]):
+        raise ValueError("expected a v-prefixed release SemVer tag")
+    return tag[1:]
+
+
+def release_source(tag, commit, env):
+    version = release_version(tag)
+    if not commit or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("expected the full build commit SHA")
+    current_tag = "refs/gamelink/release-tag"
+    master = "refs/remotes/origin/master"
+    # Fetch an explicit live tag ref, independent of any tag in checkout.
+    run("git", "fetch", "--no-tags", "origin", f"+refs/heads/master:{master}",
+        f"+refs/tags/{tag}:{current_tag}", env=env)
+    tagged_commit = run("git", "rev-parse", "--verify", f"{current_tag}^{{commit}}",
+                        env=env, capture_output=True, text=True).stdout.strip()
+    if tagged_commit != commit:
+        raise ValueError(f"{tag} does not point to build commit {commit}")
+    if subprocess.run(("git", "merge-base", "--is-ancestor", commit, master),
+                      cwd=ROOT, env=env).returncode != 0:
+        raise ValueError(f"build commit {commit} is not an ancestor of origin/master")
+    return version, tag_severity(current_tag, env)
 
 
 def throwaway_keys(work, tools, env):
@@ -180,15 +210,32 @@ def sign_tauri(artifact, version, work, tools, tauri_pin, tauri_key, password, e
     return signature_text
 
 
-def sign_release(version, severity, linux_only, work, out, tools, pins, keys, repository, env):
-    verify_signers(tools)
+def unsigned_assets(version, linux_only, out):
     installers = {platform: out / name for platform, _, _, name in bundles(version, linux_only)}
     agents = [out / agent_name(arch) for arch in agent_arches(linux_only)]
     payloads = sorted([*installers.values(), *agents, out / "GameLink-licenses.tar.gz"])
-    if set(out.iterdir()) != set(payloads) or any(
+    if out.is_symlink() or set(out.iterdir()) != set(payloads) or any(
         path.is_symlink() or not path.is_file() or path.stat().st_size == 0 for path in payloads
     ):
         raise ValueError(f"expected only the complete set of unsigned release assets in {out}")
+    return installers, agents, payloads
+
+
+def check_staging(version, linux_only, work, out, tools, pins, env):
+    verify_signers(tools)
+    installers, agents, _ = unsigned_assets(version, linux_only, out)
+    for path in agents:
+        binary = path.read_bytes()
+        if not binary.startswith(b"\x7fELF"):
+            raise ValueError(f"{path.name}: expected a Linux agent executable")
+        check_binary_pins(binary, path.name, pins)
+    for platform, _, bundle, _ in bundles(version, linux_only):
+        check_bundle_pins(bundle, installers[platform], work, pins, env)
+
+
+def sign_release(version, severity, linux_only, work, out, tools, pins, keys, repository, env):
+    verify_signers(tools)
+    installers, agents, payloads = unsigned_assets(version, linux_only, out)
 
     manifest_key, tauri_key, password = keys
     manifest_pins, _, tauri_pin = pins
@@ -231,59 +278,88 @@ def sign_release(version, severity, linux_only, work, out, tools, pins, keys, re
     print(f"Verified release assets: {out}", flush=True)
 
 
+def verify_release(out, pins, env):
+    run("cargo", "test", "--manifest-path", "core/Cargo.toml", "--locked", "-p", "gamelink-core",
+        "--features", "update-notifications", "--lib",
+        "update::tests::verifies_release_pipeline_manifest", "--", "--ignored", "--exact",
+        env=env | {
+            "GAMELINK_UPDATE_PUBLIC_KEYS": " ".join(pins[0]),
+            "GAMELINK_TEST_SIGNED_RELEASE_DIR": str(out),
+        })
+    run("sha256sum", "--check", "--strict", "SHA256SUMS", cwd=out, env=env)
+
+
 def prepare_release(args):
     env = {
         name: value for name, value in os.environ.items()
         if name not in SECRET_NAMES + OTHER_TAURI_SIGNING_VARS
     }
-    version, severity = release_metadata(args.tag, env)
+    out = args.output.absolute()
+    if args.verify:
+        verify_release(out, load_pins(KEYS), env)
+        return
+    if args.check_source or args.sign:
+        version, severity = release_source(args.tag, args.commit, env)
+        if args.check_source:
+            print(f"Verified {args.tag} at {args.commit} on origin/master ({severity})", flush=True)
+            return
+    elif args.preflight:
+        version = release_version(args.tag)
+    else:
+        version, severity = release_metadata(args.tag, env)
+
     scratch = ROOT / ".tools"
     scratch.mkdir(exist_ok=True)
     work = Path(run("mktemp", "-d", scratch / "release.XXXXXXXX",
                     env=env, capture_output=True, text=True).stdout.strip())
     env["TMPDIR"] = str(work)
-    out = args.output.resolve()
-    tools = work / "signers" if args.validate else args.tools.resolve()
+    tools = work / "signers" if args.validate else args.tools.absolute()
     if args.validate:
         install_signers(tools, work, env)
         keys = throwaway_keys(work, tools, env)
         pins = load_pins(work)
     else:
         pins = load_pins(KEYS)
-        if args.sign:
+        if args.build:
+            install_signers(tools, work, env)
+        elif args.sign:
             keys = tuple(os.environ.get(name) for name in SECRET_NAMES)
             if missing := [name for name, value in zip(SECRET_NAMES, keys) if not value]:
                 raise ValueError(f"missing release secrets: {', '.join(missing)}")
-        else:
-            install_signers(tools, work, env)
+
     if args.build or args.validate:
-        build_release(version, args.validate, work, out, tools, pins, env)
+        build_release(version, args.linux_only, work, out, tools, pins, env)
+    if args.preflight or args.validate:
+        check_staging(version, args.linux_only, work, out, tools, pins, env)
     if args.sign or args.validate:
-        sign_release(version, severity, args.validate, work, out, tools, pins, keys,
+        sign_release(version, severity, args.linux_only, work, out, tools, pins, keys,
                      args.repository, env)
     if args.validate:
-        run("cargo", "test", "--manifest-path", "core/Cargo.toml", "--locked", "-p", "gamelink-core",
-            "--features", "update-notifications", "--lib",
-            "update::tests::verifies_release_pipeline_manifest", "--", "--ignored", "--exact",
-            env=env | {
-                "GAMELINK_UPDATE_PUBLIC_KEYS": " ".join(pins[0]),
-                "GAMELINK_TEST_SIGNED_RELEASE_DIR": str(out),
-            })
+        verify_release(out, pins, env)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--build", action="store_true", help="stage unsigned release assets and pinned signers")
-    mode.add_argument("--sign", action="store_true", help="sign and verify staged release assets")
-    mode.add_argument("--validate", action="store_true", help="build and sign Linux amd64 with throwaway keys")
-    parser.add_argument("--tag", help="checked-out release tag (required for --build and --sign)")
+    mode.add_argument("--check-source", action="store_true", help="check the tag and master's ancestry")
+    mode.add_argument("--preflight", action="store_true", help="check signer hashes and embedded pins")
+    mode.add_argument("--sign", action="store_true", help="sign assets from the successful preflight")
+    mode.add_argument("--verify", action="store_true", help="verify signed assets with the Rust client verifier")
+    mode.add_argument("--validate", action="store_true", help="build, check and sign with throwaway keys")
+    parser.add_argument("--linux-only", action="store_true", help="validate only the amd64 agent and AppImage")
+    parser.add_argument("--tag", help="release tag")
+    parser.add_argument("--commit", help="triggering build's full commit SHA")
     parser.add_argument("--repository", default="Rainbowcastle25/gamelink-open-source")
     parser.add_argument("--output", type=Path, default=ROOT / "dist/release")
     parser.add_argument("--tools", type=Path, default=ROOT / "dist/release-tools")
     args = parser.parse_args()
-    if args.validate == bool(args.tag):
-        parser.error("provide --tag for --build or --sign only")
+    if bool(args.tag) != (args.build or args.check_source or args.preflight or args.sign):
+        parser.error("provide --tag for --build, --check-source, --preflight or --sign")
+    if bool(args.commit) != (args.check_source or args.sign):
+        parser.error("provide --commit for --check-source or --sign")
+    if args.linux_only and not args.validate:
+        parser.error("--linux-only requires --validate")
     try:
         prepare_release(args)
     except (ValueError, OSError, subprocess.CalledProcessError) as error:

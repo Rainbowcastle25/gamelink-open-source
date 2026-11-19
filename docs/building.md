@@ -365,45 +365,63 @@ compatibility from a successful build or echo test.
    `core/crates/gamelink-agent/Cargo.toml` and update both checked-in Cargo
    lockfiles. Use SemVer without build metadata. Regenerate
    [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) if dependencies changed.
-3. After CI passes and the release commit is on `origin/master`, tag it and
-   push the tag. For example, `git tag v0.3.0` and `git push origin v0.3.0`.
-   For a security release use
-   `git tag -a v0.3.0 -m 'GameLink v0.3.0' -m 'GameLink-Release-Severity: security'`.
-   A pushed `v*` tag is the only release trigger. Before signing, the
-   signing job fetches `master` and checks the tagged commit's ancestry
-   with `git merge-base --is-ancestor`.
-4. Review the draft release's notes and assets before clicking **Publish
+3. Merge the release commit to `master` after CI passes. Run `git fetch origin`
+   and tag the merged commit with `git tag v0.3.0 <release-commit>`. Push the
+   tag with `git push origin v0.3.0`. For a security release use
+   `git tag -a v0.3.0 <release-commit> -m 'GameLink v0.3.0' -m 'GameLink-Release-Severity: security'`.
+   Release tags matching `v*` are immutable. The GitHub tag ruleset blocks
+   updates and deletions. Cut a new version if the tagged commit needs changes.
+4. Wait for the draft. Review its notes and assets, then click **Publish
    release**. The Windows installer has a Tauri updater signature. It has no
    Authenticode signature and can trigger Windows SmartScreen warnings, which
    the draft notes disclose. Publish a stable release as latest to activate
    the two standard update feeds. Prerelease tags produce prerelease drafts.
 
-The workflow builds static Linux agents for amd64 and arm64, the Linux x86_64
-AppImage and the Windows x64 NSIS installer. It uses the same GNU Windows
-cross-build as desktop CI, then packages the executable and
-`WebView2Loader.dll` with NSIS on Ubuntu. The build job stages unsigned
-assets and public-key pins from the tag are embedded in the binaries.
-Packaging downloads use fixed release URLs and SHA-256 checks, and the
-workflow pins Actions to full commit SHAs. On a separate runner, the signing
-job verifies the staged signer binaries' SHA-256 digests, then signs and
-verifies the assets using the `release` environment. The draft job checks
-the asset checksums and has permission to create the GitHub Release. If an
-upload fails after draft creation, inspect or discard the incomplete draft
-before retrying the same run. Published releases are immutable.
+[**Release build**](../.github/workflows/release.yml) runs on a pushed `v*` tag
+with read-only repository access. It builds and uploads unsigned static Linux
+agents for amd64 and arm64, the Linux x86_64 AppImage, and the Windows x64 NSIS
+installer. The Windows installer uses the same GNU cross-build as desktop CI
+and includes `WebView2Loader.dll`. Packaging downloads use fixed URLs and
+SHA-256 pins.
 
-The **Release** workflow also runs on pull requests with freshly generated
-keys and read-only repository permissions. It builds the amd64 agent and
-AppImage before signing them, verifies both detached signatures and the
-checksums, and runs the Rust manifest verifier with the temporary pins.
-For local validation, use the toolchain wrapper with the Linux GUI
-prerequisites, `curl`, and the amd64 musl Rust target installed. The script
-downloads and checks the pinned signers and AppImage tools.
+[**Sign release**](../.github/workflows/sign-release.yml) runs on the completion
+of **Release build**. GitHub loads a `workflow_run` workflow from the default
+branch, so reviewed `master` code controls access to the signing keys even when
+someone tags a different commit. The keyless preflight requires a successful
+tag build whose commit is an ancestor of `origin/master` and is still the
+target of the tag. It downloads the build's artifact by run and checks the
+signer executable hashes and public pins embedded in the binaries against
+the `master` checkout. It reads the AppImage and NSIS desktop executables
+from the packages without running them.
+
+The signing job uses the preflight's immutable artifact ID and the
+`master`-only `release` environment. A following job runs the Rust client
+verifier against the signed manifest and checks the asset checksums. The
+draft job rechecks the live tag and checksums and uploads the verified assets.
+If an upload fails after draft creation, inspect or discard the incomplete
+draft before retrying the same run. Published releases are immutable. Both
+workflows pin Actions to full commit SHAs.
+
+On pull requests, **Release build** tests the signing gates and builds all
+four targets using freshly generated keys. It checks the embedded pins, signs
+the assets, checks the detached signatures and checksums, and runs the Rust
+client verifier. This exercises the build and signing scripts before merge.
+GitHub can start **Sign release** once its workflow is on `master`. Its jobs
+require a successful tag build.
+
+For local validation, use the toolchain in the table above with the Linux GUI
+dependencies, both Linux musl targets, the GNU Windows target, MinGW-w64, NSIS,
+`curl`, `unsquashfs` (from `squashfs-tools`) and `7z` (from `7zip`).
 
 ```sh
 mkdir -p .tools
 release_work="$(mktemp -d "$PWD/.tools/release.XXXXXXXX")"
+python3 -B scripts/test-release-gates.py
 python3 -B scripts/release.py --validate --output "$release_work/assets"
 ```
+
+Add `--linux-only` to validate just the amd64 agent and AppImage with the
+Linux dependencies and amd64 musl target.
 
 ### Console protocol policy
 

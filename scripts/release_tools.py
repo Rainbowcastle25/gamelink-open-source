@@ -85,6 +85,8 @@ def install_signers(tools, work, env):
 def verify_signers(tools):
     # Artifact transfer does not preserve executable bits. Set them only after
     # checking the executable bytes independently of the build runner.
+    if tools.is_symlink() or {path.name for path in tools.iterdir()} != SIGNERS.keys():
+        raise ValueError(f"expected only the pinned signing tools in {tools}")
     for name, (_, _, _, binary_digest) in SIGNERS.items():
         path = tools / name
         require_digest(path, binary_digest)

@@ -1,4 +1,4 @@
-name: Release
+name: Release build
 
 on:
   push:
@@ -18,19 +18,12 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
-    outputs:
-      commit: ${{ steps.source.outputs.commit }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Record source commit
-        id: source
-        run: |
-          commit="$(git rev-parse HEAD)"
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -58,7 +51,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev libfuse2t64
       - name: Install ARM target and Windows cross-bundling tools
-        if: github.event_name == 'push'
         run: |
           rustup target add aarch64-unknown-linux-musl x86_64-pc-windows-gnu
           sudo apt-get install -y gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
@@ -73,9 +65,14 @@ jobs:
           9e061bef1a8b611aeb2ea76d9a3bd7722b960ca1a9dff8e38d2ab51e5a8f5e5b  nsis_3.09-4ubuntu1_amd64.deb
           SHA256
           sudo dpkg --install nsis-common_3.09-4ubuntu1_all.deb nsis_3.09-4ubuntu1_amd64.deb
-      - name: Build and verify Linux artifacts with throwaway keys
+      - name: Test the signing gates
         if: github.event_name == 'pull_request'
-        run: python3 -B scripts/release.py --validate
+        run: python3 -B scripts/test-release-gates.py
+      - name: Build and verify all artifacts with throwaway keys
+        if: github.event_name == 'pull_request'
+        run: |
+          sudo apt-get install -y squashfs-tools 7zip
+          python3 -B scripts/release.py --validate
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name == 'pull_request'
         with:
@@ -93,97 +90,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name == 'push'
         with:
-          name: unsigned-release
+          name: unsigned-release-${{ github.run_attempt }}
           path: ${{ runner.temp }}/release-staging/
           if-no-files-found: error
           compression-level: 0
-
-  sign:
-    name: Sign and verify staged release assets
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    environment: release
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Require the tagged build commit to be on master
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          BUILT_COMMIT: ${{ needs.build.outputs.commit }}
-        run: |
-          set -euo pipefail
-
-          [[ "$RELEASE_TAG" == v* ]]
-          tagged_commit="$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")"
-          if [[ "$tagged_commit" != "$BUILT_COMMIT" || "$tagged_commit" != "$(git rev-parse HEAD)" ]]; then
-              echo "::error::Release tag $RELEASE_TAG does not match the checkout and unsigned build"
-              exit 1
-          fi
-
-          git fetch --no-tags origin '+refs/heads/master:refs/remotes/origin/master'
-          if ! git merge-base --is-ancestor "$tagged_commit" refs/remotes/origin/master; then
-              echo "::error::Release tag $RELEASE_TAG is not an ancestor of origin/master"
-              exit 1
-          fi
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: unsigned-release
-          path: ${{ runner.temp }}/release-staging
-      - name: Run the pinned signers and verify their output
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          GAMELINK_RELEASE_SIGNING_KEY: ${{ secrets.GAMELINK_RELEASE_SIGNING_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          python3 -B scripts/release.py --sign --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY" \
-            --output "$RUNNER_TEMP/release-staging/assets" --tools "$RUNNER_TEMP/release-staging/tools"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: release-assets
-          path: ${{ runner.temp }}/release-staging/assets/
-          if-no-files-found: error
-          compression-level: 0
-
-  draft:
-    name: Create draft GitHub Release
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [build, sign]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: release-assets
-          path: release-assets
-      - name: Upload verified assets to a draft
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
-          BUILT_COMMIT: ${{ needs.build.outputs.commit }}
-        run: |
-          tagged_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$RELEASE_TAG" --jq .sha)"
-          if [[ "$tagged_commit" != "$BUILT_COMMIT" ]]; then
-            echo "::error::Tag $RELEASE_TAG moved after the build"
-            exit 1
-          fi
-          release_tags="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[].tag_name')"
-          if grep -Fxq -- "$RELEASE_TAG" <<< "$release_tags"; then
-            echo "::error::A release or draft already exists for $RELEASE_TAG"
-            exit 1
-          fi
-          (cd release-assets && sha256sum --check SHA256SUMS)
-          flags=(--draft --verify-tag --title "GameLink $RELEASE_TAG" --generate-notes)
-          if [[ "$RELEASE_TAG" == *-* ]]; then
-            flags+=(--prerelease --latest=false)
-          fi
-          gh release create "$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" "${flags[@]}" \
-            --notes 'Windows installers lack Authenticode signing, so Windows SmartScreen may warn when you run them.'
