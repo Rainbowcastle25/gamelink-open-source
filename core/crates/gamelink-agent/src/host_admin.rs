@@ -324,6 +324,10 @@ pub(super) fn request_update(
         self_update::QueueError::Busy => {
             (409, "An agent update is already staged or running".into())
         }
+        self_update::QueueError::Cooldown => (
+            429,
+            "Agent updates are limited to one attempt every five minutes".into(),
+        ),
         self_update::QueueError::Unavailable => (
             503,
             "Agent updates are unavailable on this installation".into(),

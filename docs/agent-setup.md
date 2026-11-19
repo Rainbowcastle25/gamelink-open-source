@@ -241,18 +241,22 @@ name from this guide. Wait for other agent CLI commands to finish. Run this
 one-time setup on the server.
 
 ```sh
-sudo chmod 1770 /var/lib/gamelink-agent &&
-  sudo chown root:gamelink /var/lib/gamelink-agent &&
+sudo chown -h root:gamelink /var/lib/gamelink-agent &&
+  sudo test ! -L /var/lib/gamelink-agent &&
+  sudo test -d /var/lib/gamelink-agent &&
+  sudo chmod 1770 /var/lib/gamelink-agent &&
+  test "$(sudo stat -c '%u:%G:%a' /var/lib/gamelink-agent)" = '0:gamelink:1770' &&
   sudo mkdir -m 0750 /var/lib/gamelink-agent/update &&
   sudo chgrp gamelink /var/lib/gamelink-agent/update &&
   sudo install -d -o gamelink -g gamelink -m 0700 /var/lib/gamelink-agent/update/staged &&
   sudo install -m 0644 /dev/null /var/lib/gamelink-agent/update/swap.lock
 ```
 
-If the update directory already exists, check its ownership and permissions
-before continuing. The sticky bit on the state directory lets `gamelink`
-create and manage its existing files while protecting the root-owned update
-directory from replacement. Use local filesystems for the state and binary.
+The command chain stops if `mkdir` finds an existing update directory.
+Inspect its ownership and permissions before continuing. Taking ownership
+before setting the sticky bit protects the root-owned update directory from
+replacement while letting `gamelink` manage its existing state files. Use
+local filesystems for the state and binary.
 
 Install the two helper files from
 [`packaging/systemd/`](../packaging/systemd/) in the same trusted release's
@@ -278,8 +282,11 @@ The helper stops the main service, keeps the previous binary as
 `/usr/local/bin/.gamelink-agent.previous`, and atomically installs the verified
 binary. It checks the version and watches the service for 10 seconds. A bad
 start or health check triggers rollback and a restart of the previous agent.
-Game sessions disconnect during the restart. The helper waits for running
-agent CLI commands to finish before the swap and blocks new ones until it ends.
+Game sessions disconnect during the restart. The helper waits up to five
+seconds for existing CLI commands before it gives up on the swap. A root-owned
+transaction record lets the helper recover or finish cleanup after interruption.
+Agent update attempts have a five-minute cooldown, including after failures
+and service restarts. The host update endpoint returns HTTP 429 during cooldown.
 
 ## Troubleshooting
 
@@ -304,7 +311,7 @@ agent CLI commands to finish before the swap and blocks new ones until it ends.
   check outbound HTTPS access, the version and the installed release pins.
 - If the state stays `staged`, check
   `sudo systemctl status gamelink-agent-update.path gamelink-agent-update.service`.
-  If recovery fails and the backup is still present, fix the reported service
-  or filesystem problem, then run the root helper manually to restore it.
+  If recovery fails, fix the reported service or filesystem problem, then
+  run the root helper manually to finish the recorded transaction.
   Use the manual stop-replace-start procedure above if the helper itself
   cannot run.

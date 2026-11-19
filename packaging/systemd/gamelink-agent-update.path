@@ -3,6 +3,7 @@ Description=Watch for a staged GameLink agent update
 
 [Path]
 PathExists=/var/lib/gamelink-agent/update/staged/request
+PathExists=/var/lib/gamelink-agent/update/pending.json
 Unit=gamelink-agent-update.service
 
 [Install]

@@ -38,6 +38,8 @@ metadata from the built-in GitHub endpoint. A separately installed root
 helper verifies the staged manifest and native binary again against the
 installed agent's embedded Minisign pins and the signed SHA-256 digest. It
 requires a newer version and replaces only the installed GameLink agent.
+The root helper guarantees “signed by the release key and newer than installed”,
+while selection of the latest release is the unprivileged agent's responsibility.
 
 Desktop presence notifications are off by default. With the setting enabled,
 checks go through the same Tailcat probe as **Check** and reveal to the host's
