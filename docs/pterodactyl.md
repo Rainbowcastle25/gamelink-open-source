@@ -158,8 +158,15 @@ card. Copying and reviewing join requests require the updated desktop and
 Linux agent. Your friend imports the invitation and clicks **Join** to request access.
 In **People**, review the request for that game, confirm the device's public
 key, and approve it, or dismiss it. Dismissal on the node needs the updated
-agent. The desktop manages one connected node at a time. Change
-the endpoint and token in **Host admin** to administer another node.
+agent. The desktop manages one connected node at a time. Use **Active saved
+host** in **Host admin** to switch between saved connections. Add a new
+endpoint with its own administrator token.
+
+If you set up Panel inventory in the 0.1.0-alpha desktop, **Host admin** also
+shows **Pterodactyl inventory** with the saved Panel URL and nodes. Select
+**Refresh inventory** to look up servers on those nodes. This inventory is
+read-only. It keeps its saved Panel settings when you connect a GameLink
+agent to manage games or access.
 
 Suspended, missing, and newly unmapped servers are disabled on the next
 successful Refresh, retaining their keys for later recovery. Failures preserve

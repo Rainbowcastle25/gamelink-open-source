@@ -663,6 +663,8 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
       return clone(settings);
     },
 
+    async panelConnection() { return null; },
+    async refreshPanelInventory() { return null; },
     async hostConnection(): Promise<HostConnection> {
       await wait();
       return { endpoint: hostEndpoint, configured: !!hostEndpoint };

@@ -5,7 +5,9 @@ mod host;
 mod host_connection;
 mod hosting;
 mod minecraft_lists;
+mod panel_inventory;
 mod presence;
+mod profile;
 #[cfg(target_os = "linux")]
 mod restart;
 mod updater;
@@ -50,6 +52,8 @@ fn public_method(method: &str) -> bool {
             | "addServer"
             | "updateServer"
             | "updateSettings"
+            | "panelConnection"
+            | "refreshPanelInventory"
             | "hostConnection"
             | "configureHost"
             | "hostStatus"
@@ -110,6 +114,7 @@ fn native_or_manager(app: &tauri::AppHandle, request: Value) -> Result<Value, St
         return host_connection::call(request);
     }
     match request["method"].as_str().unwrap_or("") {
+        "panelConnection" | "refreshPanelInventory" => panel_inventory::call(request),
         "openReleaseNotes" => {
             if let Some(notice) = host::release_check_dir()
                 .and_then(|dir| gamelink_core::update::cached_notice(&dir, VERSION))

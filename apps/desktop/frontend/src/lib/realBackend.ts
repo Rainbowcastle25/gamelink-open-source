@@ -52,6 +52,8 @@ export const realBackend: Backend = {
   updateServer: async (id, name, description, localPort) => call("updateServer", { id, name, description, localPort }),
   updateSettings: async (v) => call("updateSettings", { settings: v }),
 
+  panelConnection: async () => call("panelConnection"),
+  refreshPanelInventory: async () => call("refreshPanelInventory"),
   hostConnection: async () => call("hostConnection"),
   configureHost: async (endpoint, token) => call("configureHost", { endpoint, token }),
   hostStatus: async () => call("hostStatus"),
