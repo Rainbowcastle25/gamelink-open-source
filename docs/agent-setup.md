@@ -88,7 +88,7 @@ on GitHub. Then install the key and restrict this source to its keyring.
 ```sh
 (
   set -eu
-  expected_fingerprint=REPLACE_WITH_GAMELINK_APT_KEY_FINGERPRINT
+  expected_fingerprint=92C55F555AEDE9E5B9B5C3D1E8BB6D20616935C4
   apt_key="$(mktemp)"
   trap 'unlink "$apt_key"' EXIT
   curl -fsSL https://rainbowcastle25.github.io/gamelink-open-source/apt/apt.asc -o "$apt_key"
