@@ -16,7 +16,7 @@ use url::Url;
 
 const RELEASES_URL: &str = "https://github.com/Rainbowcastle25/gamelink-open-source/releases";
 pub const APT_MANUAL_REPAIR: &str =
-    "On your server, run sudo dpkg --configure -a && sudo apt-get install -f, then sudo systemctl start gamelink-agent if needed.";
+    "sudo dpkg --configure -a && sudo apt-get install -f && sudo dpkg-reconfigure gamelink-agent, then sudo systemctl start gamelink-agent if needed.";
 pub const MANIFEST_NAME: &str = "release-manifest.json";
 pub const MANIFEST_SIGNATURE_NAME: &str = "release-manifest.json.minisig";
 pub const MAX_MANIFEST: usize = 64 * 1024;

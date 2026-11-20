@@ -720,7 +720,7 @@ sha256sum /var/lib/dpkg/status /var/log/dpkg.log /usr/bin/gamelink-agent "$apt_s
     > /tmp/gamelink-proof-interrupted.sha256
 "$apt_state/installer" update install-apt >> "$helper_log" 2>&1
 wait_for_outcome "$attempt_id" needs-manual-repair needs-manual-repair inactive
-repair='sudo dpkg --configure -a && sudo apt-get install -f, then sudo systemctl start gamelink-agent if needed.'
+repair='sudo dpkg --configure -a && sudo apt-get install -f && sudo dpkg-reconfigure gamelink-agent, then sudo systemctl start gamelink-agent if needed.'
 grep -F "$repair" "$apt_state/install-status.json"
 test ! -e "$apt_state/pending.json"
 test ! -e "$apt_state/claimed-request"
@@ -753,9 +753,72 @@ assert sys.argv[2] in update["reason"]
 ' "$attempt_id" "$repair"
 fi
 
+# Interrupt the helper after dpkg has configured the new package but before
+# the helper has checked its health or refreshed its saved executable.
+mv /usr/bin/dpkg /usr/bin/dpkg.proof-real
+cat > /usr/bin/dpkg <<'DPKG'
+#!/bin/sh
+set -eu
+/usr/bin/dpkg.proof-real "$@"
+if [ "$*" = '--force-confold --no-triggers --install target.deb' ]; then
+    kill -KILL "$PPID"
+fi
+DPKG
+chmod 0755 /usr/bin/dpkg
+if [ "$init" != systemd ]; then
+    # The default stub proof can use the same ELF in both packages.
+    printf 'old apt helper fixture\n' >> "$apt_state/installer"
+fi
+cp "$apt_state/installer" /tmp/gamelink-pre-repair-installer
+touch /run/gamelink-deny-start
+reset_cooldown
+stage_fixture 7890abcdef1234567890abcdef123456 7
+if "$apt_state/installer" update install-apt >> "$helper_log" 2>&1; then
+    echo "Expected the helper to be interrupted after dpkg configured GameLink." >&2
+    exit 1
+fi
+mv -f /usr/bin/dpkg.proof-real /usr/bin/dpkg
+check_install "$current"
+check_inactive
+test -f "$apt_state/pending.json"
+cmp /tmp/gamelink-pre-repair-installer "$apt_state/installer"
+if cmp -s /usr/bin/gamelink-agent "$apt_state/installer"; then
+    echo "Expected distinct executables after the interrupted update." >&2
+    exit 1
+fi
+dpkg-reconfigure gamelink-agent
+cmp /tmp/gamelink-pre-repair-installer "$apt_state/installer"
+
+"$apt_state/installer" update install-apt >> "$helper_log" 2>&1
+wait_for_outcome "$attempt_id" needs-manual-repair needs-manual-repair inactive
+test ! -e "$apt_state/pending.json"
+cmp /tmp/gamelink-pre-repair-installer "$apt_state/installer"
+
+# Reconfiguration also skips installers with an unsafe path or owner.
+mv "$apt_state/installer" "$apt_state/installer.saved"
+ln -s installer.saved "$apt_state/installer"
+dpkg-reconfigure gamelink-agent
+test -L "$apt_state/installer"
+cmp /tmp/gamelink-pre-repair-installer "$apt_state/installer"
+mv -fT "$apt_state/installer.saved" "$apt_state/installer"
+chown gamelink "$apt_state/installer"
+dpkg-reconfigure gamelink-agent
+test "$(stat -c '%U' "$apt_state/installer")" = gamelink
+cmp /tmp/gamelink-pre-repair-installer "$apt_state/installer"
+chown root "$apt_state/installer"
+
+# Run the setup guide's repair commands as root.
+dpkg --configure -a && apt-get install -f && dpkg-reconfigure gamelink-agent
+cmp /usr/bin/gamelink-agent "$apt_state/installer"
+test "$(stat -c '%u:%a' "$apt_state/installer")" = 0:755
+unlink /run/gamelink-deny-start
+systemctl start "$unit"
+apt_get install -y --allow-downgrades "gamelink-agent=$previous"
+check_install "$previous"
+
 # A terminal transaction still finalizes if its helper refresh fails.
 checkpoint=34567890abcdef1234567890abcdef12
-printf '{"phase":"committed","attempt":7,"attempt_id":"%s","updated_at":0,"version":"%s","reason":null}\n' \
+printf '{"phase":"committed","attempt":8,"attempt_id":"%s","updated_at":0,"version":"%s","reason":null}\n' \
     "$checkpoint" "$previous_agent_version" > "$apt_state/pending.json"
 printf 'saved helper fixture\n' >> "$apt_state/installer"
 cp "$apt_state/installer" /tmp/gamelink-saved-installer

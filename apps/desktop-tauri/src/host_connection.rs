@@ -403,6 +403,7 @@ pub struct LinkedAgentUpdate {
     connection: SavedConnection,
     node_name: String,
     offer_id: String,
+    is_apt: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -517,7 +518,9 @@ fn linked_agent_in(dir: &Path, version: &str) -> Result<Option<LinkedAgent>> {
         .ok_or("invalid linked server hostname")?
         .to_owned();
     Ok(Some(LinkedAgent::Available(LinkedAgentUpdate::new(
-        connection, node_name,
+        connection,
+        node_name,
+        status.is_apt(),
     ))))
 }
 
@@ -571,7 +574,9 @@ impl AgentStatus {
             Phase::Succeeded if running_target && update.version.as_deref() == Some(version) => {
                 Ok(AgentPoll::Succeeded)
             }
-            Phase::NeedsManualRepair => Err(LinkedUpdateError::failed(APT_MANUAL_REPAIR)),
+            Phase::NeedsManualRepair => Err(LinkedUpdateError::failed(format!(
+                "On your server, run {APT_MANUAL_REPAIR}"
+            ))),
             Phase::StagingFailed | Phase::RolledBack | Phase::Failed => {
                 let message = if update.state == Phase::RolledBack {
                     "The server rolled back the agent update."
@@ -643,13 +648,14 @@ fn restarting(error: &str) -> bool {
 }
 
 impl LinkedAgentUpdate {
-    fn new(connection: SavedConnection, node_name: String) -> Self {
+    fn new(connection: SavedConnection, node_name: String, is_apt: bool) -> Self {
         // The updater stores this issued ID alongside the verified release and this connection.
         static NEXT_OFFER_ID: AtomicU64 = AtomicU64::new(1);
         Self {
             connection,
             node_name,
             offer_id: NEXT_OFFER_ID.fetch_add(1, Ordering::Relaxed).to_string(),
+            is_apt,
         }
     }
 
@@ -716,6 +722,7 @@ impl LinkedAgentUpdate {
         let attempt_id = request_agent_update(&self.connection, version)?;
         let started = Instant::now();
         let mut last_progress = AgentUpdateProgress::Preparing;
+        let mut unreachable = false;
         progress(last_progress);
         loop {
             let remaining = timeout.saturating_sub(started.elapsed());
@@ -727,6 +734,7 @@ impl LinkedAgentUpdate {
             let request_timeout = (remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0))
                 .min(AGENT_STATUS_TIMEOUT);
             let status = agent_status(&self.connection, request_timeout);
+            unreachable = status.as_ref().is_err_and(|error| restarting(error));
             if started.elapsed() >= timeout {
                 break;
             }
@@ -739,7 +747,7 @@ impl LinkedAgentUpdate {
                     }
                     AgentPoll::Pending(phase) => phase,
                 },
-                Err(error) if restarting(&error) => AgentUpdateProgress::Restarting,
+                Err(_) if unreachable => AgentUpdateProgress::Restarting,
                 Err(_) => {
                     return Err(LinkedUpdateError::failed(
                         "Could not read the agent update status from your server.",
@@ -751,6 +759,11 @@ impl LinkedAgentUpdate {
                 last_progress = phase;
             }
             std::thread::sleep(poll_interval.min(timeout.saturating_sub(started.elapsed())));
+        }
+        if self.is_apt && unreachable {
+            return Err(LinkedUpdateError::failed(format!(
+                "The server didn't come back after the update. If GameLink's agent is stopped, repair it on the server: {APT_MANUAL_REPAIR}"
+            )));
         }
         Err(LinkedUpdateError::failed(AGENT_TIMEOUT_MESSAGE))
     }
@@ -923,7 +936,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().to_owned();
         let connection = configure(&path, "https://node.example", "test-token").unwrap();
-        let agent = LinkedAgentUpdate::new(connection, "node.example".into());
+        let agent = LinkedAgentUpdate::new(connection, "node.example".into(), false);
         let _fake = bridge::fake::install(move |request| match request["verb"].as_str() {
             Some("POST") => Ok(json!({"accepted":true,"attemptId":"current-attempt"})),
             Some("GET") => {
@@ -947,7 +960,7 @@ mod tests {
     fn relink_before_polling_stops_requests_to_the_old_server() {
         let dir = tempfile::tempdir().unwrap();
         let connection = configure(dir.path(), "https://node.example", "test-token").unwrap();
-        let agent = LinkedAgentUpdate::new(connection, "node.example".into());
+        let agent = LinkedAgentUpdate::new(connection, "node.example".into(), false);
         let _fake = bridge::fake::install(|request| {
             assert_eq!(
                 request["verb"], "POST",
@@ -991,7 +1004,7 @@ mod tests {
     fn update_does_not_finish_on_a_previous_attempts_success_or_rollback() {
         let dir = tempfile::tempdir().unwrap();
         let connection = configure(dir.path(), "https://node.example", "test-token").unwrap();
-        let agent = LinkedAgentUpdate::new(connection, "node.example".into());
+        let agent = LinkedAgentUpdate::new(connection, "node.example".into(), false);
         let status = |running, phase, id, reason| {
             let mut response = status_json(running, phase, Some(TARGET), reason);
             response["update"]["attemptId"] = json!(id);
@@ -1034,7 +1047,7 @@ mod tests {
     fn matching_attempt_that_needs_manual_repair_shows_the_server_commands() {
         let dir = tempfile::tempdir().unwrap();
         let connection = configure(dir.path(), "https://node.example", "test-token").unwrap();
-        let agent = LinkedAgentUpdate::new(connection, "node.example".into());
+        let agent = LinkedAgentUpdate::new(connection, "node.example".into(), false);
         let mut response = status_json("0.2.0", "needs-manual-repair", Some(TARGET), None);
         response["installMethod"] = json!("apt");
         response["update"]["attemptId"] = json!("interrupted-attempt");
@@ -1059,7 +1072,10 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(json!(error)["kind"], "failed");
-        assert_eq!(json!(error)["message"], APT_MANUAL_REPAIR);
+        assert_eq!(
+            json!(error)["message"],
+            format!("On your server, run {APT_MANUAL_REPAIR}")
+        );
     }
 
     #[test]
@@ -1107,7 +1123,7 @@ mod tests {
     fn polls_through_restart_and_requires_success_for_the_exact_running_version() {
         let dir = tempfile::tempdir().unwrap();
         let connection = configure(dir.path(), "https://node.example", "test-token").unwrap();
-        let agent = LinkedAgentUpdate::new(connection, "node.example".into());
+        let agent = LinkedAgentUpdate::new(connection, "node.example".into(), false);
         let responses = [
             Ok(json!({"accepted":true,"attemptId":"current-attempt"})),
             Ok(status_json("0.2.0", "checking", Some(TARGET), None)),
@@ -1200,7 +1216,7 @@ mod tests {
     fn polling_times_out_after_the_update_is_accepted() {
         let dir = tempfile::tempdir().unwrap();
         let connection = configure(dir.path(), "https://node.example", "test-token").unwrap();
-        let agent = LinkedAgentUpdate::new(connection, "node.example".into());
+        let agent = LinkedAgentUpdate::new(connection, "node.example".into(), false);
         let _fake = bridge::fake::install(|request| match request["verb"].as_str() {
             Some("POST") => Ok(json!({"accepted":true,"attemptId":"current-attempt"})),
             Some("GET") => Err("HTTP transport request failed".into()),
@@ -1216,6 +1232,46 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(json!(error)["message"], AGENT_TIMEOUT_MESSAGE);
+    }
+
+    #[test]
+    fn unreachable_apt_agent_shows_conditional_repair_guidance() {
+        let dir = tempfile::tempdir().unwrap();
+        configure(dir.path(), "https://node.example", "test-token").unwrap();
+        let mut accepted = false;
+        let _fake = bridge::fake::install(move |request| match request["verb"].as_str() {
+            Some("POST") => {
+                accepted = true;
+                Ok(json!({"accepted":true,"attemptId":"current-attempt"}))
+            }
+            Some("GET") if !accepted => {
+                let mut status = status_json("0.2.0", "idle", None, None);
+                status["installMethod"] = json!("apt");
+                Ok(status)
+            }
+            Some("GET") => Err("HTTP transport request failed".into()),
+            _ => panic!("unexpected update request"),
+        });
+        let Some(LinkedAgent::Available(agent)) = linked_agent_in(dir.path(), TARGET).unwrap()
+        else {
+            panic!("a linked server update must be available");
+        };
+        let error = agent
+            .run_update(
+                dir.path(),
+                TARGET,
+                Duration::from_millis(100),
+                Duration::from_millis(2),
+                |_| {},
+            )
+            .unwrap_err();
+        let error = json!(error);
+        assert_eq!(error["kind"], "failed");
+        let message = error["message"].as_str().unwrap();
+        assert!(message.starts_with(
+            "The server didn't come back after the update. If GameLink's agent is stopped, repair it on the server:"
+        ), "{message}");
+        assert!(message.ends_with(APT_MANUAL_REPAIR), "{message}");
     }
 
     #[test]

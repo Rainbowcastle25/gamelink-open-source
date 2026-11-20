@@ -495,14 +495,16 @@ and service restarts. The host update endpoint returns HTTP 429 during cooldown.
 
 ### Apt update needs manual repair
 
-Run the repair command on the server when the desktop or
-`GET /v1/host/status` reports `needs-manual-repair` for an apt update.
+Run the repair commands on the server when the desktop reports that an apt
+update needs repair, or when `GET /v1/host/status` reports `needs-manual-repair`.
+If the desktop times out and the agent is stopped, use the same commands.
 
 ```sh
-sudo dpkg --configure -a && sudo apt-get install -f
+sudo dpkg --configure -a && sudo apt-get install -f && sudo dpkg-reconfigure gamelink-agent
 ```
 
-If the agent stays stopped after the repair, run
+Reconfiguring the package refreshes the opted-in update helper from the
+installed agent. If the agent stays stopped after the repair, run
 `sudo systemctl start gamelink-agent`. Check
 `sudo journalctl -u gamelink-agent-apt-update.service -u gamelink-agent -n 100`
 for the update outcome and any service errors.
