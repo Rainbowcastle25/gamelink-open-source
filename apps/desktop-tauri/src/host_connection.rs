@@ -1,7 +1,7 @@
 //! Explicit desktop actions for connecting to and importing from a GameLink
 //! host. This module deliberately runs outside the main app mutex so bounded
 //! host requests cannot block the desktop's existing transport state updates.
-use crate::{bridge, host};
+use crate::{bridge, host, profile};
 use gamelink_core::{
     requests::server_fingerprint,
     storage,
@@ -10,7 +10,7 @@ use gamelink_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -21,6 +21,8 @@ use std::{
 use url::Url;
 
 const FILE_NAME: &str = "host-connection.json";
+const INVALID_FILE: &str = "Saved host connections are invalid. Restore host-connection.json from a backup or move it out of the configuration folder, then reload.";
+static SAVE_CONNECTION: Mutex<()> = Mutex::new(());
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const UPDATE_AGENT: &str =
     "Update the GameLink agent on this node to manage access from the desktop app.";
@@ -165,6 +167,8 @@ fn refresh(saved: &SavedConnection) -> Result<Value> {
 struct SavedConnection {
     endpoint: String,
     token: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    name: String,
     #[serde(default)]
     generation: String,
 }
@@ -174,41 +178,54 @@ struct SavedConnection {
 struct ConnectionView {
     endpoint: String,
     configured: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    saved_hosts: Vec<HostView>,
+}
+
+#[derive(Serialize)]
+struct HostView {
+    endpoint: String,
+    name: String,
+}
+
+impl ConnectionView {
+    fn from_saved(connections: &[SavedConnection]) -> Self {
+        let mut seen = BTreeSet::new();
+        let saved_hosts = connections
+            .iter()
+            .filter(|saved| seen.insert(&saved.endpoint))
+            .map(|saved| HostView {
+                endpoint: saved.endpoint.clone(),
+                name: saved.name.clone(),
+            })
+            .collect();
+        Self {
+            endpoint: connections
+                .first()
+                .map(|saved| saved.endpoint.clone())
+                .unwrap_or_default(),
+            configured: !connections.is_empty(),
+            saved_hosts,
+        }
+    }
 }
 
 pub fn call(request: Value) -> Result<Value> {
-    call_in(request, &config_dir()?)
+    call_in(request, &profile::config_dir()?)
 }
 
-fn call_in(request: Value, dir: &Path) -> Result<Value> {
+pub(crate) fn call_in(request: Value, dir: &Path) -> Result<Value> {
     match request["method"].as_str().unwrap_or("") {
-        "hostConnection" => {
-            let saved = read_saved(dir).unwrap_or_default();
-            Ok(json!(ConnectionView {
-                configured: !saved.endpoint.is_empty() && !saved.token.is_empty(),
-                endpoint: saved.endpoint,
-            }))
-        }
-        "configureHost" => {
-            let saved = configure(
-                dir,
-                request["endpoint"].as_str().unwrap_or(""),
-                request["token"].as_str().unwrap_or(""),
-            )?;
-            Ok(json!(ConnectionView {
-                endpoint: saved.endpoint,
-                configured: true
-            }))
-        }
-        "hostStatus" => {
-            if !file_path(dir)
-                .try_exists()
-                .map_err(|_| "could not read host connection")?
-            {
-                return Ok(json!({"games":[],"refreshedAt":""}));
-            }
-            status(&read_configured(dir)?)
-        }
+        "hostConnection" => Ok(json!(ConnectionView::from_saved(&read_connections(dir)?))),
+        "configureHost" => Ok(json!(ConnectionView::from_saved(&configure(
+            dir,
+            request["endpoint"].as_str().unwrap_or(""),
+            request["token"].as_str().unwrap_or(""),
+        )?))),
+        "hostStatus" => match read_connections(dir)?.first() {
+            Some(saved) => status(saved),
+            None => Ok(json!({"games":[],"refreshedAt":""})),
+        },
         "refreshHost" => refresh(&read_configured(dir)?),
         "approveLinkedRequest" | "dismissLinkedRequest" => {
             let path = if request["method"] == "approveLinkedRequest" {
@@ -231,32 +248,36 @@ fn call_in(request: Value, dir: &Path) -> Result<Value> {
     }
 }
 
-fn config_dir() -> Result<PathBuf> {
-    let paths = host::call(json!({"method":"paths"}))?;
-    paths["configDir"]
-        .as_str()
-        .map(PathBuf::from)
-        .ok_or_else(|| "could not locate configuration folder".into())
-}
-
 fn file_path(dir: &Path) -> PathBuf {
     dir.join(FILE_NAME)
 }
 
-fn read_saved(dir: &Path) -> Result<SavedConnection> {
-    let bytes = storage::read_bounded(&file_path(dir))
-        .map_err(|_| "could not read the saved host connection")?;
-    let saved: SavedConnection =
-        serde_json::from_slice(&bytes).map_err(|_| "saved host connection is invalid")?;
-    let endpoint = validate_endpoint(&saved.endpoint)?;
-    if endpoint != saved.endpoint || saved.token.is_empty() {
-        return Err("saved host connection is invalid".into());
+fn read_connections(dir: &Path) -> Result<Vec<SavedConnection>> {
+    let Some(bytes) = profile::read_optional(dir, FILE_NAME)? else {
+        return Ok(Vec::new());
+    };
+    let document: Value = serde_json::from_slice(&bytes).map_err(|_| INVALID_FILE)?;
+    let connections: Vec<SavedConnection> = match document {
+        Value::Object(_) => vec![serde_json::from_slice(&bytes).map_err(|_| INVALID_FILE)?],
+        Value::Array(entries) if entries.iter().all(Value::is_object) => {
+            serde_json::from_slice(&bytes).map_err(|_| INVALID_FILE)?
+        }
+        _ => return Err(INVALID_FILE.into()),
+    };
+    for saved in &connections {
+        let endpoint = validate_endpoint(&saved.endpoint).map_err(|_| INVALID_FILE)?;
+        if endpoint != saved.endpoint || saved.token.is_empty() {
+            return Err(INVALID_FILE.into());
+        }
     }
-    Ok(saved)
+    Ok(connections)
 }
 
 fn read_configured(dir: &Path) -> Result<SavedConnection> {
-    read_saved(dir).map_err(|_| "configure a host connection first".into())
+    read_connections(dir)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "configure a host connection first".into())
 }
 
 fn game_connection(dir: &Path) -> Result<SavedConnection> {
@@ -275,15 +296,20 @@ fn game_connection(dir: &Path) -> Result<SavedConnection> {
     Ok(saved)
 }
 
-fn configure(dir: &Path, endpoint: &str, token: &str) -> Result<SavedConnection> {
+fn configure(dir: &Path, endpoint: &str, token: &str) -> Result<Vec<SavedConnection>> {
     let endpoint = validate_endpoint(endpoint)?;
-    let current = read_saved(dir).unwrap_or_default();
+    let _save = SAVE_CONNECTION.lock().unwrap_or_else(|e| e.into_inner());
+    let mut current = read_connections(dir)?;
+    for saved in &current {
+        storage::unseal(&saved.token).map_err(|_| INVALID_FILE)?;
+    }
+    let index = current.iter().position(|saved| saved.endpoint == endpoint);
     let token = token.trim();
     let sealed = if token.is_empty() {
-        if current.endpoint != endpoint || current.token.is_empty() {
-            return Err("enter an administrator token for this host".into());
-        }
-        current.token
+        let saved = index
+            .map(|index| &current[index])
+            .ok_or("enter an administrator token for this host")?;
+        saved.token.clone()
     } else {
         storage::seal(token).map_err(|_| "could not protect the administrator token")?
     };
@@ -295,18 +321,30 @@ fn configure(dir: &Path, endpoint: &str, token: &str) -> Result<SavedConnection>
     let saved = SavedConnection {
         endpoint,
         token: sealed,
+        name: index
+            .map(|index| current[index].name.clone())
+            .unwrap_or_default(),
         generation: generation
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect(),
     };
-    let data = serde_json::to_vec(&saved).map_err(|_| "could not save the host connection")?;
+    if let Some(index) = index {
+        current.remove(index);
+    }
+    current.insert(0, saved);
+    let data = if current.len() == 1 {
+        serde_json::to_vec(&current[0])
+    } else {
+        serde_json::to_vec(&current)
+    }
+    .map_err(|_| "could not save the host connection")?;
     storage::write_atomic(&file_path(dir), &data)
         .map_err(|_| "could not save the host connection")?;
-    Ok(saved)
+    Ok(current)
 }
 
-fn validate_endpoint(raw: &str) -> Result<String> {
+pub(crate) fn validate_endpoint(raw: &str) -> Result<String> {
     let raw = raw.trim();
     let mut url = Url::parse(raw)
         .map_err(|_| "enter a valid HTTPS host endpoint (or a loopback HTTP endpoint)")?;
@@ -351,7 +389,7 @@ fn host_request(
     timeout_seconds: u64,
 ) -> Result<Value> {
     let token =
-        storage::unseal(&saved.token).map_err(|_| "could not unlock the saved host connection")?;
+        storage::unseal(&saved.token).map_err(|_| "could not unlock the saved host connection. Restore host-connection.json from a backup for this device, then reload.")?;
     let url = format!("{}{}", saved.endpoint, path);
     bridge::call(json!({
         "method":"http",
@@ -483,17 +521,13 @@ fn agent_status(saved: &SavedConnection, timeout: u64) -> Result<AgentStatus> {
 }
 
 pub fn linked_agent(version: &str) -> Result<Option<LinkedAgent>> {
-    linked_agent_in(&config_dir()?, version)
+    linked_agent_in(&profile::config_dir()?, version)
 }
 
 fn linked_agent_in(dir: &Path, version: &str) -> Result<Option<LinkedAgent>> {
-    if !file_path(dir)
-        .try_exists()
-        .map_err(|_| "could not read host connection")?
-    {
+    let Some(connection) = read_connections(dir)?.into_iter().next() else {
         return Ok(None);
-    }
-    let connection = read_configured(dir)?;
+    };
     let status = agent_status(&connection, AGENT_STATUS_TIMEOUT)?;
     let newer = status
         .agent_version
@@ -665,12 +699,12 @@ impl LinkedAgentUpdate {
         offer_id: &str,
         progress: impl FnMut(AgentUpdateProgress),
     ) -> std::result::Result<(), LinkedUpdateError> {
-        let dir = config_dir().map_err(LinkedUpdateError::failed)?;
+        let dir = profile::config_dir().map_err(LinkedUpdateError::failed)?;
         self.run_in(&dir, version, offer_id, progress)
     }
 
     pub fn verify_offer(&self, offer_id: &str) -> std::result::Result<(), &'static str> {
-        let dir = config_dir().map_err(|_| LINKED_SERVER_CHANGED)?;
+        let dir = profile::config_dir().map_err(|_| LINKED_SERVER_CHANGED)?;
         self.verify_offer_in(&dir, offer_id)
     }
 
@@ -780,7 +814,7 @@ fn game_request(saved: &SavedConnection, path: &str, body: Value) -> Result<Valu
 }
 
 pub fn invitation(request: &Value) -> Result<String> {
-    invitation_from(request, &config_dir()?)
+    invitation_from(request, &profile::config_dir()?)
 }
 
 fn invitation_from(request: &Value, dir: &Path) -> Result<String> {
@@ -823,7 +857,98 @@ fn import_game(saved: &SavedConnection, game_id: &str, fingerprint: &Value) -> R
 
 #[cfg(test)]
 mod tests {
+    fn configure(dir: &Path, endpoint: &str, token: &str) -> Result<SavedConnection> {
+        super::configure(dir, endpoint, token).map(|mut saved| saved.remove(0))
+    }
     use super::*;
+
+    #[test]
+    fn reopens_both_legacy_host_formats_without_rewriting_and_switches_with_saved_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = "https://first.example";
+        let second = "https://second.example/agent";
+        let token_a = storage::seal("fixture-token-a").unwrap();
+        let token_b = storage::seal("fixture-token-b").unwrap();
+        let a = json!({"endpoint":first,"token":token_a});
+        let b = json!({"endpoint":second,"name":"Wings 4","token":token_b});
+        let path = file_path(dir.path());
+
+        for (saved, endpoints) in [
+            (a.clone(), json!([{"endpoint":first,"name":""}])),
+            (
+                json!([a, b]),
+                json!([{"endpoint":first,"name":""},{"endpoint":second,"name":"Wings 4"}]),
+            ),
+        ] {
+            let bytes = serde_json::to_vec(&saved).unwrap();
+            storage::write_atomic(&path, &bytes).unwrap();
+            for _ in 0..2 {
+                let view = call_in(json!({"method":"hostConnection"}), dir.path()).unwrap();
+                assert_eq!(
+                    view,
+                    json!({"endpoint":first,"configured":true,"savedHosts":endpoints})
+                );
+                assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            }
+        }
+
+        for endpoint in [second, second, first] {
+            let view = call_in(
+                json!({"method":"configureHost","endpoint":endpoint}),
+                dir.path(),
+            )
+            .unwrap();
+            assert_eq!(view["endpoint"], endpoint);
+            let active = read_configured(dir.path()).unwrap();
+            assert_eq!(active.endpoint, endpoint);
+            assert_eq!(
+                active.token,
+                if endpoint == first {
+                    &token_a
+                } else {
+                    &token_b
+                }
+                .as_str()
+            );
+            assert_eq!(read_connections(dir.path()).unwrap().len(), 2);
+        }
+        let active = configure(dir.path(), "https://new.example", "fixture-token-c").unwrap();
+        assert_eq!(active.endpoint, "https://new.example");
+        let saved = read_connections(dir.path()).unwrap();
+        assert_eq!(saved.len(), 3);
+        assert_eq!(saved[1].token, token_a);
+        assert_eq!(saved[2].token, token_b);
+        assert_eq!(saved[2].name, "Wings 4");
+    }
+
+    #[test]
+    fn malformed_or_unreadable_host_profile_is_reported_and_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = file_path(dir.path());
+        let token = storage::seal("fixture-token").unwrap();
+        let positional = serde_json::to_vec(&json!(["https://host.example", token])).unwrap();
+        let nested_positional =
+            serde_json::to_vec(&json!([["https://host.example", token]])).unwrap();
+        for bytes in [
+            br#"{"endpoint":"# as &[u8],
+            positional.as_slice(),
+            nested_positional.as_slice(),
+            br#"[{"endpoint":"https://host.example","token":"fake"},{"endpoint":42}]"#,
+            br#"{"endpoint":"http://host.example","token":"fake"}"#,
+        ] {
+            storage::write_atomic(&path, bytes).unwrap();
+            for method in ["hostConnection", "hostStatus", "configureHost"] {
+                let err = call_in(json!({"method":method,"endpoint":"https://new.example","token":"fixture-token"}), dir.path()).unwrap_err();
+                assert_eq!(err, INVALID_FILE);
+                assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            }
+        }
+        let unreadable = tempfile::tempdir().unwrap();
+        std::fs::create_dir(file_path(unreadable.path())).unwrap();
+        let error = call_in(json!({"method":"hostConnection"}), unreadable.path()).unwrap_err();
+        assert!(error.starts_with("Could not read host-connection.json."));
+        assert!(file_path(unreadable.path()).is_dir());
+    }
 
     const TARGET: &str = "0.3.0";
 
@@ -1300,7 +1425,7 @@ mod tests {
         let first = configure(dir.path(), "https://host.example/", "admin-secret").unwrap();
         let bytes = std::fs::read(file_path(dir.path())).unwrap();
         assert!(!String::from_utf8_lossy(&bytes).contains("admin-secret"));
-        let saved = read_saved(dir.path()).unwrap();
+        let saved = read_configured(dir.path()).unwrap();
         assert_eq!(storage::unseal(&saved.token).unwrap(), "admin-secret");
         assert_eq!(
             configure(dir.path(), "https://host.example", "")

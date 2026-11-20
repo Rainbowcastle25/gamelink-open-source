@@ -4,6 +4,8 @@ import type {
   CheckView,
   HostConnection,
   HostSnapshot,
+  PanelConnection,
+  PanelInventorySnapshot,
   HostedGame,
   HostedGameForm,
   LanWorld,
@@ -60,6 +62,8 @@ export interface Backend {
   updateServer(id: string, name: string, description: string, localPort: number): Promise<ServerView>;
   updateSettings(v: SettingsView): Promise<SettingsView>;
 
+  panelConnection(): Promise<PanelConnection | null>;
+  refreshPanelInventory(): Promise<PanelInventorySnapshot | null>;
   hostConnection(): Promise<HostConnection>;
   configureHost(endpoint: string, token: string): Promise<HostConnection>;
   hostStatus(): Promise<HostSnapshot>;
@@ -151,6 +155,8 @@ export const backend: Backend = {
   addServer: lazy((b) => b.addServer.bind(b)),
   updateServer: lazy((b) => b.updateServer.bind(b)),
   updateSettings: lazy((b) => b.updateSettings.bind(b)),
+  panelConnection: lazy((b) => b.panelConnection.bind(b)),
+  refreshPanelInventory: lazy((b) => b.refreshPanelInventory.bind(b)),
   hostConnection: lazy((b) => b.hostConnection.bind(b)),
   configureHost: lazy((b) => b.configureHost.bind(b)),
   hostStatus: lazy((b) => b.hostStatus.bind(b)),

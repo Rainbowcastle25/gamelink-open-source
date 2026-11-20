@@ -1173,6 +1173,83 @@ mod tests {
     }
 
     #[test]
+    fn populated_desktop_profile_keeps_identity_servers_preferences_and_panel_when_pairing() {
+        let mut old = env();
+        let dir = old.dir.path();
+        let config = dir.join("config.json");
+        let identity = dir.join("identity.json");
+        let panel = dir.join("panel-connection.json");
+        let invite = pure::dispatch(
+            "invite.encode",
+            json!({"name":"Imported game","game":"factorio","proto":"udp","port":34197,"addr":"tcInvite123"}),
+        )
+        .unwrap();
+        let server = old
+            .app
+            .command(json!({"method":"importInvite","text":invite,"localPort":31000}))
+            .unwrap();
+        old.app.command(json!({"method":"updateSettings","settings":{"autoReconnect":false,"checkOnStartup":false,"gameLaunchArgs":{"factorio":"--windowed"}}})).unwrap();
+        let expected_identity = old.app.command(json!({"method":"identity"})).unwrap();
+        let expected_identity_file = fs::read(&identity).unwrap();
+        let expected_config: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+        let mut legacy_config = expected_config.clone();
+        legacy_config["servers"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("stablePort");
+        storage::write_atomic(&config, &serde_json::to_vec(&legacy_config).unwrap()).unwrap();
+        storage::write_atomic(
+            &dir.join("host-connection.json"),
+            &serde_json::to_vec(&json!([
+                {"endpoint":"https://first.example","name":"Wings 2","token":storage::seal("fixture-host-a").unwrap()},
+                {"endpoint":"https://second.example","name":"Wings 4","token":storage::seal("fixture-host-b").unwrap()}
+            ])).unwrap(),
+        ).unwrap();
+        let panel_bytes = serde_json::to_vec(&json!({
+            "endpoint":"https://panel.example","nodeIds":[2,4],"token":storage::seal("fixture-panel-token").unwrap()
+        })).unwrap();
+        storage::write_atomic(&panel, &panel_bytes).unwrap();
+
+        drop(old.app);
+        for _ in 0..2 {
+            let mut app = App::load_in(dir.to_path_buf()).unwrap();
+            assert_eq!(
+                app.command(json!({"method":"identity"})).unwrap(),
+                expected_identity
+            );
+            let list = app.command(json!({"method":"servers"})).unwrap();
+            assert_eq!(list.as_array().unwrap().len(), 1);
+            for field in ["id", "name", "localPort", "serverFingerprint"] {
+                assert_eq!(list[0][field], server[field]);
+            }
+            let settings = app.command(json!({"method":"settings"})).unwrap();
+            assert_eq!(settings["autoReconnect"], false);
+            assert_eq!(settings["checkOnStartup"], false);
+            assert_eq!(settings["gameLaunchArgs"]["factorio"], "--windowed");
+            let saved_panel =
+                crate::panel_inventory::call_in(json!({"method":"panelConnection"}), dir).unwrap();
+            assert_eq!(saved_panel["nodeIds"], json!([2, 4]));
+            let linked = crate::host_connection::call_in(
+                json!({"method":"configureHost","endpoint":"https://agent.example","token":"fixture-agent-token"}),
+                dir,
+            ).unwrap();
+            assert_eq!(
+                linked["savedHosts"],
+                json!([
+                    {"endpoint":"https://agent.example","name":""},
+                    {"endpoint":"https://first.example","name":"Wings 2"},
+                    {"endpoint":"https://second.example","name":"Wings 4"}
+                ])
+            );
+            assert_eq!(fs::read(&panel).unwrap(), panel_bytes);
+            assert_eq!(fs::read(&identity).unwrap(), expected_identity_file);
+            let reopened_config: Value =
+                serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+            assert_eq!(reopened_config, expected_config);
+        }
+    }
+
+    #[test]
     fn load_keeps_only_the_newest_200_activity_entries_and_honours_startup_off() {
         let dir = tempfile::tempdir().unwrap();
         let entries: Vec<Value> = (0..250)

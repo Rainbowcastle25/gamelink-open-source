@@ -6,6 +6,7 @@ import { Header } from "../components/Header";
 import { useStore } from "../lib/store";
 import type { HostConnection, HostSnapshot } from "../lib/types";
 import { LEGACY_AGENT_UPDATE } from "../lib/useHostedGames";
+import { PanelInventory } from "./PanelInventory";
 
 function errorText(error: unknown) {
   if (typeof error === "string") return error;
@@ -29,6 +30,7 @@ export function HostScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [importing, setImporting] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [connectionError, setConnectionError] = useState("");
   const [notice, setNotice] = useState("");
   const actionBusy = saving || refreshing || importing !== null;
 
@@ -41,26 +43,27 @@ export function HostScreen() {
       setConnection(c);
       setEndpoint(c.endpoint);
     }).catch((e: unknown) => {
-      if (active) setError(errorText(e));
+      if (active) setConnectionError(errorText(e));
     }).finally(() => {
       if (active) setLoadingConnection(false);
     });
     return () => { active = false; };
   }, [backend]);
 
-  async function save() {
+  async function save(nextEndpoint: string, nextToken: string) {
     setSaving(true);
     setError("");
+    setConnectionError("");
     setNotice("");
     try {
-      const c = await store.configureHost(endpoint, token);
+      const c = await store.configureHost(nextEndpoint, nextToken);
       setConnection(c);
       setEndpoint(c.endpoint);
       setToken("");
       setSnapshot(null);
       setNotice("Host connection saved on this device.");
     } catch (e) {
-      setError(errorText(e));
+      setConnectionError(errorText(e));
     } finally {
       setSaving(false);
     }
@@ -106,17 +109,31 @@ export function HostScreen() {
             <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">Use the host's HTTPS address and administrator token. The token is protected in this device's private config and is cleared from this form after saving.</p>
           </div>
         </div>
+        {(connection?.savedHosts?.length ?? 0) > 1 && (
+          <div className="mb-4">
+            <Field label="Active saved host">
+              {({ id }) => (
+                <select id={id} className={inputCls} value={connection?.endpoint} disabled={actionBusy} onChange={(e) => void save(e.target.value, "")}>
+                  {connection?.savedHosts?.map(({ endpoint: url, name }) => <option key={url} value={url}>{name ? `${name} (${url})` : url}</option>)}
+                </select>
+              )}
+            </Field>
+          </div>
+        )}
+        {connectionError && <p role="alert" className="mb-4 text-sm text-danger">{connectionError}</p>}
         <div className="grid gap-4 md:grid-cols-[1.3fr_1fr_auto] md:items-end">
           <Field label="Host endpoint" hint="For SSH forwarding, use a literal loopback address such as http://127.0.0.1:8467.">
             {({ id, describedBy }) => <input id={id} aria-describedby={describedBy} className={inputCls} value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://host.example.com" autoComplete="url" disabled={actionBusy} />}
           </Field>
-          <Field label="Administrator token" hint={connection?.configured ? "Leave blank to keep the saved token for this same endpoint." : "The token is never shown again after saving."}>
+          <Field label="Administrator token" hint={connection?.configured ? "Leave blank to use the saved token for a saved endpoint." : "The token is never shown again after saving."}>
             {({ id, describedBy }) => <input id={id} aria-describedby={describedBy} className={inputCls} type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={connection?.configured ? "Saved securely" : "Paste host admin token"} autoComplete="new-password" disabled={actionBusy} />}
           </Field>
-          <Button variant="primary" loading={saving || loadingConnection} onClick={() => void save()} disabled={loadingConnection || actionBusy || !endpoint.trim()}>Save connection</Button>
+          <Button variant="primary" loading={saving || loadingConnection} onClick={() => void save(endpoint, token)} disabled={!connection || actionBusy || !endpoint.trim()}>Save connection</Button>
         </div>
         {connection?.configured && <p className="mt-3 text-xs text-muted">Connected host: <span className="font-mono text-fg">{connection.endpoint}</span></p>}
       </section>
+
+      <PanelInventory backend={backend} />
 
       <section className="rounded-xl border border-line bg-surface p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
@@ -133,7 +150,7 @@ export function HostScreen() {
         {notice && <div role="status" className="mb-4 rounded-lg border border-teal/25 bg-teal/8 px-4 py-3 text-sm text-accent">{notice}</div>}
 
         {!connection?.configured ? (
-          <div className="rounded-lg border border-dashed border-line-strong px-5 py-8 text-center text-sm text-muted">Save a host connection to discover its games.</div>
+          connection && <div className="rounded-lg border border-dashed border-line-strong px-5 py-8 text-center text-sm text-muted">Save a host connection to discover its games.</div>
         ) : !snapshot ? (
           <div className="rounded-lg border border-dashed border-line-strong px-5 py-8 text-center">
             <Database className="mx-auto mb-2 size-5 text-faint" aria-hidden />

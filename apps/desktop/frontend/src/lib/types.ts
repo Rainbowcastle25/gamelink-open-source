@@ -239,6 +239,24 @@ export interface ActivityEvent {
 export interface HostConnection {
   endpoint: string;
   configured: boolean;
+  savedHosts?: { endpoint: string; name: string }[];
+}
+
+export interface PanelConnection {
+  endpoint: string;
+  nodeIds: number[];
+}
+
+export interface PanelServer {
+  id: number;
+  name: string;
+  nodeId: number;
+  suspended: boolean;
+}
+
+export interface PanelInventorySnapshot {
+  connection: PanelConnection;
+  servers: PanelServer[];
 }
 
 export interface HostGame {

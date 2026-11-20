@@ -29,6 +29,61 @@ describe("HostScreen", () => {
     expect(await screen.findByText("Friends Minecraft was added to your servers.")).toBeInTheDocument();
   });
 
+  it("recovers saved Panel inventory on demand and switches to another saved host without a token", async () => {
+    const backend = createMockBackend({ delayMs: 0 });
+    const first = "https://one.example";
+    const second = "https://two.example";
+    backend.hostConnection = vi.fn().mockResolvedValue({ endpoint: first, configured: true, savedHosts: [{ endpoint: first, name: "" }, { endpoint: second, name: "Wings 4" }] });
+    backend.configureHost = vi.fn().mockResolvedValue({ endpoint: second, configured: true, savedHosts: [{ endpoint: second, name: "Wings 4" }, { endpoint: first, name: "" }] });
+    const panel = { endpoint: "https://panel.example", nodeIds: [2, 4] };
+    backend.panelConnection = vi.fn().mockResolvedValue(panel);
+    backend.refreshPanelInventory = vi.fn()
+      .mockResolvedValueOnce({
+        connection: panel,
+        servers: [{ id: 6, name: "Factorio test", nodeId: 2, suspended: false }],
+      })
+      .mockResolvedValueOnce({
+        connection: { endpoint: "https://restored.example", nodeIds: [7] },
+        servers: [{ id: 8, name: "Restored game", nodeId: 7, suspended: false }],
+      });
+    renderApp(<HostScreen />, { backend });
+
+    expect(await screen.findByText("Saved nodes 2, 4")).toBeInTheDocument();
+    expect(screen.getByText("https://panel.example")).toBeInTheDocument();
+    expect(screen.getByText(/enter the GameLink agent endpoint and administrator token/)).toBeInTheDocument();
+    expect(backend.refreshPanelInventory).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh inventory" }));
+    expect(await screen.findByText("Factorio test")).toBeInTheDocument();
+    expect(screen.getByText("Node 4")).toBeInTheDocument();
+    expect(screen.getByText("No servers on this node.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Active saved host"), { target: { value: second } });
+    await waitFor(() => expect(screen.getByLabelText("Host endpoint")).toHaveValue(second));
+    expect(backend.configureHost).toHaveBeenCalledWith(second, "");
+    expect(screen.getByText("Factorio test")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh inventory" }));
+    expect(await screen.findByText("Restored game")).toBeInTheDocument();
+    expect(screen.getByText("https://restored.example")).toBeInTheDocument();
+    expect(screen.getByText("Node 7")).toBeInTheDocument();
+    expect(screen.queryByText("Node 2")).not.toBeInTheDocument();
+  });
+
+  it("shows read errors and prevents overwriting a malformed host profile", async () => {
+    const backend = createMockBackend({ delayMs: 0 });
+    backend.hostConnection = vi.fn().mockRejectedValue("Restore host-connection.json from a backup, then reload.");
+    backend.panelConnection = vi.fn().mockRejectedValue("Restore panel-connection.json from a backup, then reload.");
+    const save = vi.spyOn(backend, "configureHost");
+    renderApp(<HostScreen />, { backend });
+
+    expect(await screen.findByText(/Restore host-connection.json/)).toHaveAttribute("role", "alert");
+    expect(await screen.findByText(/Restore panel-connection.json/)).toHaveAttribute("role", "alert");
+    fireEvent.change(screen.getByLabelText("Host endpoint"), { target: { value: "https://new.example" } });
+    expect(screen.getByRole("button", { name: "Save connection" })).toBeDisabled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
   it("shows refresh errors and keeps the refresh action busy until the request settles", async () => {
     const backend = createMockBackend({ delayMs: 0 });
     await backend.configureHost("https://host.example", "token");
