@@ -171,8 +171,8 @@ gpg --homedir "$apt_keydir" --batch --pinentry-mode loopback --passphrase '' \
   --armor --export-secret-keys "$apt_signer" > "$apt_keydir/apt-secret.asc"
 ```
 
-Replace the fingerprint placeholder in [the apt setup guide](agent-setup.md#install-with-apt-recommended)
-with the same value. Merge the public `release/keys/apt.asc`,
+Update `expected_fingerprint` in [the apt setup guide](agent-setup.md#install-with-apt-recommended)
+to the exported key's fingerprint. Merge the public `release/keys/apt.asc`,
 `release/keys/apt.fingerprint`, and the guide to `master`.
 Create an `apt-repo` GitHub Actions environment and restrict deployments to
 the `master` branch. Add the full ASCII-armored private export as its
