@@ -8,7 +8,7 @@ GameLink lets you host a game server on your own machine and let a few friends
 join it **without opening a single port on your router**. There is no account,
 no public server list and no cloud service of ours in the middle.
 
-> **Status: working alpha (0.2.0-alpha).** The Go transport, access control,
+> **Status: working alpha (0.2.0).** The Go transport, access control,
 > legacy TCP/UDP tunnels, and LAN-to-LAN Bedrock Console Bridge have automated
 > coverage. Android builds for arm64 and x86_64 are available for local
 > evaluation. Xbox and PlayStation hardware, screen-off play, and sustained
