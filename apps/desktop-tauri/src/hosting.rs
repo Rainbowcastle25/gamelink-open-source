@@ -1148,6 +1148,7 @@ mod tests {
                         .open(&lock_path)
                         .unwrap();
                     lock.try_lock().expect("held the config lock during stop");
+                    lock.unlock().unwrap();
                     Value::Null
                 }
                 _ => Value::Null,
@@ -1279,7 +1280,7 @@ mod tests {
             }
             "host_peers" => {
                 if let Some(mutation) = pending_revoke.borrow_mut().take() {
-                    config::dispatch("config.agent_mutate", mutation)?;
+                    config::dispatch("config.agent_mutate", mutation).unwrap();
                 }
                 Ok(Value::Null)
             }
@@ -1295,6 +1296,10 @@ mod tests {
             Some(&json!({"RegionID":1,"Nodes":[{}]})),
         ).unwrap();
         let id = text(&game, "id");
+        assert!(
+            hosting.running_identities.contains_key(id),
+            "the initial generation must be running to sample peers"
+        );
         let alice = generated_public_key();
         config::dispatch(
             "config.agent_mutate",
@@ -1305,6 +1310,7 @@ mod tests {
             Some(json!({"path":path,"action":"revoke","id":id,"publicKey":alice}));
         hosting.reconcile().unwrap();
 
+        assert!(revoke.borrow().is_none(), "the revoke hook did not run");
         assert_eq!(hosting.view()[0]["state"], "inactive");
         assert_eq!(hosting.view()[0]["approved"], json!([]));
     }
