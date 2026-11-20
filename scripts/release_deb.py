@@ -34,6 +34,10 @@ def build_deb(nfpm, binary, licenses, work, version, arch, package, env):
     header = "[Unit]\n"
     unit.write_text(header + example.split(header, 1)[1].replace(
         "/usr/local/bin/gamelink-agent", "/usr/bin/gamelink-agent",
+    ).replace(
+        "ReadWritePaths=/var/lib/gamelink-agent\n",
+        "ReadWritePaths=/var/lib/gamelink-agent\n"
+        "ReadWritePaths=-/var/lib/gamelink-agent-apt-update/staged\n",
     ))
     contents = [
         (binary, f"/{EXECUTABLE}", 0o755),

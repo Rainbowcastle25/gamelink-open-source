@@ -17,7 +17,13 @@ use std::{
     },
 };
 type Result<T> = std::result::Result<T, String>;
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = match (
+    cfg!(debug_assertions),
+    option_env!("GAMELINK_APT_TEST_VERSION"),
+) {
+    (true, Some(version)) => version,
+    _ => env!("CARGO_PKG_VERSION"),
+};
 fn s<'a>(v: &'a Value, k: &str) -> &'a str {
     v[k].as_str().unwrap_or("")
 }

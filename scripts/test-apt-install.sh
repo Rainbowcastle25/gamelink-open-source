@@ -5,6 +5,8 @@ set -eu
 previous=$1
 current=$2
 agent_version=$3
+previous_agent_version=$4
+init=$(cat /proc/1/comm)
 state=/var/lib/gamelink-agent
 proof=$state/apt-proof
 unit=gamelink-agent.service
@@ -23,7 +25,7 @@ apt_get() {
         -o Dir::Etc::sourceparts=- "$@"
 }
 
-if [ "$(cat /proc/1/comm)" = systemd ]; then
+if [ "$init" = systemd ]; then
     # Use the packaged service and record which binary is on disk when
     # systemd stops and starts it.
     install -d /etc/systemd/system/gamelink-agent.service.d
@@ -47,6 +49,7 @@ case "$*" in
         if [ -e /run/gamelink-apt-watching ]; then echo enabled; else echo disabled; exit 1; fi
         ;;
     'enable --now gamelink-agent-apt-update.path') touch /run/gamelink-apt-watching ;;
+    'stop gamelink-agent-apt-update.path') unlink /run/gamelink-apt-watching ;;
     '--no-ask-password is-active gamelink-agent-apt-update.path')
         if [ -e /run/gamelink-apt-watching ]; then echo active; else echo inactive; exit 1; fi
         ;;
@@ -217,7 +220,9 @@ apt_get install -y gamelink-agent
 check_install() {
     test "$(dpkg-query -W -f='${db:Status-Status} ${Version}' gamelink-agent)" = "installed $1"
     test "$(command -v gamelink-agent)" = /usr/bin/gamelink-agent
-    test "$(gamelink-agent --version)" = "gamelink-agent $agent_version"
+    version=$agent_version
+    if [ "$1" = "$previous" ]; then version=$previous_agent_version; fi
+    test "$(gamelink-agent --version)" = "gamelink-agent $version"
     getent passwd gamelink
     test "$(stat -c '%U:%G:%a' "$state")" = "gamelink:gamelink:700"
     test -f /lib/systemd/system/gamelink-agent.service
@@ -468,7 +473,8 @@ check_disabled
 test ! -e "$proof/start-inode"
 
 # Exercise desktop-triggered apt installation without a live GitHub release.
-# Supply the exact stage files produced from the throwaway-signed manifest.
+# The real systemd service reads signed fixtures and stages through the admin API.
+# The Debian stub has no running service and stages the same signed files directly.
 apt_get install -y --allow-downgrades "gamelink-agent=$previous"
 check_install "$previous"
 test "$(cat /usr/share/gamelink-agent/install-method)" = apt
@@ -482,6 +488,33 @@ install -d -o root -g gamelink -m 0750 "$apt_state"
 install -d -o gamelink -g gamelink -m 0700 "$apt_state/staged"
 install -m 0644 /dev/null "$apt_state/swap.lock"
 install -m 0755 /usr/bin/gamelink-agent "$apt_state/installer"
+# The stub uses the same ELF in both packages. Make the old helper distinguishable.
+printf 'old apt helper fixture\n' >> "$apt_state/installer"
+apt_get install -y --only-upgrade gamelink-agent
+check_install "$current"
+cmp /usr/bin/gamelink-agent "$apt_state/installer"
+test "$(stat -c '%u:%a' "$apt_state/installer")" = 0:755
+apt_get install -y --allow-downgrades "gamelink-agent=$previous"
+check_install "$previous"
+cmp /usr/bin/gamelink-agent "$apt_state/installer"
+
+if [ "$init" = systemd ]; then
+    umask 077
+    openssl rand -hex 32 > "$state/proof-admin.token"
+    openssl rand -hex 32 > "$state/proof-panel.token"
+    printf '%s
+' '{"adminTokenFile":"proof-admin.token","applicationTokenFile":"proof-panel.token"}' \
+        > "$state/proof-host.json"
+    chown gamelink:gamelink "$state"/proof-*
+    umask 022
+    cat > /etc/systemd/system/gamelink-agent.service.d/proof-admin.conf <<'UNIT'
+[Service]
+ExecStart=
+ExecStart=/bin/sh -ec 'if [ -f /run/gamelink-proof-bad-version ] && [ "$(dpkg-query -W gamelink-agent | cut -f 2)" = "$(cat /run/gamelink-proof-bad-version)" ]; then exec /bin/sleep 2; fi; exec /usr/bin/gamelink-agent serve --host-config /var/lib/gamelink-agent/proof-host.json'
+UNIT
+    systemctl daemon-reload
+    systemctl restart "$unit"
+fi
 agent_status() {
     runuser -u gamelink -- env GAMELINK_AGENT_DIR="$state/config" gamelink-agent status --json
 }
@@ -493,6 +526,28 @@ check_install "$previous"
 request_upgrade() {
     id=$1
     attempt=$2
+    if [ "$init" = systemd ]; then
+        if ! response=$(curl --silent --show-error --fail-with-body --max-time 5 \
+            --retry 5 --retry-connrefused \
+            --header "Authorization: Bearer $(cat "$state/proof-admin.token")" \
+            --header 'Content-Type: application/json' --data "{\"version\":\"$agent_version\"}" \
+            http://127.0.0.1:8467/v2/host/update); then
+            printf '%s
+' "$response" >&2
+            journalctl --no-pager -n 40 -u "$unit"
+            exit 1
+        fi
+        attempt_id=$(printf '%s
+' "$response" | python3 -c '
+import json, sys
+response = json.load(sys.stdin)
+assert response["accepted"] is True
+print(response["attemptId"])
+')
+        test "${#attempt_id}" = 32
+        return
+    fi
+    attempt_id=$id
     runuser -u gamelink -- sh -ec '
         umask 077
         cd "$1/staged"
@@ -502,9 +557,7 @@ request_upgrade() {
         printf "{\"attempt_id\":\"%s\",\"version\":\"%s\"}\n" "$2" "$4" > request.next
         mv request.next request
     ' sh "$apt_state" "$id" "$attempt" "$agent_version"
-    if [ "$(cat /proc/1/comm)" != systemd ]; then
-        systemctl start "$apt_service" || :
-    fi
+    systemctl start "$apt_service" || :
 }
 
 wait_for_outcome() {
@@ -530,22 +583,58 @@ wait_for_outcome() {
 }
 
 request_upgrade 1234567890abcdef1234567890abcdef 1
-wait_for_outcome 1234567890abcdef1234567890abcdef committed succeeded
+wait_for_outcome "$attempt_id" committed succeeded
 check_install "$current"
 
 apt_get install -y --allow-downgrades "gamelink-agent=$previous"
 check_install "$previous"
-# Reset only the test fixture's cooldown so the next attempt can run at once.
-sed -i 's/"updated_at":[0-9]*/"updated_at":0/' "$apt_state/install-status.json"
-printf '%s\n' "$current" > /run/gamelink-proof-bad-version
-if [ "$(cat /proc/1/comm)" = systemd ]; then
-    cat > /etc/systemd/system/gamelink-agent.service.d/bad-version.conf <<'UNIT'
-[Service]
-ExecStart=
-ExecStart=/bin/sh -c 'if test "$(dpkg-query -W gamelink-agent | cut -f 2)" = "$(cat /run/gamelink-proof-bad-version)"; then exec /bin/sleep 2; fi; exec /usr/bin/gamelink-agent serve'
-UNIT
-    systemctl daemon-reload
-fi
+cmp /usr/bin/gamelink-agent "$apt_state/installer"
+
+reset_cooldown() {
+    # Reset only the test fixture's cooldown.
+    sed -i 's/"updated_at":[0-9]*/"updated_at":0/' "$apt_state/install-status.json"
+}
+reset_cooldown
+apt-mark hold gamelink-agent
+before=$(stat -c %i /usr/bin/gamelink-agent)
 request_upgrade abcdef1234567890abcdef1234567890 2
-wait_for_outcome abcdef1234567890abcdef1234567890 rolled-back rolledBack
+wait_for_outcome "$attempt_id" failed failed
+grep -F 'GameLink is held on the server.' "$apt_state/install-status.json"
 check_install "$previous"
+test "$(apt-mark showhold)" = gamelink-agent
+test "$(stat -c %i /usr/bin/gamelink-agent)" = "$before"
+apt-mark unhold gamelink-agent
+
+reset_cooldown
+printf '%s
+' "$current" > /run/gamelink-proof-bad-version
+request_upgrade 234567890abcdef1234567890abcdef1 3
+wait_for_outcome "$attempt_id" rolled-back rolledBack
+check_install "$previous"
+unlink /run/gamelink-proof-bad-version
+
+# Recreate the root-side checkpoint left by an interrupted helper and
+# install a newer owner-chosen package before running recovery.
+systemctl stop "$apt_path"
+checkpoint=34567890abcdef1234567890abcdef12
+sed "s/rolled-back/health-checking/; s/$attempt_id/$checkpoint/" \
+    "$apt_state/install-status.json" > "$apt_state/pending.json"
+dpkg-deb -R "$current_deb" /tmp/gamelink-owner-upgrade
+owner_version=$current+owner-test
+sed -i "s/^Version:.*/Version: $owner_version/" /tmp/gamelink-owner-upgrade/DEBIAN/control
+dpkg-deb --build --root-owner-group /tmp/gamelink-owner-upgrade /tmp/gamelink-owner-upgrade.deb
+printf 'recovery helper fixture\n' >> "$apt_state/installer"
+cp "$apt_state/installer" /tmp/gamelink-recovery-installer
+dpkg --install /tmp/gamelink-owner-upgrade.deb
+check_install "$owner_version"
+cmp /tmp/gamelink-recovery-installer "$apt_state/installer"
+before=$(stat -c %i /usr/bin/gamelink-agent)
+systemctl enable --now "$apt_path"
+if [ "$init" != systemd ]; then systemctl start "$apt_service" || :; fi
+wait_for_outcome "$checkpoint" failed failed
+grep -F 'another package operation superseded the GameLink update' "$apt_state/install-status.json"
+check_install "$owner_version"
+test "$(stat -c %i /usr/bin/gamelink-agent)" = "$before"
+test ! -e "$apt_state/pending.json"
+cmp /usr/bin/gamelink-agent "$apt_state/installer"
+test "$(stat -c '%u:%a' "$apt_state/installer")" = 0:755

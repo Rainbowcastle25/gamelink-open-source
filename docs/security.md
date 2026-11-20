@@ -38,8 +38,9 @@ metadata from the built-in GitHub endpoint. A separately installed root
 helper verifies the staged manifest and native binary again against the
 installed agent's embedded Minisign pins and the signed SHA-256 digest. It
 requires a newer version and replaces only the installed GameLink agent.
-The root helper guarantees “signed by the release key and newer than installed”,
-while selection of the latest release is the unprivileged agent's responsibility.
+Both the manual and apt root helpers require a genuine release signature and
+a version newer than the installed one. The unprivileged agent selects the
+latest GitHub release.
 Both authorized entry points, `update stage` and the desktop's request, run as
 the `gamelink` account. So root can't tell an owner's request from a request
 file that account wrote directly. A compromised `gamelink` account can at most

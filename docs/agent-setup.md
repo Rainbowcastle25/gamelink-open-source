@@ -145,10 +145,12 @@ sudo mkdir -m 0750 "$apt_state" &&
   sudo install -d -o gamelink -g gamelink -m 0700 "$apt_state/staged" &&
   sudo install -m 0644 /dev/null "$apt_state/swap.lock" &&
   sudo install -m 0755 /usr/bin/gamelink-agent "$apt_state/installer" &&
+  sudo systemctl restart gamelink-agent &&
   sudo systemctl enable --now gamelink-agent-apt-update.path
 ```
 
-If the directory already exists, inspect it before continuing. The root-owned
+If the directory already exists, inspect it before continuing. Restarting the
+agent applies sandbox write access to the staging directory. The root-owned
 installer copy can restore the prior package if the new binary cannot run.
 To stop accepting new requests, run
 `sudo systemctl disable --now gamelink-agent-apt-update.path`.

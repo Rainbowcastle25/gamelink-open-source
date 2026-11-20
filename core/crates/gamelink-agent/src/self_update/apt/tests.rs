@@ -74,7 +74,10 @@ fn rejects_invalid_and_mismatched_requests_before_running_apt() {
         request(&paths, version, id, status_id);
         let apt = Apt {
             work: &work,
-            command: |_: &str, _: &[&str], _: &Path| panic!("unexpected apt command"),
+            command: |program: &str, _: &[&str], _: &Path| {
+                assert_eq!(program, "dpkg-query");
+                Ok(String::new())
+            },
         };
         let running = Cell::new(None);
         assert_eq!(
@@ -84,7 +87,7 @@ fn rejects_invalid_and_mismatched_requests_before_running_apt() {
                 &apt,
                 &test_service(&running),
                 |_, _| panic!("unexpected verification"),
-                || panic!("unexpected lock"),
+                || Ok(File::open(dir.path()).unwrap()),
                 || panic!("unexpected source")
             )
             .unwrap_err(),
@@ -151,7 +154,10 @@ fn apt_scopes_downloads_and_installs_only_gamelink_then_rolls_back_on_failed_hea
                     let version = args[1].split('_').nth(1).unwrap();
                     Ok(format!("Package: {PACKAGE}\nVersion: {version}\n"))
                 }
-                "dpkg-query" => Ok(format!("installed {}", installed.get())),
+                "dpkg-query" => Ok(format!(
+                    "{PACKAGE} install ok installed {}",
+                    installed.get()
+                )),
                 "dpkg" => {
                     assert_eq!(args[..3], ["--force-confold", "--no-triggers", "--install"]);
                     calls.borrow_mut().push(args[3].into());
@@ -229,10 +235,146 @@ fn apt_scopes_downloads_and_installs_only_gamelink_then_rolls_back_on_failed_hea
             &apt,
             &test_service(&running),
             |_, _| panic!("cooldown bypassed"),
-            || panic!("cooldown bypassed"),
+            || Ok(File::open(dir.path()).unwrap()),
             || panic!("cooldown bypassed"),
         );
         assert!(retry.unwrap_err().contains("five minutes"));
+    }
+}
+
+#[test]
+fn held_package_is_declined_before_fetch_or_install() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = sandbox(dir.path());
+    let work = paths.update.join(WORK);
+    request(&paths, NEW, ID, ID);
+    let locked = Cell::new(false);
+    let apt = Apt {
+        work: &work,
+        command: |program: &str, args: &[&str], _: &Path| {
+            assert!(locked.get());
+            assert_eq!(program, "dpkg-query");
+            assert_eq!(args.last(), Some(&PACKAGE));
+            // The old query hides the selection that apt-mark hold writes.
+            if args[1].contains("Status-Want") {
+                Ok(format!("{PACKAGE} hold ok installed {OLD}"))
+            } else {
+                Ok(format!("installed {OLD}"))
+            }
+        },
+    };
+    let reason = run(
+        &paths,
+        effective_uid(),
+        &apt,
+        &test_service(&Cell::new(Some(OLD))),
+        |_, _| panic!("a held package must be declined before fetching"),
+        || {
+            locked.set(true);
+            Ok(File::open(dir.path()).unwrap())
+        },
+        || Ok(()),
+    )
+    .unwrap_err();
+    assert_eq!(reason, "GameLink is held on the server.");
+    let status = paths.status(effective_uid());
+    assert_eq!(status.state, Phase::Failed);
+    assert_eq!(status.reason.as_deref(), Some(reason.as_str()));
+    assert!(!paths.update.join(PENDING).exists());
+    assert!(!paths.marker().exists());
+}
+
+#[test]
+fn interrupted_update_leaves_an_owner_installed_package_alone() {
+    for (record, running, phase, reason_fragment) in [
+        (
+            "gamelink-agent install ok installed 3.0.0",
+            Some("3.0.0"),
+            Phase::Failed,
+            Some("another package operation superseded"),
+        ),
+        (
+            "",
+            None,
+            Phase::Failed,
+            Some("another package operation superseded"),
+        ),
+        (
+            "gamelink-agent hold ok unpacked 2.0.0",
+            None,
+            Phase::Failed,
+            Some("another package operation superseded"),
+        ),
+        (
+            "gamelink-agent install ok installed 1.0.0",
+            None,
+            Phase::Failed,
+            Some("the previous GameLink package remains installed"),
+        ),
+        (
+            "gamelink-agent install ok installed 2.0.0",
+            Some(NEW),
+            Phase::Succeeded,
+            None,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = sandbox(dir.path());
+        let work = paths.update.join(WORK);
+        fs::create_dir(&work).unwrap();
+        let previous = Previous {
+            package: OLD.into(),
+            binary: OLD.into(),
+            enabled: "enabled".into(),
+        };
+        fs::write(
+            work.join("previous.json"),
+            serde_json::to_vec(&previous).unwrap(),
+        )
+        .unwrap();
+        Transaction {
+            phase: InstallPhase::Staged,
+            attempt: 42,
+            attempt_id: Some(ID.into()),
+            updated_at: 0,
+            version: Some(NEW.into()),
+            reason: None,
+        }
+        .save(&paths, InstallPhase::HealthChecking, &|_| {})
+        .unwrap();
+
+        let locked = Cell::new(false);
+        let apt = Apt {
+            work: &work,
+            command: |program: &str, _: &[&str], _: &Path| {
+                assert!(locked.get());
+                assert_eq!(program, "dpkg-query", "recovery must leave dpkg alone");
+                Ok(record.into())
+            },
+        };
+        let result = run(
+            &paths,
+            effective_uid(),
+            &apt,
+            &test_service(&Cell::new(running)),
+            |_, _| panic!("recovery must not verify a new request"),
+            || {
+                locked.set(true);
+                Ok(File::open(dir.path()).unwrap())
+            },
+            || panic!("recovery must not touch the apt source"),
+        );
+        let status = paths.status(effective_uid());
+        if let Some(fragment) = reason_fragment {
+            let reason = result.unwrap_err();
+            assert!(reason.contains(fragment), "{record}: {reason}");
+            assert_eq!(status.reason.as_deref(), Some(reason.as_str()));
+        } else {
+            result.unwrap();
+            assert!(status.reason.is_none());
+        }
+        assert_eq!(status.state, phase);
+        assert!(!paths.update.join(PENDING).exists());
     }
 }
 

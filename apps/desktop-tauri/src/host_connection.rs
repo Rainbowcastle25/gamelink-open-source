@@ -1142,6 +1142,22 @@ mod tests {
     }
 
     #[test]
+    fn reports_the_server_package_hold() {
+        let mut status: AgentStatus = serde_json::from_value(status_json(
+            "0.2.0",
+            "failed",
+            Some(TARGET),
+            Some("GameLink is held on the server."),
+        ))
+        .unwrap();
+        status.supports_attempt_ids = true;
+        assert!(matches!(
+            status.outcome(TARGET, "current-attempt"),
+            Err(LinkedUpdateError::Failed { message }) if message.contains("held on the server")
+        ));
+    }
+
+    #[test]
     fn polling_times_out_after_the_update_is_accepted() {
         let dir = tempfile::tempdir().unwrap();
         let connection = configure(dir.path(), "https://node.example", "test-token").unwrap();

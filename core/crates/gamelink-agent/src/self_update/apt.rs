@@ -94,6 +94,32 @@ struct Previous {
     enabled: String,
 }
 
+struct PackageStatus {
+    selection: String,
+    error: String,
+    state: String,
+    version: String,
+}
+
+impl PackageStatus {
+    fn configured(&self) -> bool {
+        self.error == "ok" && self.state == "installed"
+    }
+
+    fn can_restore(&self) -> bool {
+        self.selection == "install"
+            && matches!(
+                self.state.as_str(),
+                "half-installed"
+                    | "unpacked"
+                    | "half-configured"
+                    | "triggers-awaited"
+                    | "triggers-pending"
+                    | "installed"
+            )
+    }
+}
+
 struct Apt<'a, C> {
     work: &'a Path,
     command: C,
@@ -189,15 +215,37 @@ where
             .map_err(|err| err.to_string())
     }
 
-    fn installed(&self) -> Result<String> {
-        self.command(
+    fn package(&self) -> Result<Option<PackageStatus>> {
+        let output = self.command(
             "dpkg-query",
-            &["-W", "-f=${db:Status-Status} ${Version}", PACKAGE],
-        )?
-        .trim()
-        .strip_prefix("installed ")
-        .map(str::to_owned)
-        .ok_or_else(|| "GameLink apt package is not configured".into())
+            &[
+                "-W",
+                "-f=${Package} ${db:Status-Want} ${db:Status-Eflag} ${db:Status-Status} ${Version}\n",
+                PACKAGE,
+            ],
+        )?;
+        let Some(record) = output
+            .lines()
+            .find_map(|line| line.strip_prefix("gamelink-agent "))
+        else {
+            return Ok(None);
+        };
+        match record.split_whitespace().collect::<Vec<_>>().as_slice() {
+            [selection, error, state, version] => Ok(Some(PackageStatus {
+                selection: (*selection).into(),
+                error: (*error).into(),
+                state: (*state).into(),
+                version: (*version).into(),
+            })),
+            [_, _, "not-installed", ..] => Ok(None),
+            _ => Err("invalid GameLink dpkg status".into()),
+        }
+    }
+
+    fn installed(&self) -> Result<PackageStatus> {
+        self.package()?
+            .filter(PackageStatus::configured)
+            .ok_or_else(|| "GameLink apt package is not configured".into())
     }
 
     fn install(&self, archive: &str) -> Result<()> {
@@ -209,26 +257,34 @@ where
     }
 }
 
-fn terminal(
+fn terminal<C>(
     paths: &Paths,
     owner: u32,
+    apt: &Apt<'_, C>,
     mut tx: Transaction,
     phase: InstallPhase,
     reason: Option<String>,
-) -> Result<()> {
+) -> Result<()>
+where
+    C: Fn(&str, &[&str], &Path) -> Result<String>,
+{
     tx.reason = reason;
     tx.save(paths, phase, &|_| {})?;
-    finish(paths, owner, phase)
+    finish(paths, owner, apt)
 }
 
-fn finish(paths: &Paths, owner: u32, phase: InstallPhase) -> Result<()> {
-    if phase == InstallPhase::Committed {
+fn finish<C>(paths: &Paths, owner: u32, apt: &Apt<'_, C>) -> Result<()>
+where
+    C: Fn(&str, &[&str], &Path) -> Result<String>,
+{
+    // postinst leaves the recovery copy in place while pending.json exists.
+    // Only replace it after reaching a terminal phase, with a configured package.
+    if apt.package()?.is_some_and(|package| package.configured()) {
         let next = paths.update.join("installer.next");
         remove_if_present(&next)
             .and_then(|()| fs::copy(&paths.installed, &next))
             .and_then(|_| File::open(&next)?.sync_all())
             .and_then(|()| fs::rename(&next, paths.update.join("installer")))
-            .and_then(|()| remove_if_present(&next))
             .and_then(|()| sync_dir(&paths.update))
             .map_err(|err| format!("could not refresh apt installer: {err}"))?;
     }
@@ -249,24 +305,68 @@ where
     S: Fn(&[&str]) -> Result<String>,
     V: Fn(&Path) -> Result<String>,
 {
-    let result = (|| {
-        let data = fs::read(apt.work.join("previous.json")).map_err(|err| err.to_string())?;
-        let previous: Previous = serde_json::from_slice(&data).map_err(|err| err.to_string())?;
-        if apt.installed().as_deref() != Ok(previous.package.as_str()) {
-            apt.install("previous.deb")?;
+    let data = fs::read(apt.work.join("previous.json")).map_err(|err| err.to_string())?;
+    let previous: Previous = serde_json::from_slice(&data).map_err(|err| err.to_string())?;
+    let version = tx
+        .version
+        .as_deref()
+        .filter(|version| update::valid_release_version(version))
+        .ok_or("apt transaction is missing its target version")?;
+    let target = deb_version(version);
+    let current = apt.package()?;
+    let (phase, reason) = match current {
+        Some(package) if package.version == target && package.can_restore() => {
+            if package.configured() && service.health(&paths.installed, version).is_ok() {
+                return terminal(paths, owner, apt, tx, InstallPhase::Committed, None);
+            }
+            let result = apt
+                .install("previous.deb")
+                .and_then(|()| restore_service(paths, apt, service, &previous));
+            rollback_outcome(result, reason)
         }
-        if apt.installed()? != previous.package {
-            return Err("previous GameLink package version was not restored".into());
+        Some(package)
+            if package.version == previous.package
+                && package.configured()
+                && package.can_restore() =>
+        {
+            (
+                InstallPhase::Failed,
+                format!("{reason}; the previous GameLink package remains installed"),
+            )
         }
-        if service.invocation().is_err() && enabled(service)? == previous.enabled {
-            // An unhealthy target may have already stopped. Preserve the
-            // prior service state using the same policy gate as postinst.
-            apt.command("policy-rc.d", &[UNIT, "start"])?;
-            apt.command("deb-systemd-invoke", &["start", UNIT])?;
-        }
-        service.health(&paths.installed, &previous.binary)
-    })();
-    let (phase, reason) = match result {
+        _ => (
+            InstallPhase::Failed,
+            format!("{reason}; apt package conflict: another package operation superseded the GameLink update"),
+        ),
+    };
+    terminal(paths, owner, apt, tx, phase, Some(reason.clone()))?;
+    Err(reason)
+}
+
+fn restore_service<C, S, V>(
+    paths: &Paths,
+    apt: &Apt<'_, C>,
+    service: &Service<S, V>,
+    previous: &Previous,
+) -> Result<()>
+where
+    C: Fn(&str, &[&str], &Path) -> Result<String>,
+    S: Fn(&[&str]) -> Result<String>,
+    V: Fn(&Path) -> Result<String>,
+{
+    if apt.installed()?.version != previous.package {
+        return Err("previous GameLink package version was not restored".into());
+    }
+    if service.invocation().is_err() && enabled(service)? == previous.enabled {
+        // Preserve the prior service state using the same policy gate as postinst.
+        apt.command("policy-rc.d", &[UNIT, "start"])?;
+        apt.command("deb-systemd-invoke", &["start", UNIT])?;
+    }
+    service.health(&paths.installed, &previous.binary)
+}
+
+fn rollback_outcome(result: Result<()>, reason: String) -> (InstallPhase, String) {
+    match result {
         Ok(()) => (
             InstallPhase::RolledBack,
             format!("{reason}; previous agent restarted"),
@@ -275,9 +375,7 @@ where
             InstallPhase::Failed,
             format!("{reason}; apt rollback failed: {error}"),
         ),
-    };
-    terminal(paths, owner, tx, phase, Some(reason.clone()))?;
-    Err(reason)
+    }
 }
 
 fn enabled<S, V>(service: &Service<S, V>) -> Result<String>
@@ -307,10 +405,19 @@ where
 {
     let staging_lock = paths.update_dir()?;
     let _run = installer_lock(paths)?;
-    if let Some(tx) = paths.transaction(PENDING)? {
+    let pending = paths.transaction(PENDING)?;
+    if pending.is_none() {
+        paths.staging_dir(owner)?;
+        if !present(&paths.marker())? {
+            return Err("no staged apt update request".into());
+        }
+    }
+    // Keep postinst's check for pending.json serialized with both the first
+    // transaction write and finalization, as well as all package operations.
+    let _package_lock = package_lock()?;
+    if let Some(tx) = pending {
         return match tx.phase {
             InstallPhase::Stopping | InstallPhase::Swapped | InstallPhase::HealthChecking => {
-                let _lock = package_lock()?;
                 rollback(
                     paths,
                     owner,
@@ -321,7 +428,7 @@ where
                 )
             }
             InstallPhase::Committed | InstallPhase::Failed | InstallPhase::RolledBack => {
-                finish(paths, owner, tx.phase)
+                finish(paths, owner, apt)
             }
             InstallPhase::Staged => {
                 if !present(&paths.update.join(CLAIMED_REQUEST))? && present(&paths.marker())? {
@@ -330,6 +437,7 @@ where
                 terminal(
                     paths,
                     owner,
+                    apt,
                     tx,
                     InstallPhase::Failed,
                     Some("apt upgrade was interrupted before installation".into()),
@@ -338,10 +446,6 @@ where
         };
     }
 
-    paths.staging_dir(owner)?;
-    if !present(&paths.marker())? {
-        return Err("no staged apt update request".into());
-    }
     let staged = paths.staging_status(owner).unwrap_or_default();
     let mut tx = Transaction {
         phase: InstallPhase::Staged,
@@ -368,6 +472,20 @@ where
                 return Err("agent updates are limited to one attempt every five minutes".into());
             }
         }
+        let package = apt
+            .package()?
+            .ok_or("GameLink apt package is not configured")?;
+        if package.selection == "hold" {
+            return Err("GameLink is held on the server.".into());
+        }
+        if !package.configured() || package.selection != "install" {
+            return Err("GameLink apt package is not configured for installation".into());
+        }
+        let previous_package = package.version;
+        let installed = release_version(&previous_package)?;
+        if update::release_is_newer(&request.version, &installed) != Some(true) {
+            return Err("requested GameLink apt version is not newer than installed".into());
+        }
         verify_source()?;
         match fs::remove_dir_all(apt.work) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -383,12 +501,6 @@ where
             "Dir::Etc::Parts \"-\";\nDir::Etc::Main \"-\";\n",
         )
         .map_err(|err| err.to_string())?;
-        let package_guard = package_lock()?;
-        let previous_package = apt.installed()?;
-        let installed = release_version(&previous_package)?;
-        if update::release_is_newer(&request.version, &installed) != Some(true) {
-            return Err("requested GameLink apt version is not newer than installed".into());
-        }
         let digest = verify_release(&installed, &request.version)?;
         let target = deb_version(&request.version);
         apt.fetch(&target, &previous_package, &digest)?;
@@ -415,14 +527,15 @@ where
             .and_then(|_| sync_dir(apt.work))
             .and_then(|()| sync_dir(&paths.update))
             .map_err(|err| err.to_string())?;
-        Ok((request, target, swap_lock, package_guard))
+        Ok((request, target, swap_lock))
     })();
-    let (request, target, _swap_lock, _package_lock) = match prepare {
+    let (request, target, _swap_lock) = match prepare {
         Ok(prepared) => prepared,
         Err(reason) => {
             terminal(
                 paths,
                 owner,
+                apt,
                 tx,
                 InstallPhase::Failed,
                 Some(String::clone(&reason)),
@@ -433,7 +546,7 @@ where
     tx.save(paths, InstallPhase::Stopping, &|_| {})?;
     let result = (|| {
         apt.install("target.deb")?;
-        if apt.installed()? != target {
+        if apt.installed()?.version != target {
             return Err("requested GameLink apt version was not installed".into());
         }
         tx.save(paths, InstallPhase::HealthChecking, &|_| {})?;
@@ -442,7 +555,7 @@ where
     if let Err(reason) = result {
         return rollback(paths, owner, apt, service, tx, reason);
     }
-    terminal(paths, owner, tx, InstallPhase::Committed, None)
+    terminal(paths, owner, apt, tx, InstallPhase::Committed, None)
 }
 
 fn dpkg_lock() -> Result<File> {
@@ -501,17 +614,6 @@ pub fn install_apt() -> Result<()> {
     if effective_uid() != 0 {
         return Err("install-apt requires a root session on a GameLink apt installation".into());
     }
-    paths.update_dir()?;
-    // The saved helper remains executable if an interrupted dpkg left the
-    // package binary (or its marker) missing.
-    let helper = open_read(&paths.update.join("installer")).map_err(|err| err.to_string())?;
-    check_metadata(&helper, 0, 0o755).map_err(|err| err.to_string())?;
-    let running = fs::metadata("/proc/self/exe").map_err(|err| err.to_string())?;
-    if !same_file(&helper.metadata().map_err(|err| err.to_string())?, &running)
-        || (!installed() && !present(&paths.update.join(PENDING))?)
-    {
-        return Err("install-apt requires the root-owned GameLink apt installer".into());
-    }
     let (uid, gid) = gamelink_account()?;
     let work = paths.update.join(WORK);
     let apt = Apt {
@@ -535,7 +637,10 @@ pub fn install_apt() -> Result<()> {
                 };
             }
             let mut command = Command::new(format!("/usr/bin/{program}"));
-            command.args(args).current_dir(dir);
+            command.args(args);
+            if program != "dpkg-query" {
+                command.current_dir(dir);
+            }
             if matches!(program, "apt-get" | "dpkg" | "deb-systemd-invoke") {
                 // These commands may emit substantial progress output.
                 let status = command
@@ -552,14 +657,20 @@ pub fn install_apt() -> Result<()> {
                 }
                 return Ok(String::new());
             }
-            // command_output clears the inherited environment.
-            if program == "apt-cache" {
-                let output = command
-                    .env_clear()
-                    .env("APT_CONFIG", dir.join("apt.conf"))
-                    .stdin(Stdio::null())
-                    .output()
-                    .map_err(|err| err.to_string())?;
+            if matches!(program, "apt-cache" | "dpkg-query") {
+                command.env_clear().stdin(Stdio::null());
+                if program == "apt-cache" {
+                    command.env("APT_CONFIG", dir.join("apt.conf"));
+                }
+                let output = command.output().map_err(|err| err.to_string())?;
+                // Exit 1 with no match means the requested package is absent.
+                // dpkg-query reports fatal database errors with exit 2.
+                if program == "dpkg-query"
+                    && output.status.code() == Some(1)
+                    && output.stdout.is_empty()
+                {
+                    return Ok(String::new());
+                }
                 if !output.status.success() {
                     return Err(output.status.to_string());
                 }
@@ -578,7 +689,21 @@ pub fn install_apt() -> Result<()> {
             require_expected(Some(expected), &release.version())?;
             Ok(release.deb_sha256()?.to_owned())
         },
-        dpkg_lock,
+        || {
+            let lock = dpkg_lock()?;
+            // The saved helper remains executable if an interrupted dpkg left the
+            // package binary (or its marker) missing.
+            let helper =
+                open_read(&paths.update.join("installer")).map_err(|err| err.to_string())?;
+            check_metadata(&helper, 0, 0o755).map_err(|err| err.to_string())?;
+            let running = fs::metadata("/proc/self/exe").map_err(|err| err.to_string())?;
+            if !same_file(&helper.metadata().map_err(|err| err.to_string())?, &running)
+                || (!installed() && !present(&paths.update.join(PENDING))?)
+            {
+                return Err("install-apt requires the root-owned GameLink apt installer".into());
+            }
+            Ok(lock)
+        },
         verify_source,
     )
 }

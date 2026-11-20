@@ -501,6 +501,23 @@ pub fn stage(expected: Option<&str>) -> Result<String> {
         )
 }
 
+fn latest_for_admin() -> ReleaseResult<AgentRelease> {
+    // The disposable systemd test has no network and mounts signed fixtures.
+    #[cfg(debug_assertions)]
+    if option_env!("GAMELINK_APT_TEST_VERSION").is_some() {
+        let read = |name| {
+            fs::read_to_string(Path::new("/proof").join(name))
+                .map_err(|_| "could not read signed apt test fixture")
+        };
+        return AgentRelease::from_staged(
+            VERSION,
+            read(update::MANIFEST_NAME)?,
+            read(update::MANIFEST_SIGNATURE_NAME)?,
+        );
+    }
+    AgentRelease::latest(VERSION)
+}
+
 pub fn queue(expected: Option<String>) -> std::result::Result<String, QueueError> {
     let stage = Stage::system()?;
     let attempt_id = stage.attempt_id().to_owned();
@@ -509,7 +526,7 @@ pub fn queue(expected: Option<String>) -> std::result::Result<String, QueueError
         .spawn(move || {
             if let Err(reason) = stage.run(
                 expected.as_deref(),
-                || AgentRelease::latest(VERSION),
+                latest_for_admin,
                 AgentRelease::download_binary,
             ) {
                 crate::log(&format!("agent update staging failed: {reason}"));
