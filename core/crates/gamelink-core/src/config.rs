@@ -653,9 +653,19 @@ fn sync_managed(dir: &Path, cfg: &mut Value, input: &Value) -> Result<Value, Str
     }
     Ok(json!({"origin":origin,"discovered":seen.len()}))
 }
+/// Holds the agent configuration's mutation lock for the current operation.
+pub struct MutationLock(fs::File);
+
+impl Drop for MutationLock {
+    fn drop(&mut self) {
+        // A child can inherit the file descriptor until exec. Release the
+        // lock here so the child cannot extend the critical section.
+        let _ = self.0.unlock();
+    }
+}
+
 fn open_mutation_lock(dir: &Path) -> Result<fs::File, String> {
-    // Keep the file in place so everyone locks the same file. The OS releases
-    // the lock when the handle closes, including if the process exits.
+    // Keep the file in place so everyone locks the same file.
     let mut opts = fs::OpenOptions::new();
     opts.write(true).create(true).truncate(false);
     #[cfg(unix)]
@@ -675,17 +685,17 @@ fn try_mutation_lock(file: &fs::File) -> Result<bool, String> {
 }
 
 /// Attempts to serialize with config writers without blocking the host.
-pub fn try_lock_mutations(dir: &Path) -> Result<Option<fs::File>, String> {
+pub fn try_lock_mutations(dir: &Path) -> Result<Option<MutationLock>, String> {
     let file = open_mutation_lock(dir)?;
-    Ok(try_mutation_lock(&file)?.then_some(file))
+    Ok(try_mutation_lock(&file)?.then(|| MutationLock(file)))
 }
 
 /// Serializes changes to agent.json and its game key files.
-pub fn lock_mutations(dir: &Path) -> Result<fs::File, String> {
+pub fn lock_mutations(dir: &Path) -> Result<MutationLock, String> {
     let file = open_mutation_lock(dir)?;
     for _ in 0..100 {
         if try_mutation_lock(&file)? {
-            return Ok(file);
+            return Ok(MutationLock(file));
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -2255,6 +2265,21 @@ mod behaviour {
         drop(file);
         add_game(&dir, json!({"type":"factorio"})).unwrap();
         drop(lock_mutations(&dir).expect("lock leaked"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn dropping_mutation_lock_releases_it_before_an_inherited_descriptor_closes() {
+        let (_root, dir) = fresh_agent();
+        let lock = lock_mutations(&dir).unwrap();
+        // A child between fork and exec holds another descriptor for the same
+        // open file description, just as try_clone does here.
+        let inherited = lock.0.try_clone().unwrap();
+        assert!(try_lock_mutations(&dir).unwrap().is_none());
+
+        drop(lock);
+        assert!(try_lock_mutations(&dir).unwrap().is_some());
+        drop(inherited);
     }
 
     #[test]
