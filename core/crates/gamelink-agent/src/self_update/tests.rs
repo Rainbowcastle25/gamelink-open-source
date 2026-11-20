@@ -21,7 +21,7 @@ pub(super) fn check_sync(path: &Path) -> io::Result<()> {
     })
 }
 
-fn sandbox(root: &Path) -> Paths {
+pub(super) fn sandbox(root: &Path) -> Paths {
     let paths = Paths {
         update: root.join("update"),
         installed: root.join("bin/gamelink-agent"),

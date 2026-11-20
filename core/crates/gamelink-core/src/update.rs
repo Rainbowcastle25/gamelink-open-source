@@ -344,6 +344,7 @@ pub struct AgentRelease {
     signed: SignedRelease,
     keys: Vec<PublicKey>,
     artifact: Artifact,
+    deb_sha256: Option<String>,
     version: Version,
     machine: u16,
 }
@@ -364,6 +365,17 @@ impl AgentRelease {
             return Err("invalid agent release version");
         }
         let (name, machine) = agent_target(arch)?;
+        let deb = match arch {
+            "x86_64" => "amd64",
+            "aarch64" => "arm64",
+            _ => unreachable!("agent_target only accepts packaged architectures"),
+        };
+        let deb_name = format!("gamelink-agent_{version}_{deb}.deb");
+        let deb_sha256 = manifest
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.name == deb_name)
+            .map(|artifact| artifact.sha256.clone());
         let artifact = manifest
             .artifacts
             .into_iter()
@@ -373,6 +385,7 @@ impl AgentRelease {
             signed,
             keys,
             artifact,
+            deb_sha256,
             version,
             machine,
         })
@@ -405,6 +418,12 @@ impl AgentRelease {
 
     pub fn manifest_signature(&self) -> &[u8] {
         self.signed.signature.as_bytes()
+    }
+
+    pub fn deb_sha256(&self) -> Result<&str> {
+        self.deb_sha256
+            .as_deref()
+            .ok_or("signed release has no Debian package for this architecture")
     }
 
     pub fn verify_binary(&self, binary: &[u8], signature: &str) -> Result<()> {

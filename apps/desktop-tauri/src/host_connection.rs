@@ -26,6 +26,8 @@ const UPDATE_AGENT: &str =
     "Update the GameLink agent on this node to manage access from the desktop app.";
 const MANUAL_AGENT_UPDATE: &str =
     "Update the GameLink agent on your server with the setup guide or your package manager.";
+const MANUAL_APT_UPDATE: &str =
+    "Run sudo apt update && sudo apt upgrade on your server, or enable desktop updates in the setup guide.";
 const AGENT_UPDATE_TIMEOUT: Duration = Duration::from_secs(4 * 60);
 const AGENT_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const AGENT_STATUS_TIMEOUT: u64 = 5;
@@ -365,6 +367,7 @@ fn host_request(
 pub enum LinkedAgent {
     Available(LinkedAgentUpdate),
     Manual,
+    ManualApt,
     Unreachable,
 }
 
@@ -377,6 +380,7 @@ pub enum LinkedAgent {
 pub enum LinkedAgentNotice {
     Available { node_name: String, offer_id: String },
     Manual,
+    ManualApt,
     Unreachable,
 }
 
@@ -388,6 +392,7 @@ impl LinkedAgent {
                 offer_id: update.offer_id.clone(),
             },
             Self::Manual => LinkedAgentNotice::Manual,
+            Self::ManualApt => LinkedAgentNotice::ManualApt,
             Self::Unreachable => LinkedAgentNotice::Unreachable,
         }
     }
@@ -404,6 +409,7 @@ pub struct LinkedAgentUpdate {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum LinkedUpdateError {
     Manual { message: &'static str },
+    ManualApt { message: &'static str },
     Failed { message: String },
 }
 
@@ -428,6 +434,7 @@ pub enum AgentUpdateProgress {
 #[serde(rename_all = "camelCase")]
 struct AgentStatus {
     agent_version: Option<String>,
+    install_method: Option<String>,
     update: Option<AgentUpdateStatus>,
     #[serde(skip)]
     supports_attempt_ids: bool,
@@ -493,7 +500,11 @@ fn linked_agent_in(dir: &Path, version: &str) -> Result<Option<LinkedAgent>> {
         return Ok(None);
     }
     if !status.supports_update() {
-        return Ok(Some(LinkedAgent::Manual));
+        return Ok(Some(if status.is_apt() {
+            LinkedAgent::ManualApt
+        } else {
+            LinkedAgent::Manual
+        }));
     }
     if newer.is_none() {
         return Ok(Some(LinkedAgent::Unreachable));
@@ -514,6 +525,10 @@ enum AgentPoll {
 }
 
 impl AgentStatus {
+    fn is_apt(&self) -> bool {
+        self.install_method.as_deref() == Some("apt")
+    }
+
     fn supports_update(&self) -> bool {
         !self.legacy_agent
             && self.supports_attempt_ids
@@ -532,8 +547,14 @@ impl AgentStatus {
         use AgentUpdateState as Phase;
 
         let Some(update) = self.update.as_ref().filter(|_| self.supports_update()) else {
-            return Err(LinkedUpdateError::Manual {
-                message: MANUAL_AGENT_UPDATE,
+            return Err(if self.is_apt() {
+                LinkedUpdateError::ManualApt {
+                    message: MANUAL_APT_UPDATE,
+                }
+            } else {
+                LinkedUpdateError::Manual {
+                    message: MANUAL_AGENT_UPDATE,
+                }
             });
         };
         if update.attempt_id.as_deref() != Some(attempt_id) {
@@ -587,6 +608,11 @@ fn request_agent_update(
             .ok_or(LinkedUpdateError::Manual { message: MANUAL_AGENT_UPDATE }),
         Err(error) if error == "HTTP transport returned status 404" => {
             Err(LinkedUpdateError::Manual { message: MANUAL_AGENT_UPDATE })
+        }
+        Err(error) if error == "HTTP transport returned status 503"
+            && agent_status(saved, AGENT_STATUS_TIMEOUT).is_ok_and(|status| status.is_apt() && !status.supports_update()) =>
+        {
+            Err(LinkedUpdateError::ManualApt { message: MANUAL_APT_UPDATE })
         }
         Err(error) if error == "HTTP transport returned status 429" => {
             Err(LinkedUpdateError::failed("Try again in a few minutes."))
@@ -830,6 +856,30 @@ mod tests {
     }
 
     #[test]
+    fn offers_update_all_for_apt_and_returns_apt_guidance_when_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = configure(dir.path(), "https://node.example", "test-token").unwrap();
+        let calls = std::cell::Cell::new(0);
+        let _fake = bridge::fake::install(move |request| {
+            let count = calls.get();
+            calls.set(count + 1);
+            if request["verb"] == "POST" {
+                return Err("HTTP transport returned status 503".into());
+            }
+            Ok(json!({
+                "agentVersion":"0.2.0", "installMethod":"apt",
+                "update":{"state":"idle","supported":count == 0,"attemptId":null}
+            }))
+        });
+        let offer = linked_agent_in(dir.path(), TARGET).unwrap().unwrap();
+        assert!(matches!(offer, LinkedAgent::Available(_)));
+        let error = request_agent_update(&saved, TARGET).unwrap_err();
+        assert_eq!(json!(error)["kind"], "manualApt");
+        let disabled = linked_agent_in(dir.path(), TARGET).unwrap().unwrap();
+        assert_eq!(json!(disabled.notice())["kind"], "manualApt");
+    }
+
+    #[test]
     fn rejects_stale_click_after_a_same_version_relink() {
         let dir = tempfile::tempdir().unwrap();
         let _fake = bridge::fake::install(|request| {
@@ -988,6 +1038,9 @@ mod tests {
         let saved = configure(dir.path(), "https://node.example", "test-token").unwrap();
         for code in [404, 503, 429] {
             let _fake = bridge::fake::install(move |request| {
+                if request["verb"] == "GET" && code == 503 {
+                    return Err("HTTP transport returned status 503".into());
+                }
                 assert_eq!(request["url"], "https://node.example/v2/host/update");
                 assert_eq!(request["verb"], "POST");
                 assert_eq!(request["token"], "test-token");

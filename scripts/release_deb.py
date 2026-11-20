@@ -38,6 +38,13 @@ def build_deb(nfpm, binary, licenses, work, version, arch, package, env):
     contents = [
         (binary, f"/{EXECUTABLE}", 0o755),
         (unit, "/lib/systemd/system/gamelink-agent.service", 0o644),
+        (PACKAGING / "gamelink-agent-apt-update.path",
+         "/lib/systemd/system/gamelink-agent-apt-update.path", 0o644),
+        (PACKAGING / "gamelink-agent-apt-update.service",
+         "/lib/systemd/system/gamelink-agent-apt-update.service", 0o644),
+        (PACKAGING / "50-gamelink-agent.preset",
+         "/lib/systemd/system-preset/50-gamelink-agent.preset", 0o644),
+        (PACKAGING / "install-method", "/usr/share/gamelink-agent/install-method", 0o644),
         (PACKAGING / "copyright", "/usr/share/doc/gamelink-agent/copyright", 0o644),
         (licenses, "/usr/share/doc/gamelink-agent/GameLink-licenses.tar.gz", 0o644),
     ]

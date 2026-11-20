@@ -8,6 +8,9 @@ agent_version=$3
 state=/var/lib/gamelink-agent
 proof=$state/apt-proof
 unit=gamelink-agent.service
+apt_path=gamelink-agent-apt-update.path
+apt_service=gamelink-agent-apt-update.service
+apt_state=/var/lib/gamelink-agent-apt-update
 restart=/run/gamelink-agent-restart
 current_deb=/proof/upgrade/pool/main/amd64/gamelink-agent_${agent_version}_amd64.deb
 export DEBIAN_FRONTEND=noninteractive
@@ -40,6 +43,30 @@ wants=/etc/systemd/system/multi-user.target.wants/gamelink-agent.service
 runtime_wants=/run/systemd/system/multi-user.target.wants/gamelink-agent.service
 case "$*" in
     daemon-reload) ;;
+    'is-enabled gamelink-agent-apt-update.path')
+        if [ -e /run/gamelink-apt-watching ]; then echo enabled; else echo disabled; exit 1; fi
+        ;;
+    'enable --now gamelink-agent-apt-update.path') touch /run/gamelink-apt-watching ;;
+    '--no-ask-password is-active gamelink-agent-apt-update.path')
+        if [ -e /run/gamelink-apt-watching ]; then echo active; else echo inactive; exit 1; fi
+        ;;
+    'start gamelink-agent-apt-update.service')
+        /var/lib/gamelink-agent-apt-update/installer update install-apt
+        ;;
+    '--no-ask-password is-enabled gamelink-agent.service')
+        exec systemctl is-enabled gamelink-agent.service
+        ;;
+    '--no-ask-password show --property=ActiveState,InvocationID gamelink-agent.service')
+        if [ -f /run/gamelink-proof-bad-version ] &&
+            [ "$(cat /run/gamelink-proof-bad-version)" = "$(dpkg-query -W -f='${Version}' gamelink-agent)" ]; then
+            if [ -e /run/gamelink-running ]; then unlink /run/gamelink-running; fi
+        fi
+        if [ -e /run/gamelink-running ]; then
+            printf 'ActiveState=active\nInvocationID=1234567890abcdef1234567890abcdef\n'
+        else
+            echo ActiveState=inactive
+        fi
+        ;;
     'show --property=ActiveState --value gamelink-agent.service')
         if [ -e /run/gamelink-running ]; then echo active; else echo inactive; fi
         ;;
@@ -229,6 +256,7 @@ unlink "/etc/systemd/system/$unit"
 check_inactive
 check_disabled
 test ! -e "$proof/start-inode"
+
 test "$(stat -c '%i:%z' "$state")" = "$state_before"
 
 apt_get install -y --allow-downgrades "gamelink-agent=$previous"
@@ -438,3 +466,86 @@ check_install "$current"
 check_inactive
 check_disabled
 test ! -e "$proof/start-inode"
+
+# Exercise desktop-triggered apt installation without a live GitHub release.
+# Supply the exact stage files produced from the throwaway-signed manifest.
+apt_get install -y --allow-downgrades "gamelink-agent=$previous"
+check_install "$previous"
+test "$(cat /usr/share/gamelink-agent/install-method)" = apt
+test "$(stat -c '%u:%a' /usr/share/gamelink-agent/install-method)" = 0:644
+test -f "/lib/systemd/system/$apt_path"
+test -f "/lib/systemd/system/$apt_service"
+test "$(systemctl is-enabled "$apt_path" || :)" = disabled
+systemctl enable "$unit"
+systemctl start "$unit"
+install -d -o root -g gamelink -m 0750 "$apt_state"
+install -d -o gamelink -g gamelink -m 0700 "$apt_state/staged"
+install -m 0644 /dev/null "$apt_state/swap.lock"
+install -m 0755 /usr/bin/gamelink-agent "$apt_state/installer"
+agent_status() {
+    runuser -u gamelink -- env GAMELINK_AGENT_DIR="$state/config" gamelink-agent status --json
+}
+agent_status | grep -Fq '"supported":false'
+systemctl enable --now "$apt_path"
+agent_status | grep -Fq '"supported":true'
+check_install "$previous"
+
+request_upgrade() {
+    id=$1
+    attempt=$2
+    runuser -u gamelink -- sh -ec '
+        umask 077
+        cd "$1/staged"
+        cp /proof/release-manifest.json /proof/release-manifest.json.minisig .
+        printf "{\"state\":\"staged\",\"attempt\":%s,\"attempt_id\":\"%s\",\"version\":\"%s\",\"updated_at\":%s}\n" \
+            "$3" "$2" "$4" "$(date +%s)" > status.json
+        printf "{\"attempt_id\":\"%s\",\"version\":\"%s\"}\n" "$2" "$4" > request.next
+        mv request.next request
+    ' sh "$apt_state" "$id" "$attempt" "$agent_version"
+    if [ "$(cat /proc/1/comm)" != systemd ]; then
+        systemctl start "$apt_service" || :
+    fi
+}
+
+wait_for_outcome() {
+    id=$1
+    phase=$2
+    state_name=$3
+    record=$apt_state/install-status.json
+    count=0
+    until [ -f "$record" ] && grep -Fq "\"attempt_id\":\"$id\"" "$record"; do
+        count=$((count + 1))
+        if [ "$count" -ge 40 ]; then
+            journalctl --no-pager -u "$apt_service" || :
+            exit 1
+        fi
+        sleep 1
+    done
+    grep -F "\"phase\":\"$phase\"" "$record"
+    test "$(stat -c '%u:%a' "$record")" = 0:644
+    status=$(agent_status)
+    printf '%s\n' "$status" | grep -Fq "\"attemptId\":\"$id\""
+    printf '%s\n' "$status" | grep -Fq "\"state\":\"$state_name\""
+    systemctl is-active --quiet "$unit"
+}
+
+request_upgrade 1234567890abcdef1234567890abcdef 1
+wait_for_outcome 1234567890abcdef1234567890abcdef committed succeeded
+check_install "$current"
+
+apt_get install -y --allow-downgrades "gamelink-agent=$previous"
+check_install "$previous"
+# Reset only the test fixture's cooldown so the next attempt can run at once.
+sed -i 's/"updated_at":[0-9]*/"updated_at":0/' "$apt_state/install-status.json"
+printf '%s\n' "$current" > /run/gamelink-proof-bad-version
+if [ "$(cat /proc/1/comm)" = systemd ]; then
+    cat > /etc/systemd/system/gamelink-agent.service.d/bad-version.conf <<'UNIT'
+[Service]
+ExecStart=
+ExecStart=/bin/sh -c 'if test "$(dpkg-query -W gamelink-agent | cut -f 2)" = "$(cat /run/gamelink-proof-bad-version)"; then exec /bin/sleep 2; fi; exec /usr/bin/gamelink-agent serve'
+UNIT
+    systemctl daemon-reload
+fi
+request_upgrade abcdef1234567890abcdef1234567890 2
+wait_for_outcome abcdef1234567890abcdef1234567890 rolled-back rolledBack
+check_install "$previous"

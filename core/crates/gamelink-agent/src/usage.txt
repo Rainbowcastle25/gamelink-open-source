@@ -28,6 +28,7 @@ Sharing and running:
   update check [--json]         verify release metadata and report available updates
   update stage [--version VER]  stage the latest signed agent release for installation
   update install-staged         verify and install the staged release (root helper)
+  update install-apt            install the staged Debian package (root helper)
   version                       print the version
 
 The configuration directory defaults to $GAMELINK_AGENT_DIR, else

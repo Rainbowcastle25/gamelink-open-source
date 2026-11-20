@@ -48,6 +48,17 @@ gains no further privilege. The agent never stages an update on its own: there
 is no timer or background check for the agent, and it stages updates only when
 someone runs the command or clicks **Update all** in the desktop app.
 
+For apt installations, the separately enabled apt helper verifies the staged
+manifest against the embedded Minisign keys. The request must match the
+manifest version and the newest candidate in fresh, signed GameLink apt
+metadata. If the newest GitHub release has not reached apt, the request
+fails until both sources agree. The helper downloads the exact
+`gamelink-agent` package from the GameLink source, checks its signed release
+digest and passes that package alone to dpkg. It has no dependency resolver
+and can change only the GameLink package, including when it restores the
+previous version from the same signed apt source. The apt path unit ships
+disabled and needs an explicit upgrade request after opt-in.
+
 Desktop presence notifications are off by default. With the setting enabled,
 checks go through the same Tailcat probe as **Check** and reveal to the host's
 agent that your device is online. Observations and notification limits are kept

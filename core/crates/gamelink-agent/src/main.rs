@@ -231,6 +231,7 @@ impl Cli {
                 println!("Staged signed agent update {version}");
             }
             "update install-staged" => self_update::install_staged()?,
+            "update install-apt" => self_update::install_apt()?,
             "host detect" => {
                 if get("panel-url").is_empty() || get("token-file").is_empty() {
                     return Err("--panel-url and --token-file are required".into());
@@ -537,16 +538,22 @@ fn run() -> i32 {
         return 0;
     }
     if cmd == "update" {
-        if !args
-            .first()
-            .is_some_and(|sub| ["check", "stage", "install-staged"].contains(&sub.as_str()))
-        {
-            eprintln!("usage: gamelink-agent update check|stage|install-staged [options]");
+        if !args.first().is_some_and(|sub| {
+            ["check", "stage", "install-staged", "install-apt"].contains(&sub.as_str())
+        }) {
+            eprintln!(
+                "usage: gamelink-agent update check|stage|install-staged|install-apt [options]"
+            );
             return 2;
         }
         cmd = format!("update {}", args.remove(0));
     }
-    if dir.is_empty() && !matches!(cmd.as_str(), "update stage" | "update install-staged") {
+    if dir.is_empty()
+        && !matches!(
+            cmd.as_str(),
+            "update stage" | "update install-staged" | "update install-apt"
+        )
+    {
         dir = std::env::var("XDG_CONFIG_HOME")
             .ok()
             .filter(|s| !s.is_empty())
@@ -607,6 +614,7 @@ fn run() -> i32 {
         "update check",
         "update stage",
         "update install-staged",
+        "update install-apt",
         "host refresh",
         "host detect",
         "host check",
@@ -622,7 +630,7 @@ fn run() -> i32 {
     };
     let _cli_lock = if matches!(
         cmd.as_str(),
-        "serve" | "update stage" | "update install-staged"
+        "serve" | "update stage" | "update install-staged" | "update install-apt"
     ) {
         None
     } else {
@@ -762,7 +770,9 @@ fn parse(cmd: &str, args: Vec<String>) -> std::result::Result<clap::ArgMatches, 
         "games remove" if count != 1 => Some("<id>"),
         "requests approve" | "requests dismiss" if count != 1 => Some("<id|key> [options]"),
         "requests list" | "invite" | "invite rotate" if count != 0 => Some("[options]"),
-        "update stage" | "update install-staged" if count != 0 => Some("[options]"),
+        "update stage" | "update install-staged" | "update install-apt" if count != 0 => {
+            Some("[options]")
+        }
         _ => None,
     } {
         eprintln!("usage: gamelink-agent {cmd} {operand}");

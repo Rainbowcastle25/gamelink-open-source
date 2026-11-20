@@ -1,5 +1,6 @@
 //! Linux agent updater. The staged directory is untrusted even when the
-//! request came from the local agent. Only the installed helper swaps binaries.
+//! request came from the local agent. Only the root helpers install updates.
+mod apt;
 use crate::{Result, VERSION};
 use gamelink_core::{
     storage,
@@ -45,6 +46,13 @@ struct Paths {
 
 impl Paths {
     fn system() -> Self {
+        if apt::installed() {
+            return apt::paths();
+        }
+        Self::manual()
+    }
+
+    fn manual() -> Self {
         Self {
             update: UPDATE.into(),
             installed: INSTALLED.into(),
@@ -82,7 +90,14 @@ impl Paths {
     fn update_dir(&self) -> Result<File> {
         let open = || {
             let home = open_dir(self.update.parent().expect("update has a parent"))?;
-            check_metadata(&home, self.installer_uid, 0o1770)?;
+            if self.installed == Path::new(apt::BINARY) {
+                let meta = home.metadata()?;
+                if meta.uid() != self.installer_uid || meta.mode() & 0o022 != 0 {
+                    return Err(io::Error::other("unsafe apt updater parent directory"));
+                }
+            } else {
+                check_metadata(&home, self.installer_uid, 0o1770)?;
+            }
             let update = open_dir(&self.update)?;
             check_metadata(&update, self.installer_uid, 0o750)?;
             Ok::<_, io::Error>(update)
@@ -123,12 +138,11 @@ impl Paths {
         self.staging_dir(owner).ok()?;
         let bytes = read_file(&self.staged().join(STAGE_STATUS), 4096, owner).ok()?;
         let status: Status = serde_json::from_slice(&bytes).ok()?;
-        if status.attempt_id.as_ref().is_some_and(|id| {
-            id.len() != 32
-                || !id
-                    .bytes()
-                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-        }) {
+        if status
+            .attempt_id
+            .as_deref()
+            .is_some_and(|id| !valid_attempt_id(id))
+        {
             return None;
         }
         matches!(
@@ -166,6 +180,21 @@ impl Paths {
             (None, Some(installed)) => installed.status(),
             (None, None) => Status::default(),
         }
+    }
+}
+
+fn valid_attempt_id(id: &str) -> bool {
+    id.len() == 32
+        && id
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+pub fn install_method() -> &'static str {
+    if apt::installed() {
+        "apt"
+    } else {
+        "manual"
     }
 }
 
@@ -225,7 +254,7 @@ struct Status {
 pub fn status() -> serde_json::Value {
     let paths = Paths::system();
     let owner = effective_uid();
-    let supported = can_stage(owner) && paths.staging_lock(owner).is_ok();
+    let supported = can_stage(owner, &paths) && paths.staging_lock(owner).is_ok();
     paths.status(owner).host_view(supported)
 }
 
@@ -241,8 +270,10 @@ impl Status {
     }
 }
 
-fn can_stage(owner: u32) -> bool {
-    owner != 0 && update::can_check()
+fn can_stage(owner: u32, paths: &Paths) -> bool {
+    owner != 0
+        && update::can_check()
+        && (paths.installed != Path::new(apt::BINARY) || apt::watching())
 }
 
 fn effective_uid() -> u32 {
@@ -359,7 +390,7 @@ impl Stage {
 
     fn system() -> std::result::Result<Self, QueueError> {
         let paths = Paths::system();
-        if !can_stage(effective_uid()) {
+        if !can_stage(effective_uid(), &paths) {
             return Err(QueueError::Unavailable);
         }
         Self::acquire(paths, now_seconds())
@@ -388,6 +419,10 @@ impl Stage {
             let version = release.version();
             status.version = Some(version.clone());
             require_expected(expected, &version)?;
+            if self.paths.installed == Path::new(apt::BINARY) {
+                apt::stage(&self.paths, &release, &mut status)?;
+                return Ok(version);
+            }
             status.state = Phase::Downloading;
             save_stage_status(&status_path, &status)?;
             let (binary, signature) = download(&release)?;
@@ -423,7 +458,11 @@ impl Stage {
 }
 
 fn publish_request(paths: &Paths) -> Result<()> {
-    storage::write_atomic(&paths.marker(), b"")?;
+    publish_request_bytes(paths, b"")
+}
+
+fn publish_request_bytes(paths: &Paths, request: &[u8]) -> Result<()> {
+    storage::write_atomic(&paths.marker(), request)?;
     sync_dir(&paths.staged()).map_err(|error| format!("could not sync staged request: {error}"))
 }
 
@@ -505,6 +544,10 @@ struct Service<S, V> {
     health_window: Duration,
     lock_wait: Duration,
 }
+
+type Systemctl<'a> = Box<dyn Fn(&[&str]) -> Result<String> + 'a>;
+type VersionProbe<'a> = Box<dyn Fn(&Path) -> Result<String> + 'a>;
+type ConfiguredService<'a> = Service<Systemctl<'a>, VersionProbe<'a>>;
 
 impl<S, V> Service<S, V>
 where
@@ -697,12 +740,19 @@ fn rename_noreplace(source: &Path, dest: &Path) -> io::Result<()> {
     }
 }
 
-fn retire_request(paths: &Paths, staged_owner: u32) -> io::Result<()> {
+fn retire_request(
+    paths: &Paths,
+    staged_owner: u32,
+    valid: impl FnOnce(&Path, u32) -> bool,
+) -> io::Result<()> {
     let claimed = paths.update.join(CLAIMED_REQUEST);
-    match read_file(&claimed, 0, staged_owner) {
-        Ok(_) => return remove_if_present(&claimed),
+    if valid(&claimed, staged_owner) {
+        return remove_if_present(&claimed);
+    }
+    match claimed.symlink_metadata() {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(_) => {}
+        Err(error) => return Err(error),
+        Ok(_) => {}
     }
     let quarantine = paths.update.join(QUARANTINE);
     match fs::DirBuilder::new().mode(0o700).create(&quarantine) {
@@ -752,7 +802,20 @@ fn finish(paths: &Paths, staged_owner: u32, phase: InstallPhase) -> Result<()> {
         .and_then(|()| remove_if_present(&paths.candidate()))
         .and_then(|()| remove_if_present(&paths.backup()))
         .and_then(|()| sync_dir(paths.bin_dir()))
-        .and_then(|()| retire_request(paths, staged_owner))
+        .and_then(|()| {
+            complete_transaction(paths, staged_owner, |path, owner| {
+                read_file(path, 0, owner).is_ok()
+            })
+        })
+        .map_err(|error| format!("could not finish installer cleanup: {error}"))
+}
+
+fn complete_transaction(
+    paths: &Paths,
+    staged_owner: u32,
+    valid: impl FnOnce(&Path, u32) -> bool,
+) -> io::Result<()> {
+    retire_request(paths, staged_owner, valid)
         .and_then(|()| sync_dir(&paths.update))
         .and_then(|()| {
             fs::rename(
@@ -761,7 +824,6 @@ fn finish(paths: &Paths, staged_owner: u32, phase: InstallPhase) -> Result<()> {
             )
         })
         .and_then(|()| sync_dir(&paths.update))
-        .map_err(|error| format!("could not finish installer cleanup: {error}"))
 }
 
 impl<S, V> Service<S, V>
@@ -831,19 +893,7 @@ where
     }
 }
 
-fn install<S, V>(
-    paths: &Paths,
-    staged_owner: u32,
-    installed_version: &str,
-    service: &Service<S, V>,
-    verify_helper: impl FnOnce() -> Result<()>,
-    checkpoint: impl Fn(Checkpoint),
-) -> Result<()>
-where
-    S: Fn(&[&str]) -> Result<String>,
-    V: Fn(&Path) -> Result<String>,
-{
-    let staging_lock = paths.update_dir()?;
+fn installer_lock(paths: &Paths) -> Result<File> {
     let run = OpenOptions::new()
         .read(true)
         .write(true)
@@ -865,6 +915,23 @@ where
         .map_err(|error| format!("could not open installer lock: {error}"))?;
     run.try_lock()
         .map_err(|_| "an agent installer is already running")?;
+    Ok(run)
+}
+
+fn install<S, V>(
+    paths: &Paths,
+    staged_owner: u32,
+    installed_version: &str,
+    service: &Service<S, V>,
+    verify_helper: impl FnOnce() -> Result<()>,
+    checkpoint: impl Fn(Checkpoint),
+) -> Result<()>
+where
+    S: Fn(&[&str]) -> Result<String>,
+    V: Fn(&Path) -> Result<String>,
+{
+    let staging_lock = paths.update_dir()?;
+    let _run = installer_lock(paths)?;
     verify_helper()?;
 
     if let Some(transaction) = paths.transaction(PENDING)? {
@@ -963,28 +1030,44 @@ fn verify_staged(
     installed: &str,
     status_version: &mut Option<String>,
 ) -> Result<(String, Vec<u8>)> {
-    let staged = paths.staged();
-    let read = |name: &str, limit| {
-        read_file(&staged.join(name), limit, owner)
-            .map_err(|error| format!("could not read staged {name}: {error}"))
-    };
-    let text = |name, limit| {
-        String::from_utf8(read(name, limit)?).map_err(|_| format!("staged {name} is not UTF-8"))
-    };
-    let release = AgentRelease::from_staged(
-        installed,
-        text(update::MANIFEST_NAME, update::MAX_MANIFEST)?,
-        text(update::MANIFEST_SIGNATURE_NAME, update::MAX_SIGNATURE)?,
-    )?;
+    let release = staged_release(paths, owner, installed)?;
     let version = release.version();
     *status_version = Some(version.clone());
     let asset = update::agent_asset_name()?;
-    let binary = read(asset, update::MAX_AGENT_BINARY)?;
-    let signature = text(&format!("{asset}.minisig"), update::MAX_SIGNATURE)?;
+    let binary = staged_file(paths, owner, asset, update::MAX_AGENT_BINARY)?;
+    let signature = staged_text(
+        paths,
+        owner,
+        &format!("{asset}.minisig"),
+        update::MAX_SIGNATURE,
+    )?;
     // Install only this verified in-memory snapshot. Never copy by path after
     // verification, because the unprivileged account can replace staged files.
     release.verify_binary(&binary, &signature)?;
     Ok((version, binary))
+}
+
+fn staged_file(paths: &Paths, owner: u32, name: &str, limit: usize) -> Result<Vec<u8>> {
+    read_file(&paths.staged().join(name), limit, owner)
+        .map_err(|error| format!("could not read staged {name}: {error}"))
+}
+
+fn staged_text(paths: &Paths, owner: u32, name: &str, limit: usize) -> Result<String> {
+    String::from_utf8(staged_file(paths, owner, name, limit)?)
+        .map_err(|_| format!("staged {name} is not UTF-8"))
+}
+
+fn staged_release(paths: &Paths, owner: u32, installed: &str) -> Result<AgentRelease> {
+    Ok(AgentRelease::from_staged(
+        installed,
+        staged_text(paths, owner, update::MANIFEST_NAME, update::MAX_MANIFEST)?,
+        staged_text(
+            paths,
+            owner,
+            update::MANIFEST_SIGNATURE_NAME,
+            update::MAX_SIGNATURE,
+        )?,
+    )?)
 }
 
 fn command_output(command: &mut Command) -> Result<String> {
@@ -1052,21 +1135,18 @@ fn verify_running_helper(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
-pub fn install_staged() -> Result<()> {
-    if effective_uid() != 0 {
-        return Err("install-staged requires root".into());
-    }
-    let paths = Paths::system();
-    let (uid, gid) = gamelink_account()?;
-    let service = Service {
-        systemctl: |args: &[&str]| {
-            command_output(
-                Command::new("/usr/bin/systemctl")
-                    .arg("--no-ask-password")
-                    .args(args),
-            )
-        },
-        version: |path: &Path| {
+fn systemctl(args: &[&str]) -> Result<String> {
+    command_output(
+        Command::new("/usr/bin/systemctl")
+            .arg("--no-ask-password")
+            .args(args),
+    )
+}
+
+fn system_service(uid: u32, gid: u32) -> ConfiguredService<'static> {
+    Service {
+        systemctl: Box::new(systemctl),
+        version: Box::new(move |path: &Path| {
             // CommandExt::uid also clears supplementary groups.
             command_output(
                 Command::new("/usr/bin/timeout")
@@ -1076,19 +1156,29 @@ pub fn install_staged() -> Result<()> {
                     .gid(gid)
                     .uid(uid),
             )
-        },
+        }),
         health_window: HEALTH_WINDOW,
         lock_wait: LOCK_WAIT,
-    };
+    }
+}
+
+pub fn install_staged() -> Result<()> {
+    if effective_uid() != 0 || apt::installed() {
+        return Err("install-staged requires the manual root update helper".into());
+    }
+    let paths = Paths::manual();
+    let (uid, gid) = gamelink_account()?;
     install(
         &paths,
         uid,
         VERSION,
-        &service,
+        &system_service(uid, gid),
         || verify_running_helper(&paths),
         |_| {},
     )
 }
+
+pub use apt::install_apt;
 
 #[cfg(test)]
 mod tests;

@@ -117,10 +117,8 @@ gl init
 ```
 
 The package provides `/usr/bin/gamelink-agent`, the system account and state
-directory, and the systemd unit. Configure the agent in step 4 before
-enabling the service. Leave the signed binary-swap helper and its path unit
-disabled on apt installations. Part 2 will make desktop **Update all** use
-apt for these installations.
+directory, and the systemd units. Configure the agent in step 4 before
+enabling the main service.
 
 During an apt upgrade, the package stops a running service before replacing
 the binary. It starts the service again only if it was running and enabled
@@ -129,6 +127,41 @@ policy permits starting it.
 
 **Done when** `gl status --json` reports `"running": false` and no games.
 Continue to step 4a or 4b.
+
+### Enable desktop updates with apt
+
+Desktop-triggered upgrades are off by default. You can update explicitly
+with `sudo apt update && sudo apt upgrade` at any time. To opt in to **Update all**,
+first use apt to install a GameLink package that includes
+`gamelink-agent-apt-update.path`. The GameLink service must be running and
+enabled, and the apt source and keyring must be configured as above.
+
+Run these commands once on the server:
+
+```sh
+apt_state=/var/lib/gamelink-agent-apt-update
+sudo mkdir -m 0750 "$apt_state" &&
+  sudo chgrp gamelink "$apt_state" &&
+  sudo install -d -o gamelink -g gamelink -m 0700 "$apt_state/staged" &&
+  sudo install -m 0644 /dev/null "$apt_state/swap.lock" &&
+  sudo install -m 0755 /usr/bin/gamelink-agent "$apt_state/installer" &&
+  sudo systemctl enable --now gamelink-agent-apt-update.path
+```
+
+If the directory already exists, inspect it before continuing. The root-owned
+installer copy can restore the prior package if the new binary cannot run.
+To stop accepting new requests, run
+`sudo systemctl disable --now gamelink-agent-apt-update.path`.
+If an upgrade is already running, let it finish before removing the package.
+
+Click **Update all** on a linked desktop or run
+`gl update stage --version <expected>` on the server to request an upgrade.
+The exact release must be published on both GitHub and the apt source, and the
+source must still contain your installed version for rollback. The helper
+installs the package, watches the service for ten seconds, and restores the
+prior package if the upgrade fails. Game sessions disconnect during a restart.
+The desktop installs its update after the agent reports success for that
+request. The path unit only reacts to a staged request.
 
 ### Migrate a manual install to apt
 
@@ -322,8 +355,10 @@ Give the owner:
   running GameLink service before replacing the binary and starts it after
   configuration. If the repository goes 60 days without re-signing,
   `apt update` reports expired metadata until the publisher re-signs it.
-- **Remove an apt install**. Run `sudo systemctl disable --now gamelink-agent`,
-  then `sudo apt remove gamelink-agent` or `sudo apt purge gamelink-agent`.
+- **Remove an apt install**. If you enabled desktop updates, disable the
+  watcher first and let any running upgrade finish. Run
+  `sudo systemctl disable --now gamelink-agent`, then
+  `sudo apt remove gamelink-agent` or `sudo apt purge gamelink-agent`.
   Both commands keep `/var/lib/gamelink-agent` for a later reinstall.
 - **Manual replacement:** verify the new binary (step 2). If the update path
   unit is enabled, stop it and wait for any running update to finish. Run

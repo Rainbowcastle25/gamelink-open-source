@@ -1,0 +1,10 @@
+[Unit]
+Description=Install a requested GameLink apt update
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/var/lib/gamelink-agent-apt-update/installer update install-apt
+# Let dpkg finish an installation or rollback.
+TimeoutStartSec=infinity
+UMask=0077

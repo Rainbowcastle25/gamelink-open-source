@@ -432,7 +432,7 @@ impl Host {
         }).collect();
         Ok(json!({
             "games":games,"refreshedAt":self.checked_at,
-            "agentVersion":VERSION,"update":self_update::status()
+            "agentVersion":VERSION,"installMethod":self_update::install_method(),"update":self_update::status()
         }))
     }
 

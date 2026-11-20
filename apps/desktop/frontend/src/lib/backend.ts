@@ -40,6 +40,7 @@ export interface Backend {
   installUpdate(version: string, onProgress: (progress: UpdateProgress) => void, offerId?: string): Promise<void>;
   relaunch(): Promise<void>;
   openReleaseNotes(): Promise<void>;
+  openAptUpdateGuide(): Promise<void>;
   activity(limit: number): Promise<ActivityEvent[]>;
   clearActivity(): Promise<void>;
 
@@ -135,6 +136,7 @@ export const backend: Backend = {
   installUpdate: lazy((b) => b.installUpdate.bind(b)),
   relaunch: lazy((b) => b.relaunch.bind(b)),
   openReleaseNotes: lazy((b) => b.openReleaseNotes.bind(b)),
+  openAptUpdateGuide: lazy((b) => b.openAptUpdateGuide.bind(b)),
   activity: lazy((b) => b.activity.bind(b)),
   clearActivity: lazy((b) => b.clearActivity.bind(b)),
   join: lazy((b) => b.join.bind(b)),

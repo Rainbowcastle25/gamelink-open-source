@@ -213,6 +213,8 @@ def validate_repository(version, assets, work, minisign, manifest_key, pins, env
         identity, "ed25519", "sign", "1d", env=env)
     test_root = work / "apt-test"
     test_root.mkdir()
+    for name in (MANIFEST, f"{MANIFEST}.minisig"):
+        shutil.copyfile(assets / name, test_root / name)
     public_key = test_root / "apt.asc"
     run(*gpg, "--armor", "--output", public_key, "--export", identity, env=env)
     public_key.with_suffix(".fingerprint").write_text(public_fingerprint(gpg, public_key) + "\n")
