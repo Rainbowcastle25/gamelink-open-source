@@ -71,8 +71,8 @@ jobs:
       - name: Build and verify all artifacts with throwaway keys
         if: github.event_name == 'pull_request'
         run: |
-          sudo apt-get install -y squashfs-tools 7zip
-          python3 -B scripts/release.py --validate
+          sudo apt-get install -y squashfs-tools 7zip apt-utils
+          python3 -B scripts/release.py --validate --test-apt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name == 'pull_request'
         with:

@@ -8,8 +8,11 @@ import shutil
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
+import apt_repo
 import release
+from release_deb import check_deb_pins
 from release_pins import check_binary_pins
 from release_tools import SIGNERS
 
@@ -59,7 +62,7 @@ class ReleaseGates(unittest.TestCase):
         run(cls.checkout, "git", "tag", "v1.0.0", cls.base)
         scripts = cls.checkout / "scripts"
         scripts.mkdir()
-        for name in ("release.py", "release_pins.py", "release_tools.py"):
+        for name in ("release.py", "release_deb.py", "release_pins.py", "release_tools.py"):
             shutil.copyfile(release.ROOT / "scripts" / name, scripts / name)
 
     def source_check(self, tag, commit):
@@ -97,6 +100,88 @@ class ReleaseGates(unittest.TestCase):
         for binary in (extra, f"{manifest} {extra}"):
             with self.subTest(binary=binary), self.assertRaisesRegex(ValueError, "embedded manifest pins"):
                 check_binary_pins(binary.encode(), "agent", pins)
+
+    @unittest.skipUnless(shutil.which("dpkg-deb"), "requires dpkg-deb")
+    def test_deb_pins_and_binary_must_match_raw_asset(self):
+        layout = self.work / "deb-fixture"
+        (layout / "DEBIAN").mkdir(parents=True)
+        binary = layout / "usr/bin/gamelink-agent"
+        binary.parent.mkdir(parents=True)
+        (layout / "DEBIAN/control").write_text(
+            "Package: gamelink-agent\nVersion: 1.0.0\nArchitecture: amd64\n"
+            "Maintainer: Test <release-gates@example.invalid>\nDescription: gate fixture\n"
+        )
+        elf = b"\x7fELF\x02\x01" + bytes(12) + b"\x3e\x00"
+        expected, extra = fixture_pin(b"A").encode(), fixture_pin(b"B").encode()
+        raw = self.work / "raw-agent"
+        raw.write_bytes(elf + expected)
+        for suffix, payload, error in (
+            ("correct", expected, None),
+            ("wrong", extra, "embedded manifest pins"),
+            ("extra", expected + b" " + extra, "embedded manifest pins"),
+            ("different", expected + b" modified", "packaged agent differs"),
+        ):
+            with self.subTest(package=suffix):
+                package = self.work / f"{suffix}.deb"
+                binary.write_bytes(elf + payload)
+                run(self.work, "dpkg-deb", "--build", "--root-owner-group", layout, package)
+                args = (package, raw, "1.0.0", "amd64", ([expected.decode()], "", ""), os.environ)
+                if error is None:
+                    check_deb_pins(*args)
+                else:
+                    with self.assertRaisesRegex(ValueError, error):
+                        check_deb_pins(*args)
+
+    @unittest.skipUnless(all(shutil.which(tool) for tool in ("gpg", "gpgconf", "gpgv")), "requires GnuPG")
+    def test_apt_signing_fails_closed(self):
+        key_work = self.work / "apt-test-keys"
+        key_work.mkdir()
+        home = key_work / "gnupg"
+        home.mkdir(mode=0o700)
+        gpg = apt_repo.gpg_home(home)
+        public = key_work / "apt.asc"
+        keys = {}
+        for identity in ("One", "Two"):
+            user = f"{identity} <{identity.lower()}@example.invalid>"
+            run(key_work, *gpg, "--pinentry-mode", "loopback", "--passphrase", "",
+                "--quick-generate-key", user, "ed25519", "sign", "1d")
+            if identity == "One":
+                run(key_work, *gpg, "--armor", "--output", public, "--export", user)
+            keys[identity] = run(key_work, *gpg, "--armor", "--export-secret-keys", user).stdout
+        fingerprint = apt_repo.public_fingerprint(gpg, public)
+        run(key_work, "gpgconf", "--homedir", home, "--kill", "gpg-agent")
+
+        repo = self.work / "apt-unsigned-fixture"
+        release_file = repo / "dists/stable/Release"
+        release_file.parent.mkdir(parents=True)
+        release_file.write_text("Suite: stable\n")
+        shutil.copyfile(public, repo / "apt.asc")
+        placeholder = key_work / "placeholder.asc"
+        placeholder.write_text("Placeholder for the apt public key.")
+        for case, pin, expected, key, exception in (
+            ("missing-pin", key_work / "missing.asc", fingerprint, keys["One"], ValueError),
+            ("placeholder-pin", placeholder, fingerprint, keys["One"], ValueError),
+            ("wrong-fingerprint", public, "A" * 40, keys["One"], ValueError),
+            ("missing-secret", public, fingerprint, "", ValueError),
+            ("wrong-secret", public, fingerprint, keys["Two"], subprocess.CalledProcessError),
+            ("success", public, fingerprint, keys["One"], None),
+        ):
+            with self.subTest(case=case):
+                work = self.work / f"apt-sign-{case}"
+                work.mkdir()
+                public.with_suffix(".fingerprint").write_text(expected + "\n")
+                with patch.object(apt_repo, "run", wraps=apt_repo.run) as signing_run:
+                    if exception is None:
+                        apt_repo.sign_repository(repo, work, pin, key)
+                    else:
+                        with self.assertRaises(exception):
+                            apt_repo.sign_repository(repo, work, pin, key)
+                last_command = signing_run.call_args.args
+                self.assertEqual(last_command[:2], ("gpgconf", "--homedir"))
+                self.assertEqual(last_command[3:], ("--kill", "gpg-agent"))
+                self.assertFalse(Path(last_command[2]).exists())
+                self.assertEqual(release_file.with_name("InRelease").exists(), exception is None)
+                self.assertEqual(release_file.with_suffix(".gpg").exists(), exception is None)
 
     def test_wrong_desktop_updater_pin_is_rejected(self):
         manifest = fixture_pin(b"A")

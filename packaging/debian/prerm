@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+    unit=gamelink-agent.service
+    # A policy denial can return success without stopping the service.
+    if ! deb-systemd-invoke stop "$unit" ||
+        ! stopped=$(systemctl show --property=ActiveState --value "$unit") ||
+        { [ "$stopped" != inactive ] && [ "$stopped" != failed ]; }; then
+        echo "GameLink could not stop the service before removing the package. Check policy-rc.d and systemctl status $unit." >&2
+        exit 1
+    fi
+fi

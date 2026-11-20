@@ -23,6 +23,13 @@ SIGNERS = {
     ),
 }
 
+NFPM = (
+    "https://github.com/goreleaser/nfpm/releases/download/v2.43.4/nfpm_2.43.4_Linux_x86_64.tar.gz",
+    "cafb544650cb0305d1b164fc0ab261eb77a81af324e18011282d326b326d20fb",
+    "nfpm",
+    "f098270385f421fec4ce79c9b481241b13686b999ddce965a517870dcb58e02e",
+)
+
 # Cache names are part of the Tauri 2.12.4 bundler's interface. The fixed plugin
 # AppImage includes appimagetool and mksquashfs. Supply its output runtime too.
 APPIMAGE_TOOLS = (
@@ -69,17 +76,25 @@ def download(url, digest, path, env):
     require_digest(path, digest)
 
 
+def install_tool(name, pin, tools, work, env):
+    url, archive_digest, member, binary_digest = pin
+    archive_path = work / Path(url).name
+    download(url, archive_digest, archive_path, env)
+    path = tools / name
+    with tarfile.open(archive_path) as archive:
+        with archive.extractfile(member) as source, path.open("xb") as dest:
+            shutil.copyfileobj(source, dest)
+    require_digest(path, binary_digest)
+    path.chmod(0o700)
+    return path
+
+
 def install_signers(tools, work, env):
     tools.mkdir(parents=True, exist_ok=True)
     if any(tools.iterdir()):
         raise ValueError(f"release signing tool directory must be empty: {tools}")
-    for name, (url, archive_digest, member, _) in SIGNERS.items():
-        archive_path = work / Path(url).name
-        download(url, archive_digest, archive_path, env)
-        with tarfile.open(archive_path) as archive:
-            with archive.extractfile(member) as source, (tools / name).open("xb") as dest:
-                shutil.copyfileobj(source, dest)
-    verify_signers(tools)
+    for name, pin in SIGNERS.items():
+        install_tool(name, pin, tools, work, env)
 
 
 def verify_signers(tools):

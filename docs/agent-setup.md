@@ -24,9 +24,9 @@ Tailcat tunnel. Every rule below protects that property.
    Servers, Allocations and Eggs, and None for everything else. If the owner
    offers an admin or writable key, ask for a read-only one instead.
 4. **Stay inside the agent's footprint**, which is all you install:
-   `/usr/local/bin/gamelink-agent`, the `gamelink` system user,
-   `/var/lib/gamelink-agent/`, the `gamelink-agent` systemd unit, and its
-   optional signed-update path and service units.
+   the `gamelink-agent` binary and systemd unit, the `gamelink` system user,
+   and `/var/lib/gamelink-agent/`. Apt installs also add a GameLink source and
+   keyring. Manual installs can add the signed-update path and service units.
    GameLink needs no changes to firewalls, router ports, Docker, Wings, the
    Panel or game containers. Ask the owner before touching anything outside
    the footprint, such as a VPN policy or a hypervisor.
@@ -38,7 +38,8 @@ Tailcat tunnel. Every rule below protects that property.
 Run agent commands as the `gamelink` user:
 
 ```sh
-gl() { sudo -u gamelink env GAMELINK_AGENT_DIR=/var/lib/gamelink-agent/config /usr/local/bin/gamelink-agent "$@"; }
+agent_binary=/usr/bin/gamelink-agent  # Use /usr/local/bin/gamelink-agent for a manual install.
+gl() { sudo -u gamelink env GAMELINK_AGENT_DIR=/var/lib/gamelink-agent/config "$agent_binary" "$@"; }
 ```
 
 Add `--json` to `status`, `games list`, `devices list`, `host refresh`,
@@ -74,7 +75,96 @@ Reaching the server:
 - **Panel on local DNS only**: the owner must create API keys from a device
   on that network.
 
-## Step 2: Get the agent binary
+## Install with apt (recommended)
+
+Use this path for a new Debian or Ubuntu systemd installation on amd64 or
+arm64 once the stable apt repository is live. Use the manual steps below for
+other distributions or while the apt repository is unavailable.
+
+With `curl` and `gpg` installed, verify the downloaded key against the
+fingerprint published here and in [release/keys/apt.fingerprint](../release/keys/apt.fingerprint)
+on GitHub. Then install the key and restrict this source to its keyring.
+
+```sh
+(
+  set -eu
+  expected_fingerprint=REPLACE_WITH_GAMELINK_APT_KEY_FINGERPRINT
+  apt_key="$(mktemp)"
+  trap 'unlink "$apt_key"' EXIT
+  curl -fsSL https://rainbowcastle25.github.io/gamelink-open-source/apt/apt.asc -o "$apt_key"
+  key_records="$(gpg --batch --with-colons --show-keys "$apt_key")"
+  if ! printf '%s\n' "$key_records" | awk -F: -v expected="$expected_fingerprint" '
+    $1 == "pub" { keys++ }
+    $1 == "fpr" && !fingerprint { fingerprint = $10 }
+    END { exit !(keys == 1 && length(fingerprint) == 40 && fingerprint == expected) }
+  '; then
+    echo "GameLink apt signing key fingerprint mismatch. Check the fingerprint on GitHub." >&2
+    exit 1
+  fi
+  sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/gamelink.gpg "$apt_key"
+  printf '%s\n' 'deb [signed-by=/usr/share/keyrings/gamelink.gpg] https://rainbowcastle25.github.io/gamelink-open-source/apt stable main' \
+    | sudo tee /etc/apt/sources.list.d/gamelink.list
+  sudo apt update
+)
+```
+
+For a new setup, install and initialize the agent. For an existing manual
+installation, follow [the migration steps](#migrate-a-manual-install-to-apt).
+
+```sh
+sudo apt install gamelink-agent
+gl init
+```
+
+The package provides `/usr/bin/gamelink-agent`, the system account and state
+directory, and the systemd unit. Configure the agent in step 4 before
+enabling the service. Leave the signed binary-swap helper and its path unit
+disabled on apt installations. Part 2 will make desktop **Update all** use
+apt for these installations.
+
+During an apt upgrade, the package stops a running service before replacing
+the binary. It starts the service again only if it was running and enabled
+when the upgrade began, its enablement is still the same, and local service
+policy permits starting it.
+
+**Done when** `gl status --json` reports `"running": false` and no games.
+Continue to step 4a or 4b.
+
+### Migrate a manual install to apt
+
+Arrange downtime with the owner. Save any custom service options from
+`sudo systemctl cat gamelink-agent`. If the signed self-update helper is
+installed, run `sudo systemctl disable --now gamelink-agent-update.path`.
+Wait for any running `gamelink-agent-update.service` job to finish. Use
+`sudo systemctl list-jobs` to check. Let any agent CLI commands finish, then
+run `sudo systemctl disable --now gamelink-agent`.
+
+Unlink the manual files while keeping `/var/lib/gamelink-agent` and the
+`gamelink` account intact:
+
+```sh
+(
+  set -eu
+  for path in /etc/systemd/system/gamelink-agent.service \
+    /etc/systemd/system/gamelink-agent-update.path /etc/systemd/system/gamelink-agent-update.service \
+    /usr/local/bin/gamelink-agent /usr/local/bin/.gamelink-agent-update-helper; do
+    if [ -e "$path" ] || [ -L "$path" ]; then
+      sudo unlink "$path"
+    fi
+  done
+  sudo systemctl daemon-reload
+  sudo apt install gamelink-agent
+)
+```
+
+The package reuses the existing configuration and state. Apply any saved
+service options as a systemd override with `sudo systemctl edit gamelink-agent`,
+using `/usr/bin/gamelink-agent` in any custom `ExecStart`. Enable and start
+the packaged service with `sudo systemctl enable --now gamelink-agent`.
+Set `agent_binary=/usr/bin/gamelink-agent` and verify that `gl status --json`
+shows the service running and the existing games.
+
+## Step 2: Get the agent binary for a manual install
 
 Map the architecture: `x86_64` → `amd64`, `aarch64` → `arm64`. Use the first
 source that works:
@@ -92,7 +182,7 @@ Copy `gamelink-agent-linux-<arch>` to the server (for example with `scp`).
 **Done when** `sha256sum` of the file on the server matches its line in
 `SHA256SUMS`, or the hash of your own build.
 
-## Step 3: Install
+## Step 3: Install the manual binary
 
 ```sh
 sudo install -m 0755 gamelink-agent-linux-<arch> /usr/local/bin/gamelink-agent
@@ -116,10 +206,10 @@ Types are `minecraft-java`, `minecraft-bedrock`, `factorio` and `custom`;
 on this machine's loopback (Docker, another host), add `--dest ip:port`.
 Each game forwards one port.
 
-Install the service from
+Apt provides the service unit. For a manual install, copy
 [`config/examples/gamelink-agent.service`](../config/examples/gamelink-agent.service)
-without changing its hardening (`AF_NETLINK` must stay in
-`RestrictAddressFamilies`), then
+to `/etc/systemd/system/` and preserve its hardening (`AF_NETLINK` must stay in
+`RestrictAddressFamilies`). Run
 `sudo systemctl daemon-reload && sudo systemctl enable --now gamelink-agent`.
 
 **Done when** `gl status --json` reports `"running": true` and lists every
@@ -160,9 +250,17 @@ game the owner asked for. Go to step 5.
    application key as `panel-client.token`, and add
    `"clientTokenFile": "panel-client.token"` to `host.json`. Without it,
    status shows `unknown`; tunnels work regardless.
-5. **Service.** Install the unit from step 4a, with `ExecStart` set to
-   `/usr/local/bin/gamelink-agent serve --host-config /var/lib/gamelink-agent/host.json`.
-   Enable and start it.
+5. **Service.** For apt installations, run
+   `sudo systemctl edit gamelink-agent` and enter the override below. On a
+   manual install, copy the unit from step 4a and set its existing
+   `ExecStart` to the same command with `/usr/local/bin/gamelink-agent`.
+   Run `sudo systemctl daemon-reload && sudo systemctl enable --now gamelink-agent`.
+
+   ```ini
+   [Service]
+   ExecStart=
+   ExecStart=/usr/bin/gamelink-agent serve --host-config /var/lib/gamelink-agent/host.json
+   ```
 6. **Register.** Run
    `gl host refresh --config /var/lib/gamelink-agent/host.json --json`.
    Refresh is manual by design: rerun it whenever the owner adds a server.
@@ -220,6 +318,13 @@ Give the owner:
 
 ## Updating and removing
 
+- **Apt upgrade**. Run `sudo apt update && sudo apt upgrade`. Apt stops a
+  running GameLink service before replacing the binary and starts it after
+  configuration. If the repository goes 60 days without re-signing,
+  `apt update` reports expired metadata until the publisher re-signs it.
+- **Remove an apt install**. Run `sudo systemctl disable --now gamelink-agent`,
+  then `sudo apt remove gamelink-agent` or `sudo apt purge gamelink-agent`.
+  Both commands keep `/var/lib/gamelink-agent` for a later reinstall.
 - **Manual replacement:** verify the new binary (step 2). If the update path
   unit is enabled, stop it and wait for any running update to finish. Run
   `sudo systemctl stop gamelink-agent`, install the binary over
@@ -231,18 +336,20 @@ Give the owner:
   Let any running agent CLI commands finish before the swap and wait until the
   service is back up before running another.
   Approvals, invitations and game identities survive.
-- **Remove:** if installed, disable `gamelink-agent-update.path` and let any
+- **Remove a manual install:** if installed, disable `gamelink-agent-update.path` and let any
   running update finish. Then run `sudo systemctl disable --now gamelink-agent`
   and remove the units, binary and `/usr/local/bin/.gamelink-agent-update-helper`.
-  Deleting `/var/lib/gamelink-agent` destroys
-  every game identity and invitation, so ask the owner first.
+
+Deleting `/var/lib/gamelink-agent` destroys every game identity and
+invitation. After removing the agent, ask the owner to approve deletion, then
+run `sudo find /var/lib/gamelink-agent -xdev -depth -delete`.
 
 ### Signed agent updates
 
-To opt in, first install a release build with embedded Minisign pins that
-supports `update stage`. Use the standard binary path, system account and unit
-name from this guide. Wait for other agent CLI commands to finish. Run this
-one-time setup on the server.
+For manual installations, first install a release build with embedded
+Minisign pins that supports `update stage`. Use `/usr/local/bin/gamelink-agent`
+and the system account and unit name from this guide. Wait for other agent
+CLI commands to finish, then run this one-time setup on the server.
 
 ```sh
 sudo chown -h root:gamelink /var/lib/gamelink-agent &&
