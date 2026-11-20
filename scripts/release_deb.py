@@ -64,7 +64,7 @@ def build_deb(nfpm, binary, licenses, work, version, arch, package, env):
         "description": "GameLink server agent for private game tunnels",
         "homepage": "https://github.com/Rainbowcastle25/gamelink-open-source",
         "license": "GPL-3.0",
-        "depends": ["init-system-helpers", "passwd"],
+        "depends": ["gpgv", "init-system-helpers", "passwd"],
         "contents": [
             {"src": str(src), "dst": dst, "file_info": {"mode": mode}}
             for src, dst, mode in contents

@@ -74,7 +74,6 @@ fn rejects_invalid_and_mismatched_requests_before_running_apt() {
         request(&paths, version, id, status_id);
         let apt = Apt {
             work: &work,
-            owner_log: &work.join("owner.log"),
             command: |program: &str, _: &[&str], _: &Path| {
                 assert_eq!(program, "dpkg-query");
                 Ok(String::new())
@@ -122,7 +121,6 @@ fn apt_scopes_downloads_and_installs_only_gamelink_then_rolls_back_on_failed_hea
             .join("\n");
         let apt = Apt {
             work: &work,
-            owner_log: &work.join("owner.log"),
             command: |program: &str, args: &[&str], dir: &Path| match program {
                 "apt-get" | "apt-cache" => {
                     assert!(args.windows(2).any(|pair| pair
@@ -193,25 +191,10 @@ fn apt_scopes_downloads_and_installs_only_gamelink_then_rolls_back_on_failed_hea
                 )),
                 "dpkg" if args == ["--print-architecture"] => Ok("amd64\n".into()),
                 "dpkg" => {
-                    assert_eq!(
-                        args[..4],
-                        [
-                            "--force-confold",
-                            "--no-triggers",
-                            "--log=dpkg-operation.log",
-                            "--install"
-                        ]
-                    );
-                    calls.borrow_mut().push(args[4].into());
-                    match args[4] {
+                    assert_eq!(args[..3], ["--force-confold", "--no-triggers", "--install"]);
+                    calls.borrow_mut().push(args[3].into());
+                    match args[3] {
                         "target.deb" => {
-                            fs::write(
-                                dir.join(OPERATION_LOG),
-                                format!(
-                                    "2026-11-19 00:00:00 upgrade {PACKAGE}:amd64 {OLD} {NEW}\n"
-                                ),
-                            )
-                            .unwrap();
                             installed.set(NEW);
                             running.set((!health_fails).then_some(NEW));
                         }
@@ -300,7 +283,6 @@ fn held_package_is_declined_before_fetch_or_install() {
     let locked = Cell::new(false);
     let apt = Apt {
         work: &work,
-        owner_log: &work.join("owner.log"),
         command: |program: &str, args: &[&str], _: &Path| {
             assert!(locked.get());
             assert_eq!(program, "dpkg-query");
@@ -335,105 +317,107 @@ fn held_package_is_declined_before_fetch_or_install() {
 }
 
 #[test]
-fn interrupted_update_leaves_an_owner_installed_package_alone() {
-    for (record, running, phase, reason_fragment) in [
-        (
-            "gamelink-agent install ok installed 3.0.0",
-            Some("3.0.0"),
-            Phase::Failed,
-            Some("another package operation superseded"),
-        ),
-        (
-            "",
-            None,
-            Phase::Failed,
-            Some("another package operation superseded"),
-        ),
-        (
-            "gamelink-agent hold ok unpacked 2.0.0",
-            None,
-            Phase::Failed,
-            Some("another package operation superseded"),
-        ),
-        (
-            "gamelink-agent install ok installed 1.0.0",
-            None,
-            Phase::Failed,
-            Some("the previous GameLink package remains installed"),
-        ),
-        (
-            "gamelink-agent install ok installed 2.0.0",
-            Some(NEW),
-            Phase::Succeeded,
-            None,
-        ),
+fn interrupted_update_records_manual_repair_without_touching_packages_or_service() {
+    for phase in [
+        InstallPhase::Staged,
+        InstallPhase::Stopping,
+        InstallPhase::Swapped,
+        InstallPhase::HealthChecking,
+        InstallPhase::NeedsManualRepair,
     ] {
         let dir = tempfile::tempdir().unwrap();
         let paths = sandbox(dir.path());
         let work = paths.update.join(WORK);
+        let owner = effective_uid();
+        request(&paths, NEW, ID, ID);
+        if phase != InstallPhase::Staged {
+            claim_request(&paths, owner).unwrap();
+        }
         fs::create_dir(&work).unwrap();
-        let previous = Previous {
-            package: OLD.into(),
-            target: NEW.into(),
-            owner_log: None,
-            target_generation: Some(FileGeneration::read(&paths.installed).unwrap()),
-            binary: OLD.into(),
-            enabled: "enabled".into(),
-        };
-        fs::write(
-            work.join("previous.json"),
-            serde_json::to_vec(&previous).unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            work.join(OPERATION_LOG),
-            format!("2026-11-19 00:00:00 upgrade {PACKAGE}:amd64 {OLD} {NEW}\n"),
-        )
-        .unwrap();
+        fs::write(work.join("previous.deb"), PAYLOAD).unwrap();
+        let installed = fs::read(&paths.installed).unwrap();
+        let installer = paths.update.join("installer");
+        fs::write(&installer, b"saved helper").unwrap();
         Transaction {
-            phase: InstallPhase::Staged,
+            phase,
             attempt: 42,
             attempt_id: Some(ID.into()),
             updated_at: 0,
             version: Some(NEW.into()),
-            reason: None,
+            reason: (phase == InstallPhase::NeedsManualRepair)
+                .then(|| update::APT_MANUAL_REPAIR.into()),
         }
-        .save(&paths, InstallPhase::HealthChecking, &|_| {})
+        .save(&paths, phase, &|_| {})
         .unwrap();
 
-        let locked = Cell::new(false);
         let apt = Apt {
             work: &work,
-            owner_log: &work.join("owner.log"),
+            command: |_: &str, _: &[&str], _: &Path| panic!("unexpected package command"),
+        };
+        let service = Service {
+            systemctl: |_: &[&str]| panic!("unexpected service command"),
+            version: |_: &Path| panic!("unexpected agent command"),
+            health_window: Duration::ZERO,
+            lock_wait: Duration::ZERO,
+        };
+        run(
+            &paths,
+            owner,
+            &apt,
+            &service,
+            |_, _| panic!("unexpected verification"),
+            || Ok(File::open(dir.path()).unwrap()),
+            || panic!("unexpected source verification"),
+        )
+        .unwrap();
+
+        let record = paths.transaction(INSTALL_STATUS).unwrap().unwrap();
+        assert_eq!(record.phase, InstallPhase::NeedsManualRepair);
+        let status = paths.status(owner).host_view(true);
+        assert_eq!(status["attemptId"], ID);
+        assert_eq!(status["state"], "needs-manual-repair");
+        assert_eq!(status["reason"], update::APT_MANUAL_REPAIR);
+        assert!(!paths.update.join(PENDING).exists());
+        assert!(!paths.update.join(CLAIMED_REQUEST).exists());
+        assert!(!paths.marker().exists());
+        assert_eq!(fs::read(&paths.installed).unwrap(), installed);
+        assert_eq!(fs::read(installer).unwrap(), b"saved helper");
+        assert_eq!(fs::read(work.join("previous.deb")).unwrap(), PAYLOAD);
+    }
+}
+
+#[test]
+fn broken_package_declines_a_new_update_before_fetch_or_install() {
+    for state in ["half-installed", "half-configured", "unpacked"] {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = sandbox(dir.path());
+        let work = paths.update.join(WORK);
+        request(&paths, NEW, ID, ID);
+        let apt = Apt {
+            work: &work,
             command: |program: &str, _: &[&str], _: &Path| {
-                assert!(locked.get());
-                assert_eq!(program, "dpkg-query", "recovery must leave dpkg alone");
-                Ok(record.into())
+                assert_eq!(program, "dpkg-query");
+                Ok(format!("{PACKAGE} install ok {state} {OLD}"))
             },
         };
         let result = run(
             &paths,
             effective_uid(),
             &apt,
-            &test_service(&Cell::new(running)),
-            |_, _| panic!("recovery must not verify a new request"),
-            || {
-                locked.set(true);
-                Ok(File::open(dir.path()).unwrap())
-            },
-            || panic!("recovery must not touch the apt source"),
+            &test_service(&Cell::new(None)),
+            |_, _| panic!("unexpected verification"),
+            || Ok(File::open(dir.path()).unwrap()),
+            || panic!("unexpected source verification"),
         );
+        assert_eq!(result.unwrap_err(), update::APT_MANUAL_REPAIR);
         let status = paths.status(effective_uid());
-        if let Some(fragment) = reason_fragment {
-            let reason = result.unwrap_err();
-            assert!(reason.contains(fragment), "{record}: {reason}");
-            assert_eq!(status.reason.as_deref(), Some(reason.as_str()));
-        } else {
-            result.unwrap();
-            assert!(status.reason.is_none());
-        }
-        assert_eq!(status.state, phase);
+        assert_eq!(status.attempt_id.as_deref(), Some(ID));
+        assert_eq!(status.state, Phase::NeedsManualRepair);
+        assert_eq!(status.reason.as_deref(), Some(update::APT_MANUAL_REPAIR));
         assert!(!paths.update.join(PENDING).exists());
+        assert!(!paths.update.join(CLAIMED_REQUEST).exists());
+        assert!(!paths.marker().exists());
+        assert!(!work.exists());
     }
 }
 

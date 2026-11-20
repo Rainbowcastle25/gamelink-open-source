@@ -151,7 +151,7 @@ sudo mkdir -m 0750 "$apt_state" &&
 
 If the directory already exists, inspect it before continuing. Restarting the
 agent applies sandbox write access to the staging directory. The root-owned
-installer copy can restore the prior package if the new binary cannot run.
+copy lets the helper run independently of the agent binary dpkg replaces.
 To stop accepting new requests, run
 `sudo systemctl disable --now gamelink-agent-apt-update.path`.
 If an upgrade is already running, let it finish before removing the package.
@@ -161,9 +161,16 @@ Click **Update all** on a linked desktop or run
 The exact release must be published on both GitHub and the apt source, and the
 source must still contain your installed version for rollback. The helper
 installs the package, watches the service for ten seconds, and restores the
-prior package if the upgrade fails. Game sessions disconnect during a restart.
+prior package if the health check fails during the same helper run. Game
+sessions disconnect during a restart.
 The desktop installs its update after the agent reports success for that
 request. The path unit only reacts to a staged request.
+
+After an interrupted apt upgrade, the helper records `needs-manual-repair`
+and clears the pending request. It leaves the package and service as they
+are. A half-installed, half-configured or unpacked GameLink package blocks
+new desktop updates until you
+[repair it on the server](#apt-update-needs-manual-repair).
 
 ### Migrate a manual install to apt
 
@@ -485,3 +492,17 @@ and service restarts. The host update endpoint returns HTTP 429 during cooldown.
   run the root helper manually to finish the recorded transaction.
   Use the manual stop-replace-start procedure above if the helper itself
   cannot run.
+
+### Apt update needs manual repair
+
+Run the repair command on the server when the desktop or
+`GET /v1/host/status` reports `needs-manual-repair` for an apt update.
+
+```sh
+sudo dpkg --configure -a && sudo apt-get install -f
+```
+
+If the agent stays stopped after the repair, run
+`sudo systemctl start gamelink-agent`. Check
+`sudo journalctl -u gamelink-agent-apt-update.service -u gamelink-agent -n 100`
+for the update outcome and any service errors.

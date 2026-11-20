@@ -57,8 +57,14 @@ fails until both sources agree. The helper downloads the exact
 `gamelink-agent` package from the GameLink source, checks its signed release
 digest and passes that package alone to dpkg. It has no dependency resolver
 and can change only the GameLink package, including when it restores the
-previous version from the same signed apt source. The apt path unit ships
-disabled and needs an explicit upgrade request after opt-in.
+previous version from the same signed apt source if a health check fails
+during the same helper run. After an interruption, the helper records
+`needs-manual-repair` under the original attempt ID, clears the pending
+transaction and leaves dpkg and the service untouched. Half-installed,
+half-configured and unpacked GameLink packages require owner repair before
+the helper can upgrade them.
+The apt path unit ships disabled and needs an explicit upgrade request after
+opt-in.
 
 Desktop presence notifications are off by default. With the setting enabled,
 checks go through the same Tailcat probe as **Check** and reveal to the host's

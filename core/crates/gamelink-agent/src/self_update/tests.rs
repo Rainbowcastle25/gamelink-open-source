@@ -754,6 +754,7 @@ fn signed_stage_install_tamper_and_rollback() {
                 assert_eq!(actions_after, format!("{actions_before}stop\nstart\n"));
                 Phase::RolledBack
             }
+            NeedsManualRepair => unreachable!("apt-only phase"),
             RolledBack | Committed => {
                 recovery.unwrap();
                 assert_eq!(actions_after, actions_before);

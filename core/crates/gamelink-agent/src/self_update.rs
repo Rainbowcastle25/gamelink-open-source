@@ -235,6 +235,8 @@ enum Phase {
     Installing,
     Succeeded,
     RolledBack,
+    #[serde(rename = "needs-manual-repair")]
+    NeedsManualRepair,
     Failed,
 }
 
@@ -638,6 +640,7 @@ enum InstallPhase {
     HealthChecking,
     Committed,
     RolledBack,
+    NeedsManualRepair,
     Failed,
 }
 
@@ -668,6 +671,7 @@ impl Transaction {
             | InstallPhase::HealthChecking => Phase::Installing,
             InstallPhase::Committed => Phase::Succeeded,
             InstallPhase::RolledBack => Phase::RolledBack,
+            InstallPhase::NeedsManualRepair => Phase::NeedsManualRepair,
             InstallPhase::Failed => Phase::Failed,
         };
         Status {
@@ -907,9 +911,10 @@ where
                 // so recovery needs only the root-owned installer lock.
                 self.roll_back(paths, staged_owner, transaction, reason, checkpoint)
             }
-            InstallPhase::Committed | InstallPhase::RolledBack | InstallPhase::Failed => {
-                finish(paths, staged_owner, transaction.phase)
-            }
+            InstallPhase::Committed
+            | InstallPhase::RolledBack
+            | InstallPhase::NeedsManualRepair
+            | InstallPhase::Failed => finish(paths, staged_owner, transaction.phase),
         }
     }
 }

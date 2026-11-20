@@ -217,6 +217,7 @@ test "$(stat -c '%U:%G:%a' /tmp/gamelink-state-target)" = "root:root:755"
 unlink "$state"
 mv "$state.manual" "$state"
 apt_get install -y gamelink-agent
+command -v gpgv
 
 check_install() {
     test "$(dpkg-query -W -f='${db:Status-Status} ${Version}' gamelink-agent)" = "installed $1"
@@ -680,8 +681,7 @@ unlink /run/gamelink-proof-tamper
 mv -f /usr/bin/apt-get.proof-real /usr/bin/apt-get
 dump_helper_log | grep -F 'Tampered with the downloaded rollback archive as _apt.'
 
-# Stop the path unit so each deliberately interrupted attempt can be
-# recovered only after its exact dpkg state has been checked.
+# Stop the path unit to inspect the dpkg state before the helper is rerun.
 systemctl stop "$apt_path"
 mv /usr/bin/deb-systemd-invoke /usr/bin/deb-systemd-invoke.proof-real
 cat > /usr/bin/deb-systemd-invoke <<'INVOKE'
@@ -701,93 +701,76 @@ fi
 INVOKE
 chmod 0755 /usr/bin/deb-systemd-invoke
 
-interrupt_unpack() {
-    reset_cooldown
-    stage_fixture "$1" "$2"
-    "$apt_state/installer" update install-apt >> "$helper_log" 2>&1 &
-    helper=$!
-    printf '%s\n' "$helper" > /run/gamelink-proof-interrupt
-    if wait "$helper"; then
-        echo "Expected the helper to be interrupted in dpkg preinst." >&2
-        exit 1
-    fi
-    test ! -e /run/gamelink-proof-interrupt
-    test -f "$apt_state/pending.json"
-    test "$(dpkg-query -W -f='${db:Status-Status} ${Version}' gamelink-agent)" = "half-installed $previous"
-    check_inactive
-}
-
-interrupt_unpack 567890abcdef1234567890abcdef1234 5
-"$apt_state/installer" update install-apt >> "$helper_log" 2>&1 || :
-wait_for_outcome "$attempt_id" rolled-back rolledBack
-check_install "$previous"
-test ! -e "$apt_state/pending.json"
-
-# Reinstall the byte-identical target after the original attempt has
-# configured it. A separately logged owner operation still changes its inode.
 reset_cooldown
-stage_fixture 67890abcdef1234567890abcdef12345 6
+stage_fixture 567890abcdef1234567890abcdef1234 5
 "$apt_state/installer" update install-apt >> "$helper_log" 2>&1 &
 helper=$!
-until grep -Fq '"phase":"health-checking"' "$apt_state/pending.json" 2>/dev/null; do
-    kill -0 "$helper"
-    sleep 0.1
-done
-kill -KILL "$helper"
-wait "$helper" || :
-systemctl stop "$unit"
-dpkg --log=/tmp/gamelink-proof-owner-dpkg.log --install "$current_deb"
-check_install "$current"
+printf '%s\n' "$helper" > /run/gamelink-proof-interrupt
+if wait "$helper"; then
+    echo "Expected the helper to be interrupted in dpkg preinst." >&2
+    exit 1
+fi
+test ! -e /run/gamelink-proof-interrupt
+test -f "$apt_state/pending.json"
+test "$(dpkg-query -W -f='${db:Status-Status} ${Version}' gamelink-agent)" = "half-installed $previous"
 check_inactive
-before=$(stat -c %i /usr/bin/gamelink-agent)
-"$apt_state/installer" update install-apt >> "$helper_log" 2>&1 || :
-wait_for_outcome "$attempt_id" failed failed inactive
-grep -F 'another package operation superseded the GameLink update' "$apt_state/install-status.json"
-check_install "$current"
-test "$(stat -c %i /usr/bin/gamelink-agent)" = "$before"
-test ! -e "$apt_state/pending.json"
 mv -f /usr/bin/deb-systemd-invoke.proof-real /usr/bin/deb-systemd-invoke
 
-apt_get install -y --allow-downgrades "gamelink-agent=$previous"
+sha256sum /var/lib/dpkg/status /var/log/dpkg.log /usr/bin/gamelink-agent "$apt_state/installer" \
+    > /tmp/gamelink-proof-interrupted.sha256
+"$apt_state/installer" update install-apt >> "$helper_log" 2>&1
+wait_for_outcome "$attempt_id" needs-manual-repair needs-manual-repair inactive
+repair='sudo dpkg --configure -a && sudo apt-get install -f, then sudo systemctl start gamelink-agent if needed.'
+grep -F "$repair" "$apt_state/install-status.json"
+test ! -e "$apt_state/pending.json"
+test ! -e "$apt_state/claimed-request"
+sha256sum -c /tmp/gamelink-proof-interrupted.sha256
+
+stage_fixture 67890abcdef1234567890abcdef12345 6
+if "$apt_state/installer" update install-apt >> "$helper_log" 2>&1; then
+    echo "Expected a half-installed package to block the update." >&2
+    exit 1
+fi
+wait_for_outcome "$attempt_id" needs-manual-repair needs-manual-repair inactive
+grep -F "$repair" "$apt_state/install-status.json"
+test ! -e "$apt_state/pending.json"
+test ! -e "$apt_state/claimed-request"
+sha256sum -c /tmp/gamelink-proof-interrupted.sha256
+
+# Restore the fixture before checking status through the running service.
+dpkg --install "$apt_state/apt-work/previous.deb"
 check_install "$previous"
 systemctl start "$unit"
+if [ "$init" = systemd ]; then
+    curl --silent --show-error --fail --max-time 5 --retry 5 --retry-connrefused \
+        --header "Authorization: Bearer $(cat "$state/proof-admin.token")" \
+        http://127.0.0.1:8467/v1/host/status | python3 -c '
+import json, sys
+update = json.load(sys.stdin)["update"]
+assert update["state"] == "needs-manual-repair"
+assert update["attemptId"] == sys.argv[1]
+assert sys.argv[2] in update["reason"]
+' "$attempt_id" "$repair"
+fi
 
-# Recreate the root-side checkpoint left by an interrupted helper and
-# install a newer owner-chosen package before running recovery.
+# A terminal transaction still finalizes if its helper refresh fails.
 checkpoint=34567890abcdef1234567890abcdef12
-sed "s/\"phase\":\"[^\"]*\"/\"phase\":\"health-checking\"/; s/$attempt_id/$checkpoint/" \
-    "$apt_state/install-status.json" > "$apt_state/pending.json"
-dpkg-deb -R "$current_deb" /tmp/gamelink-owner-upgrade
-owner_version=$current+owner-test
-sed -i "s/^Version:.*/Version: $owner_version/" /tmp/gamelink-owner-upgrade/DEBIAN/control
-dpkg-deb --build --root-owner-group /tmp/gamelink-owner-upgrade /tmp/gamelink-owner-upgrade.deb
-printf 'recovery helper fixture\n' >> "$apt_state/installer"
-cp "$apt_state/installer" /tmp/gamelink-recovery-installer
-dpkg --install /tmp/gamelink-owner-upgrade.deb
-check_install "$owner_version"
-cmp /tmp/gamelink-recovery-installer "$apt_state/installer"
-before=$(stat -c %i /usr/bin/gamelink-agent)
-# Limit the helper's output file size so its refresh copy fails after
-# the much smaller terminal record has been saved.
+printf '{"phase":"committed","attempt":7,"attempt_id":"%s","updated_at":0,"version":"%s","reason":null}\n' \
+    "$checkpoint" "$previous_agent_version" > "$apt_state/pending.json"
+printf 'saved helper fixture\n' >> "$apt_state/installer"
+cp "$apt_state/installer" /tmp/gamelink-saved-installer
 (
     trap '' XFSZ
     ulimit -f 64
     exec "$apt_state/installer" update install-apt
-) >> "$helper_log" 2>&1 || :
+) >> "$helper_log" 2>&1
+wait_for_outcome "$checkpoint" committed succeeded
 test ! -e "$apt_state/pending.json"
-wait_for_outcome "$checkpoint" failed failed
 agent_status | grep -F 'could not refresh apt installer: File too large'
-cmp /tmp/gamelink-recovery-installer "$apt_state/installer"
+cmp /tmp/gamelink-saved-installer "$apt_state/installer"
 "$apt_state/installer" update install-apt >> "$helper_log" 2>&1
-if agent_status | grep -Fq 'could not refresh apt installer'; then
-    echo "Installer refresh warning remained after a successful retry." >&2
-    exit 1
-fi
+test ! -e "$apt_state/installer-refresh-error"
 systemctl enable --now "$apt_path"
-grep -F 'another package operation superseded the GameLink update' "$apt_state/install-status.json"
-check_install "$owner_version"
-test "$(stat -c %i /usr/bin/gamelink-agent)" = "$before"
-test ! -e "$apt_state/pending.json"
 cmp /usr/bin/gamelink-agent "$apt_state/installer"
 test "$(stat -c '%u:%a' "$apt_state/installer")" = 0:755
 

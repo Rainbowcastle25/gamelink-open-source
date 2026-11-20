@@ -5,7 +5,7 @@ use crate::{bridge, host};
 use gamelink_core::{
     requests::server_fingerprint,
     storage,
-    update::{release_is_newer, valid_release_version},
+    update::{release_is_newer, valid_release_version, APT_MANUAL_REPAIR},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -463,6 +463,8 @@ enum AgentUpdateState {
     Installing,
     Succeeded,
     RolledBack,
+    #[serde(rename = "needs-manual-repair")]
+    NeedsManualRepair,
     Failed,
     #[serde(other)]
     Unknown,
@@ -546,7 +548,11 @@ impl AgentStatus {
         use AgentUpdateProgress as Progress;
         use AgentUpdateState as Phase;
 
-        let Some(update) = self.update.as_ref().filter(|_| self.supports_update()) else {
+        let Some(update) = self.update.as_ref().filter(|update| {
+            self.supports_update()
+                || (update.state == Phase::NeedsManualRepair
+                    && update.attempt_id.as_deref() == Some(attempt_id))
+        }) else {
             return Err(if self.is_apt() {
                 LinkedUpdateError::ManualApt {
                     message: MANUAL_APT_UPDATE,
@@ -565,6 +571,7 @@ impl AgentStatus {
             Phase::Succeeded if running_target && update.version.as_deref() == Some(version) => {
                 Ok(AgentPoll::Succeeded)
             }
+            Phase::NeedsManualRepair => Err(LinkedUpdateError::failed(APT_MANUAL_REPAIR)),
             Phase::StagingFailed | Phase::RolledBack | Phase::Failed => {
                 let message = if update.state == Phase::RolledBack {
                     "The server rolled back the agent update."
@@ -1021,6 +1028,38 @@ mod tests {
             json!(error)["message"],
             "The server rolled back the agent update. current failure"
         );
+    }
+
+    #[test]
+    fn matching_attempt_that_needs_manual_repair_shows_the_server_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let connection = configure(dir.path(), "https://node.example", "test-token").unwrap();
+        let agent = LinkedAgentUpdate::new(connection, "node.example".into());
+        let mut response = status_json("0.2.0", "needs-manual-repair", Some(TARGET), None);
+        response["installMethod"] = json!("apt");
+        response["update"]["attemptId"] = json!("interrupted-attempt");
+        response["update"]["supported"] = json!(false);
+        let mut stale = response.clone();
+        stale["update"]["attemptId"] = json!("previous-attempt");
+        stale["update"]["supported"] = json!(true);
+        let mut replies = [
+            json!({"accepted": true, "attemptId": "interrupted-attempt"}),
+            stale,
+            response,
+        ]
+        .into_iter();
+        let _fake = bridge::fake::install(move |_| Ok(replies.next().unwrap()));
+        let error = agent
+            .run_update(
+                dir.path(),
+                TARGET,
+                Duration::from_secs(1),
+                Duration::ZERO,
+                |_| {},
+            )
+            .unwrap_err();
+        assert_eq!(json!(error)["kind"], "failed");
+        assert_eq!(json!(error)["message"], APT_MANUAL_REPAIR);
     }
 
     #[test]

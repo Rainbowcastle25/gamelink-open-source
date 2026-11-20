@@ -2,10 +2,7 @@
 //! one isolated apt source, then gives dpkg only the selected GameLink archive.
 use super::*;
 use sha2::{Digest, Sha256};
-use std::{
-    io::{Seek, SeekFrom},
-    os::fd::AsRawFd,
-};
+use std::os::fd::AsRawFd;
 
 pub(super) const BINARY: &str = "/usr/bin/gamelink-agent";
 const STATE: &str = "/var/lib/gamelink-agent-apt-update";
@@ -17,8 +14,6 @@ const PACKAGE: &str = "gamelink-agent";
 const WORK: &str = "apt-work";
 const REQUEST_LIMIT: usize = 256;
 const INDEX_LIMIT: u64 = 1024 * 1024;
-const DPKG_LOG: &str = "/var/log/dpkg.log";
-const OPERATION_LOG: &str = "dpkg-operation.log";
 const REFRESH_ERROR: &str = "installer-refresh-error";
 const PACKAGE_LIMIT: u64 = 128 * 1024 * 1024;
 
@@ -94,114 +89,10 @@ fn release_version(version: &str) -> Result<String> {
     Ok(version)
 }
 
-#[derive(Deserialize, Serialize)]
 struct Previous {
     package: String,
-    #[serde(default)]
-    target: String,
-    #[serde(default)]
-    owner_log: Option<LogCursor>,
-    #[serde(default)]
-    target_generation: Option<FileGeneration>,
     binary: String,
     enabled: String,
-}
-
-impl Previous {
-    fn save(&self, work: &Path) -> Result<()> {
-        let data = serde_json::to_vec(self).map_err(|err| err.to_string())?;
-        write_temp(work, &data, 0o600)
-            .and_then(|file| {
-                file.persist(work.join("previous.json"))
-                    .map_err(|err| err.error)
-            })
-            .and_then(|_| sync_dir(work))
-            .map_err(|err| err.to_string())
-    }
-
-    fn owns_configured_target(&self, path: &Path) -> bool {
-        self.target_generation.as_ref().is_some_and(|expected| {
-            FileGeneration::read(path).is_ok_and(|current| current == *expected)
-        })
-    }
-}
-
-#[derive(Deserialize, PartialEq, Serialize)]
-struct FileGeneration {
-    dev: u64,
-    ino: u64,
-    ctime: i64,
-    ctime_nsec: i64,
-}
-
-impl FileGeneration {
-    fn read(path: &Path) -> io::Result<Self> {
-        let meta = open_read(path)?.metadata()?;
-        Ok(Self {
-            dev: meta.dev(),
-            ino: meta.ino(),
-            ctime: meta.ctime(),
-            ctime_nsec: meta.ctime_nsec(),
-        })
-    }
-}
-
-#[derive(Deserialize, Serialize)]
-struct LogCursor {
-    dev: u64,
-    ino: u64,
-    len: u64,
-}
-
-impl LogCursor {
-    fn read(path: &Path) -> io::Result<Option<Self>> {
-        Ok(match open_read(path) {
-            Ok(file) => {
-                let meta = file.metadata()?;
-                Some(Self {
-                    dev: meta.dev(),
-                    ino: meta.ino(),
-                    len: meta.len(),
-                })
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error),
-        })
-    }
-}
-
-fn dpkg_events(log: &str) -> impl Iterator<Item = Vec<&str>> {
-    log.lines().filter_map(|line| {
-        let fields: Vec<_> = line.split_whitespace().skip(2).collect();
-        let package = if fields.first() == Some(&"status") {
-            2
-        } else {
-            1
-        };
-        fields
-            .get(package)
-            .is_some_and(|name| name.split(':').next() == Some(PACKAGE))
-            .then_some(fields)
-    })
-}
-
-fn owner_changed_package(path: &Path, cursor: Option<&LogCursor>) -> io::Result<bool> {
-    let mut file = match open_read(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(cursor.is_some()),
-        Err(error) => return Err(error),
-    };
-    let meta = file.metadata()?;
-    if let Some(cursor) = cursor {
-        // Without the original log tail, package ownership is uncertain.
-        if (meta.dev(), meta.ino()) != (cursor.dev, cursor.ino) || meta.len() < cursor.len {
-            return Ok(true);
-        }
-        file.seek(SeekFrom::Start(cursor.len))?;
-    }
-    let log = limited_text(file, INDEX_LIMIT)?;
-    let changed = dpkg_events(&log).next().is_some();
-    Ok(changed)
 }
 
 fn limited_text(file: File, limit: u64) -> io::Result<String> {
@@ -225,17 +116,20 @@ impl PackageStatus {
         self.error == "ok" && self.state == "installed"
     }
 
-    fn can_restore(&self) -> bool {
+    fn can_roll_back(&self) -> bool {
         self.selection == "install"
-            && matches!(
-                self.state.as_str(),
-                "half-installed"
-                    | "unpacked"
-                    | "half-configured"
-                    | "triggers-awaited"
-                    | "triggers-pending"
-                    | "installed"
-            )
+            && (self.needs_manual_repair()
+                || matches!(
+                    self.state.as_str(),
+                    "triggers-awaited" | "triggers-pending" | "installed"
+                ))
+    }
+
+    fn needs_manual_repair(&self) -> bool {
+        matches!(
+            self.state.as_str(),
+            "half-installed" | "half-configured" | "unpacked"
+        )
     }
 }
 
@@ -300,7 +194,6 @@ fn package_hash<'a>(packages: &'a str, version: &str, arch: &str) -> Result<&'a 
 
 struct Apt<'a, C> {
     work: &'a Path,
-    owner_log: &'a Path,
     command: C,
 }
 
@@ -526,37 +419,10 @@ where
             .ok_or_else(|| "GameLink apt package is not configured".into())
     }
 
-    fn owns_operation(&self, previous: &Previous, target: &str) -> bool {
-        if previous.target != target
-            || !owner_changed_package(self.owner_log, previous.owner_log.as_ref())
-                .is_ok_and(|changed| !changed)
-        {
-            return false;
-        }
-        // dpkg logs the transition before calling the package's maintainer
-        // scripts. The private log proves that this invocation reached unpack.
-        open_read(&self.work.join(OPERATION_LOG))
-            .and_then(|file| limited_text(file, INDEX_LIMIT))
-            .is_ok_and(|log| {
-                dpkg_events(&log).any(|event| {
-                    matches!(
-                        event.as_slice(),
-                        ["upgrade", _, from, to] if *from == previous.package && *to == target
-                    )
-                })
-            })
-    }
-
     fn install(&self, archive: &str) -> Result<()> {
         self.command(
             "dpkg",
-            &[
-                "--force-confold",
-                "--no-triggers",
-                "--log=dpkg-operation.log",
-                "--install",
-                archive,
-            ],
+            &["--force-confold", "--no-triggers", "--install", archive],
         )?;
         Ok(())
     }
@@ -575,17 +441,19 @@ where
 {
     tx.reason = reason;
     tx.save(paths, phase, &|_| {})?;
-    finish(paths, owner, apt)
+    finish(paths, owner, apt, phase)
 }
 
-fn finish<C>(paths: &Paths, owner: u32, apt: &Apt<'_, C>) -> Result<()>
+fn finish<C>(paths: &Paths, owner: u32, apt: &Apt<'_, C>, phase: InstallPhase) -> Result<()>
 where
     C: Fn(&str, &[&str], &Path) -> Result<String>,
 {
-    // Retire the request and release its durable CLI gate before refreshing
-    // the recovery executable. The copy can fail independently of dpkg.
+    // Release the durable CLI gate before attempting to refresh the helper.
     complete_transaction(paths, owner, |path, uid| read_request(path, uid).is_ok())
         .map_err(|error| format!("could not finalize apt update: {error}"))?;
+    if phase == InstallPhase::NeedsManualRepair {
+        return Ok(());
+    }
     if let Err(reason) = refresh_installer(paths, apt) {
         crate::log(&reason);
     }
@@ -633,66 +501,6 @@ where
         return Err(reason);
     }
     Ok(())
-}
-
-fn rollback<C, S, V>(
-    paths: &Paths,
-    owner: u32,
-    apt: &Apt<'_, C>,
-    service: &Service<S, V>,
-    tx: Transaction,
-    reason: String,
-) -> Result<()>
-where
-    C: Fn(&str, &[&str], &Path) -> Result<String>,
-    S: Fn(&[&str]) -> Result<String>,
-    V: Fn(&Path) -> Result<String>,
-{
-    let data = fs::read(apt.work.join("previous.json")).map_err(|err| err.to_string())?;
-    let previous: Previous = serde_json::from_slice(&data).map_err(|err| err.to_string())?;
-    let version = tx
-        .version
-        .as_deref()
-        .filter(|version| update::valid_release_version(version))
-        .ok_or("apt transaction is missing its target version")?;
-    let target = deb_version(version);
-    let current = apt.package()?;
-    let (phase, reason) = match current {
-        Some(package)
-            if package.can_restore()
-                && (package.version == target
-                    || (package.version == previous.package && !package.configured()))
-                && (!package.configured() || previous.owns_configured_target(&paths.installed))
-                && apt.owns_operation(&previous, &target) =>
-        {
-            if package.version == target
-                && package.configured()
-                && service.health(&paths.installed, version).is_ok()
-            {
-                return terminal(paths, owner, apt, tx, InstallPhase::Committed, None);
-            }
-            let result = apt
-                .install("previous.deb")
-                .and_then(|()| restore_service(paths, apt, service, &previous));
-            rollback_outcome(result, reason)
-        }
-        Some(package)
-            if package.version == previous.package
-                && package.configured()
-                && package.can_restore() =>
-        {
-            (
-                InstallPhase::Failed,
-                format!("{reason}; the previous GameLink package remains installed"),
-            )
-        }
-        _ => (
-            InstallPhase::Failed,
-            format!("{reason}; apt package conflict: another package operation superseded the GameLink update"),
-        ),
-    };
-    terminal(paths, owner, apt, tx, phase, Some(reason.clone()))?;
-    Err(reason)
 }
 
 fn restore_service<C, S, V>(
@@ -769,20 +577,14 @@ where
     let _package_lock = package_lock()?;
     if let Some(tx) = pending {
         return match tx.phase {
-            InstallPhase::Stopping | InstallPhase::Swapped | InstallPhase::HealthChecking => {
-                rollback(
-                    paths,
-                    owner,
-                    apt,
-                    service,
-                    tx,
-                    "apt upgrade was interrupted".into(),
-                )
-            }
-            InstallPhase::Committed | InstallPhase::Failed | InstallPhase::RolledBack => {
-                finish(paths, owner, apt)
-            }
-            InstallPhase::Staged => {
+            InstallPhase::Committed
+            | InstallPhase::Failed
+            | InstallPhase::RolledBack
+            | InstallPhase::NeedsManualRepair => finish(paths, owner, apt, tx.phase),
+            InstallPhase::Staged
+            | InstallPhase::Stopping
+            | InstallPhase::Swapped
+            | InstallPhase::HealthChecking => {
                 if !present(&paths.update.join(CLAIMED_REQUEST))? && present(&paths.marker())? {
                     claim_request(paths, owner)?;
                 }
@@ -791,8 +593,8 @@ where
                     owner,
                     apt,
                     tx,
-                    InstallPhase::Failed,
-                    Some("apt upgrade was interrupted before installation".into()),
+                    InstallPhase::NeedsManualRepair,
+                    Some(update::APT_MANUAL_REPAIR.into()),
                 )
             }
         };
@@ -818,6 +620,7 @@ where
         reason: None,
     };
     tx.save(paths, InstallPhase::Staged, &|_| {})?;
+    let mut failure_phase = InstallPhase::Failed;
     let prepare = (|| {
         claim_request(paths, owner)?;
         lock_within(&staging_lock, service.lock_wait, "agent staging")?;
@@ -829,14 +632,20 @@ where
             return Err("apt update does not match the staged attempt".into());
         }
         tx.version = Some(request.version.clone());
+        let package = apt.package()?;
+        if package
+            .as_ref()
+            .is_some_and(PackageStatus::needs_manual_repair)
+        {
+            failure_phase = InstallPhase::NeedsManualRepair;
+            return Err(update::APT_MANUAL_REPAIR.into());
+        }
         if let Some(prior) = paths.transaction(INSTALL_STATUS)? {
             if now_seconds().saturating_sub(prior.updated_at) < COOLDOWN.as_secs() {
                 return Err("agent updates are limited to one attempt every five minutes".into());
             }
         }
-        let package = apt
-            .package()?
-            .ok_or("GameLink apt package is not configured")?;
+        let package = package.ok_or("GameLink apt package is not configured")?;
         if package.selection == "hold" {
             return Err("GameLink is held on the server.".into());
         }
@@ -871,17 +680,13 @@ where
             .to_owned();
         let previous = Previous {
             package: previous_package,
-            target: target.clone(),
-            owner_log: LogCursor::read(apt.owner_log).map_err(|err| err.to_string())?,
-            target_generation: None,
             binary,
             enabled: enabled(service)?,
         };
-        previous.save(apt.work)?;
         sync_dir(&paths.update).map_err(|err| err.to_string())?;
         Ok((request, previous, swap_lock))
     })();
-    let (request, mut previous, _swap_lock) = match prepare {
+    let (request, previous, _swap_lock) = match prepare {
         Ok(prepared) => prepared,
         Err(reason) => {
             terminal(
@@ -889,34 +694,42 @@ where
                 owner,
                 apt,
                 tx,
-                InstallPhase::Failed,
+                failure_phase,
                 Some(String::clone(&reason)),
             )?;
             return Err(reason);
         }
     };
     tx.save(paths, InstallPhase::Stopping, &|_| {})?;
-    let result = (|| {
-        let install = apt.install("target.deb");
-        if apt
-            .package()?
-            .is_some_and(|package| package.configured() && package.version == previous.target)
-        {
-            // Reinstalling the same bytes changes the package binary's
-            // generation, even when the owner directs dpkg to a different log.
-            previous.target_generation =
-                Some(FileGeneration::read(&paths.installed).map_err(|err| err.to_string())?);
-            previous.save(apt.work)?;
-        }
-        install?;
-        if previous.target_generation.is_none() {
+    let install = apt.install("target.deb");
+    let target = deb_version(&request.version);
+    let package = apt.package()?;
+    let target_configured = package
+        .as_ref()
+        .is_some_and(|package| package.version == target && package.configured());
+    let result = install.and_then(|()| {
+        if !target_configured {
             return Err("requested GameLink apt version was not installed".into());
         }
         tx.save(paths, InstallPhase::HealthChecking, &|_| {})?;
         service.health(&paths.installed, &request.version)
-    })();
+    });
     if let Err(reason) = result {
-        return rollback(paths, owner, apt, service, tx, reason);
+        // The frontend lock still covers this install and any downgrade.
+        let (phase, reason) = if package.is_some_and(|package| {
+            package.can_roll_back()
+                && (package.version == target
+                    || (package.version == previous.package && !package.configured()))
+        }) {
+            let restored = apt
+                .install("previous.deb")
+                .and_then(|()| restore_service(paths, apt, service, &previous));
+            rollback_outcome(restored, reason)
+        } else {
+            (InstallPhase::Failed, reason)
+        };
+        terminal(paths, owner, apt, tx, phase, Some(reason.clone()))?;
+        return Err(reason);
     }
     terminal(paths, owner, apt, tx, InstallPhase::Committed, None)
 }
@@ -989,7 +802,6 @@ pub fn install_apt() -> Result<()> {
     let work = paths.update.join(WORK);
     let apt = Apt {
         work: &work,
-        owner_log: Path::new(DPKG_LOG),
         command: |program: &str, args: &[&str], dir: &Path| {
             if program == "policy-rc.d" {
                 let policy = Path::new("/usr/sbin/policy-rc.d");
