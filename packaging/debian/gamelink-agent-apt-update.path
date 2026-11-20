@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch for a requested GameLink apt update
+
+[Path]
+PathExists=/var/lib/gamelink-agent-apt-update/staged/request
+PathExists=/var/lib/gamelink-agent-apt-update/pending.json
+Unit=gamelink-agent-apt-update.service
+
+[Install]
+WantedBy=multi-user.target

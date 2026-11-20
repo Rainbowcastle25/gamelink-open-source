@@ -120,6 +120,15 @@ fn native_or_manager(app: &tauri::AppHandle, request: Value) -> Result<Value, St
             }
             Ok(Value::Null)
         }
+        "openAptUpdateGuide" => {
+            app.opener()
+                .open_url(
+                    "https://github.com/Rainbowcastle25/gamelink-open-source/blob/master/docs/agent-setup.md#enable-desktop-updates-with-apt",
+                    None::<&str>,
+                )
+                .map_err(|_| "could not open the apt update guide")?;
+            Ok(Value::Null)
+        }
         "copyHostedInvitation" | "copyLinkedInvitation" => {
             let invite = if request["method"] == "copyLinkedInvitation" {
                 host_connection::invitation(&request)?

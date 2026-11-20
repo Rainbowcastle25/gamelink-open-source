@@ -43,6 +43,7 @@ fn legacy_help(text: &str) -> String {
         "  update stage [--version VER]  stage the latest signed agent release for installation\n  update install-staged         verify and install the staged release (root helper)\n",
         "",
     )
+    .replace("  update install-apt            install the staged Debian package (root helper)\n", "")
     .replace(
         "\nMachine-readable output: status, games list, devices list, requests list and host refresh accept --json.\n  host detect --panel-url URL --token-file PATH [--node-id N] [--out PATH] [--json]\n  host check --config PATH [--listen 127.0.0.1:8467] [--json]\nDetect exits 3 when a node decision is needed; check exits 1 if any check fails.\n",
         "",
@@ -121,6 +122,7 @@ fn update_commands_expose_no_download_or_install_path_options() {
     for args in [
         ["update", "stage", "--url", "https://example.com/release"],
         ["update", "install-staged", "--path", "/tmp/agent"],
+        ["update", "install-apt", "--path", "/tmp/package.deb"],
     ] {
         assert_eq!(run(dir.path(), &args).status.code(), Some(2), "{args:?}");
     }

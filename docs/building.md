@@ -441,8 +441,9 @@ AppImage with the Linux dependencies and amd64 musl target. Run the full
 validation with `--test-apt` to add the apt install and upgrade test. It
 requires `dpkg-deb`, `apt-ftparchive` (from `apt-utils`), GnuPG and Docker or
 Podman. Set `GAMELINK_APT_SYSTEMD_IMAGE` to a local Debian or Ubuntu image with
-systemd and apt to repeat the lifecycle test with systemd as PID 1. That
-container needs privileged mode and runs with networking disabled.
+systemd, apt, curl, OpenSSL and Python 3 to repeat the lifecycle test with
+systemd as PID 1 and stage updates through the running agent's admin API.
+That container needs privileged mode and runs with networking disabled.
 
 ### Console protocol policy
 

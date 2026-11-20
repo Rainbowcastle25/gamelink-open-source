@@ -34,6 +34,7 @@ export const realBackend: Backend = {
   // Windows hands off to the NSIS installer, which relaunches after installation.
   relaunch: async () => invoke("restart_game_link"),
   openReleaseNotes: async () => call("openReleaseNotes"),
+  openAptUpdateGuide: async () => call("openAptUpdateGuide"),
   activity: async (limit) => (await call<Awaited<ReturnType<Backend["activity"]>>>("activity", { limit })) ?? [],
   clearActivity: async () => call("clearActivity"),
 

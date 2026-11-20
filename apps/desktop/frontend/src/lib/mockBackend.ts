@@ -505,6 +505,7 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
     },
     async relaunch() {},
     async openReleaseNotes() {},
+    async openAptUpdateGuide() {},
     async activity(limit) {
       await wait();
       return clone(activity.slice(0, limit));

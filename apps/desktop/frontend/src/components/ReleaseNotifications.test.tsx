@@ -216,6 +216,19 @@ describe("Release notifications", () => {
     expect(app).not.toHaveBeenCalled();
   });
 
+  it("links to apt opt-in when the server's helper is disabled", async () => {
+    const { backend, server, user } = setupLinkedUpdate({ ...update, linkedAgent: { kind: "manualApt" } });
+    const openGuide = vi.spyOn(backend, "openAptUpdateGuide");
+    render(<App backend={backend} />);
+    expect(await screen.findByText("sudo apt update && sudo apt upgrade")).toBeInTheDocument();
+    const guide = screen.getByRole("link", { name: "enable desktop updates" });
+    expect(guide).toHaveAttribute("href", expect.stringContaining("#enable-desktop-updates-with-apt"));
+    await user.click(guide);
+    expect(openGuide).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Update all" })).not.toBeInTheDocument();
+    expect(server).not.toHaveBeenCalled();
+  });
+
   it("stays quiet when no verified release is returned", async () => {
     const backend = createMockBackend({ delayMs: 0 });
     const check = vi.spyOn(backend, "checkRelease");

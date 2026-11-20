@@ -190,13 +190,24 @@ def build_repository(repo, packages, public_key, env):
 def validate_repository(version, assets, work, minisign, manifest_key, pins, env):
     # Model a previously installed Debian version with the same throwaway
     # agent binaries, then upgrade to the release's real package version.
+    # For the offline systemd test, build a disposable older amd64 agent
+    # that reads signed release metadata from the test fixture mount.
     previous = "0.0.0-0"
     run("dpkg", "--compare-versions", deb_version(previous), "lt", deb_version(version), env=env)
     old_assets = work / "old-apt-assets"
     old_assets.mkdir()
+    image = env.get("GAMELINK_APT_SYSTEMD_IMAGE")
     old_debs = [old_assets / deb_name(previous, arch) for arch in ARCHES]
     for arch, package in zip(ARCHES, old_debs, strict=True):
-        build_deb(work / "nfpm", assets / agent_name(arch), assets / LICENSES_ASSET,
+        binary = assets / agent_name(arch)
+        if image and arch == "amd64":
+            binary = old_assets / agent_name(arch)
+            run("bash", ROOT / "scripts/build-agent.sh", arch, binary, cwd=ROOT, env=env | {
+                "CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS": "true",
+                "GAMELINK_APT_TEST_VERSION": previous,
+                "GAMELINK_UPDATE_PUBLIC_KEYS": " ".join(pins),
+            })
+        build_deb(work / "nfpm", binary, assets / LICENSES_ASSET,
                   work, previous, arch, package, env)
     old_manifest = old_assets / MANIFEST
     write_json(old_manifest, {
@@ -213,6 +224,8 @@ def validate_repository(version, assets, work, minisign, manifest_key, pins, env
         identity, "ed25519", "sign", "1d", env=env)
     test_root = work / "apt-test"
     test_root.mkdir()
+    for name in (MANIFEST, f"{MANIFEST}.minisig"):
+        shutil.copyfile(assets / name, test_root / name)
     public_key = test_root / "apt.asc"
     run(*gpg, "--armor", "--output", public_key, "--export", identity, env=env)
     public_key.with_suffix(".fingerprint").write_text(public_fingerprint(gpg, public_key) + "\n")
@@ -239,9 +252,10 @@ def validate_repository(version, assets, work, minisign, manifest_key, pins, env
         "--mount", f"type=bind,source={test_root},target=/proof,readonly",
         "--mount", f"type=bind,source={ROOT / 'scripts/test-apt-install.sh'},target=/test-apt-install.sh,readonly",
     )
-    test_command = ("sh", "/test-apt-install.sh", deb_version(previous), deb_version(version), version)
+    test_command = ("sh", "/test-apt-install.sh", deb_version(previous), deb_version(version),
+                    version, previous if image else version)
     run(runtime, "run", "--network", "none", *mounts, "debian:bookworm-slim", *test_command, env=env)
-    if image := env.get("GAMELINK_APT_SYSTEMD_IMAGE"):
+    if image:
         container = run(
             runtime, "run", "--detach", "--network", "none", "--privileged", "--cgroupns", "private",
             "--user", "0:0", "--tmpfs", "/run", "--tmpfs", "/tmp", "--env", "container=docker",

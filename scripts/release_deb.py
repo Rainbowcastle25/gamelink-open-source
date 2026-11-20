@@ -34,10 +34,21 @@ def build_deb(nfpm, binary, licenses, work, version, arch, package, env):
     header = "[Unit]\n"
     unit.write_text(header + example.split(header, 1)[1].replace(
         "/usr/local/bin/gamelink-agent", "/usr/bin/gamelink-agent",
+    ).replace(
+        "ReadWritePaths=/var/lib/gamelink-agent\n",
+        "ReadWritePaths=/var/lib/gamelink-agent\n"
+        "ReadWritePaths=-/var/lib/gamelink-agent-apt-update/staged\n",
     ))
     contents = [
         (binary, f"/{EXECUTABLE}", 0o755),
         (unit, "/lib/systemd/system/gamelink-agent.service", 0o644),
+        (PACKAGING / "gamelink-agent-apt-update.path",
+         "/lib/systemd/system/gamelink-agent-apt-update.path", 0o644),
+        (PACKAGING / "gamelink-agent-apt-update.service",
+         "/lib/systemd/system/gamelink-agent-apt-update.service", 0o644),
+        (PACKAGING / "50-gamelink-agent.preset",
+         "/lib/systemd/system-preset/50-gamelink-agent.preset", 0o644),
+        (PACKAGING / "install-method", "/usr/share/gamelink-agent/install-method", 0o644),
         (PACKAGING / "copyright", "/usr/share/doc/gamelink-agent/copyright", 0o644),
         (licenses, "/usr/share/doc/gamelink-agent/GameLink-licenses.tar.gz", 0o644),
     ]
@@ -53,7 +64,7 @@ def build_deb(nfpm, binary, licenses, work, version, arch, package, env):
         "description": "GameLink server agent for private game tunnels",
         "homepage": "https://github.com/Rainbowcastle25/gamelink-open-source",
         "license": "GPL-3.0",
-        "depends": ["init-system-helpers", "passwd"],
+        "depends": ["debconf", "gpgv", "init-system-helpers", "passwd"],
         "contents": [
             {"src": str(src), "dst": dst, "file_info": {"mode": mode}}
             for src, dst, mode in contents

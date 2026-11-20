@@ -38,8 +38,9 @@ metadata from the built-in GitHub endpoint. A separately installed root
 helper verifies the staged manifest and native binary again against the
 installed agent's embedded Minisign pins and the signed SHA-256 digest. It
 requires a newer version and replaces only the installed GameLink agent.
-The root helper guarantees “signed by the release key and newer than installed”,
-while selection of the latest release is the unprivileged agent's responsibility.
+Both the manual and apt root helpers require a genuine release signature and
+a version newer than the installed one. The unprivileged agent selects the
+latest GitHub release.
 Both authorized entry points, `update stage` and the desktop's request, run as
 the `gamelink` account. So root can't tell an owner's request from a request
 file that account wrote directly. A compromised `gamelink` account can at most
@@ -47,6 +48,23 @@ make root install a genuine signed release newer than the installed one; it
 gains no further privilege. The agent never stages an update on its own: there
 is no timer or background check for the agent, and it stages updates only when
 someone runs the command or clicks **Update all** in the desktop app.
+
+For apt installations, the separately enabled apt helper verifies the staged
+manifest against the embedded Minisign keys. The request must match the
+manifest version and the newest candidate in fresh, signed GameLink apt
+metadata. If the newest GitHub release has not reached apt, the request
+fails until both sources agree. The helper downloads the exact
+`gamelink-agent` package from the GameLink source, checks its signed release
+digest and passes that package alone to dpkg. It has no dependency resolver
+and can change only the GameLink package, including when it restores the
+previous version from the same signed apt source if a health check fails
+during the same helper run. After an interruption, the helper records
+`needs-manual-repair` under the original attempt ID, clears the pending
+transaction and leaves dpkg and the service untouched. Half-installed,
+half-configured and unpacked GameLink packages require owner repair before
+the helper can upgrade them.
+The apt path unit ships disabled and needs an explicit upgrade request after
+opt-in.
 
 Desktop presence notifications are off by default. With the setting enabled,
 checks go through the same Tailcat probe as **Check** and reveal to the host's

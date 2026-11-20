@@ -8,6 +8,7 @@ import { Button } from "./Button";
 
 const CHECK_INTERVAL = 4 * 60 * 60 * 1000;
 const MANUAL_AGENT_UPDATE = "Update the GameLink agent on your server with the setup guide or your package manager.";
+const APT_UPDATES_GUIDE = "https://github.com/Rainbowcastle25/gamelink-open-source/blob/master/docs/agent-setup.md#enable-desktop-updates-with-apt";
 const AGENT_PROGRESS: Record<AgentUpdateProgress, string> = {
   preparing: "Preparing the server update…",
   installing: "Installing the server update…",
@@ -89,9 +90,10 @@ function EnabledNotifications() {
               ? { ...current, linkedAgent: null }
               : current);
           } catch (error) {
-            if (error && typeof error === "object" && "kind" in error && error.kind === "manual") {
+            const kind = error && typeof error === "object" && "kind" in error ? error.kind : null;
+            if (kind === "manual" || kind === "manualApt") {
               setNotice((current) => current?.linkedAgent?.kind === "available" && current.linkedAgent.offerId === offerId
-                ? { ...current, linkedAgent: { kind: "manual" } }
+                ? { ...current, linkedAgent: { kind } }
                 : current);
             } else {
               setServerError(errorMessage(error));
@@ -150,6 +152,21 @@ function EnabledNotifications() {
                 Update this PC and your server {linkedAgent.nodeName}.
               </p>}
               {linkedAgent?.kind === "manual" && <p className="mt-1 text-muted">{MANUAL_AGENT_UPDATE}</p>}
+              {linkedAgent?.kind === "manualApt" && <p className="mt-1 text-muted">
+                Run <code>sudo apt update &amp;&amp; sudo apt upgrade</code> on your server, or{" "}
+                <a
+                  className="underline underline-offset-4"
+                  href={APT_UPDATES_GUIDE}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void backend.openAptUpdateGuide().catch((error) => toast.error(errorMessage(error)));
+                  }}
+                >
+                  enable desktop updates
+                </a>.
+              </p>}
               {linkedAgent?.kind === "unreachable" && <p className="mt-1 text-muted">
                 Could not check the GameLink agent on your server.
               </p>}

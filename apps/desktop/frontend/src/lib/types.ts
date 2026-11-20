@@ -215,6 +215,7 @@ export interface ReleaseNotice {
 export type LinkedAgentNotice =
   | { kind: "available"; nodeName: string; offerId: string }
   | { kind: "manual" }
+  | { kind: "manualApt" }
   | { kind: "unreachable" };
 
 export type AgentUpdateProgress = "preparing" | "installing" | "restarting" | "checkingHealth";

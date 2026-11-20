@@ -79,6 +79,28 @@ case "$1" in
     *) exit 0 ;;
 esac
 
+# Only an owner-created apt helper is eligible for refresh. A desktop
+# transaction keeps its recovery executable until the helper finalizes it.
+apt_state=/var/lib/gamelink-agent-apt-update
+installer=$apt_state/installer
+pending=$apt_state/pending.json
+if [ ! -L "$apt_state" ] && [ -d "$apt_state" ] &&
+    [ "$(stat -c '%u:%a' "$apt_state")" = 0:750 ] &&
+    [ ! -L "$installer" ] && [ -f "$installer" ] &&
+    [ "$(stat -c '%u:%a' "$installer")" = 0:755 ] &&
+    [ ! -e "$pending" ] && [ ! -L "$pending" ]; then
+    next=$(mktemp "$apt_state/.installer.XXXXXXXX")
+    trap 'if [ -e "$next" ]; then unlink "$next"; fi' EXIT
+    install -m 0755 /usr/bin/gamelink-agent "$next"
+    sync "$next"
+    mv -fT "$next" "$installer"
+    if [ -f "$apt_state/installer-refresh-error" ]; then
+        unlink "$apt_state/installer-refresh-error"
+    fi
+    sync "$apt_state"
+    trap - EXIT
+fi
+
 restart=/run/gamelink-agent-restart
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload
