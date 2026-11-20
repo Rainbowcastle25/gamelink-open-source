@@ -111,10 +111,26 @@ impl Paths {
         Ok(lock)
     }
 
+    fn staging_lock(&self, owner: u32) -> Result<File> {
+        let lock = self.update_dir()?;
+        self.swap_lock()
+            .map_err(|_| "agent update requires a valid swap lock")?;
+        self.staging_dir(owner)?;
+        Ok(lock)
+    }
+
     fn staging_status(&self, owner: u32) -> Option<Status> {
         self.staging_dir(owner).ok()?;
         let bytes = read_file(&self.staged().join(STAGE_STATUS), 4096, owner).ok()?;
         let status: Status = serde_json::from_slice(&bytes).ok()?;
+        if status.attempt_id.as_ref().is_some_and(|id| {
+            id.len() != 32
+                || !id
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        }) {
+            return None;
+        }
         matches!(
             status.state,
             Phase::Checking | Phase::Downloading | Phase::Staged | Phase::StagingFailed
@@ -198,6 +214,8 @@ struct Status {
     #[serde(default)]
     attempt: u64,
     #[serde(default)]
+    attempt_id: Option<String>,
+    #[serde(default)]
     updated_at: u64,
     state: Phase,
     version: Option<String>,
@@ -205,8 +223,26 @@ struct Status {
 }
 
 pub fn status() -> serde_json::Value {
-    let status = Paths::system().status(effective_uid());
-    serde_json::json!({"state":status.state,"version":status.version,"reason":status.reason})
+    let paths = Paths::system();
+    let owner = effective_uid();
+    let supported = can_stage(owner) && paths.staging_lock(owner).is_ok();
+    paths.status(owner).host_view(supported)
+}
+
+impl Status {
+    fn host_view(&self, supported: bool) -> serde_json::Value {
+        serde_json::json!({
+            "supported": supported,
+            "state": self.state,
+            "version": self.version,
+            "reason": self.reason,
+            "attemptId": self.attempt_id,
+        })
+    }
+}
+
+fn can_stage(owner: u32) -> bool {
+    owner != 0 && update::can_check()
 }
 
 fn effective_uid() -> u32 {
@@ -272,10 +308,8 @@ fn now_seconds() -> u64 {
 impl Stage {
     fn acquire(paths: Paths, now: u64) -> std::result::Result<Self, QueueError> {
         let owner = effective_uid();
-        let lock = paths.update_dir().map_err(|_| QueueError::Unavailable)?;
-        paths.swap_lock().map_err(|_| QueueError::Unavailable)?;
-        paths
-            .staging_dir(owner)
+        let lock = paths
+            .staging_lock(owner)
             .map_err(|_| QueueError::Unavailable)?;
         let check_cooldown = || {
             let status = paths.status(owner);
@@ -303,8 +337,13 @@ impl Stage {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(_) => return Err(QueueError::Unavailable),
         }
+        let mut random = [0u8; 16];
+        File::open("/dev/urandom")
+            .and_then(|mut file| file.read_exact(&mut random))
+            .map_err(|_| QueueError::Unavailable)?;
         let status = Status {
             attempt: previous.attempt.saturating_add(1),
+            attempt_id: Some(random.iter().map(|byte| format!("{byte:02x}")).collect()),
             updated_at: now,
             state: Phase::Checking,
             ..Status::default()
@@ -320,10 +359,17 @@ impl Stage {
 
     fn system() -> std::result::Result<Self, QueueError> {
         let paths = Paths::system();
-        if effective_uid() == 0 || !update::can_check() {
+        if !can_stage(effective_uid()) {
             return Err(QueueError::Unavailable);
         }
         Self::acquire(paths, now_seconds())
+    }
+
+    fn attempt_id(&self) -> &str {
+        self.status
+            .attempt_id
+            .as_deref()
+            .expect("reserved attempt ID")
     }
 
     fn run(
@@ -416,8 +462,9 @@ pub fn stage(expected: Option<&str>) -> Result<String> {
         )
 }
 
-pub fn queue(expected: Option<String>) -> std::result::Result<(), QueueError> {
+pub fn queue(expected: Option<String>) -> std::result::Result<String, QueueError> {
     let stage = Stage::system()?;
+    let attempt_id = stage.attempt_id().to_owned();
     thread::Builder::new()
         .name("agent-update".into())
         .spawn(move || {
@@ -430,7 +477,7 @@ pub fn queue(expected: Option<String>) -> std::result::Result<(), QueueError> {
             }
         })
         .map_err(|_| QueueError::Unavailable)?;
-    Ok(())
+    Ok(attempt_id)
 }
 
 // Regular CLI commands hold a shared lock when the updater is configured.
@@ -541,6 +588,8 @@ enum Checkpoint {
 struct Transaction {
     phase: InstallPhase,
     attempt: u64,
+    #[serde(default)]
+    attempt_id: Option<String>,
     updated_at: u64,
     version: Option<String>,
     reason: Option<String>,
@@ -560,6 +609,7 @@ impl Transaction {
         Status {
             state,
             attempt: self.attempt,
+            attempt_id: self.attempt_id,
             updated_at: self.updated_at,
             version: self.version,
             reason: self.reason,
@@ -827,9 +877,11 @@ where
     if present(&paths.backup())? {
         return Err("previous agent backup exists without an active installer transaction".into());
     }
+    let staged = paths.staging_status(staged_owner).unwrap_or_default();
     let mut transaction = Transaction {
         phase: InstallPhase::Staged,
-        attempt: paths.status(staged_owner).attempt,
+        attempt: staged.attempt,
+        attempt_id: staged.attempt_id,
         updated_at: 0,
         version: None,
         reason: None,

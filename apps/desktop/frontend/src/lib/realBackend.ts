@@ -1,5 +1,5 @@
 import type { Backend } from "./backend";
-import type { UpdateProgress, UpdateTopic } from "./types";
+import type { AgentUpdateProgress, UpdateProgress, UpdateTopic } from "./types";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -23,9 +23,13 @@ export const realBackend: Backend = {
   settings: async () => call("settings"),
   gameIcons: async () => (await call<Record<string, string> | null>("gameIcons")) ?? {},
   checkRelease: async () => invoke("check_release"),
-  installUpdate: async (version, onProgress) => {
+  updateLinkedAgent: async (version, offerId, onProgress) => {
+    const progress = new Channel<AgentUpdateProgress>(onProgress);
+    await invoke("update_linked_agent", { version, offerId, progress });
+  },
+  installUpdate: async (version, onProgress, offerId) => {
     const progress = new Channel<UpdateProgress>(onProgress);
-    await invoke("install_update", { version, progress });
+    await invoke("install_update", { version, progress, offerId });
   },
   // Windows hands off to the NSIS installer, which relaunches after installation.
   relaunch: async () => invoke("restart_game_link"),

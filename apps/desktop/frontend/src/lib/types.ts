@@ -209,7 +209,15 @@ export interface ReleaseNotice {
   summary: string | null;
   canInstall: boolean;
   installerError: string | null;
+  linkedAgent: LinkedAgentNotice | null;
 }
+
+export type LinkedAgentNotice =
+  | { kind: "available"; nodeName: string; offerId: string }
+  | { kind: "manual" }
+  | { kind: "unreachable" };
+
+export type AgentUpdateProgress = "preparing" | "installing" | "restarting" | "checkingHealth";
 
 export type UpdateProgress =
   | { stage: "downloading"; downloaded: number; total: number | null }

@@ -297,7 +297,7 @@ fn read_version<'de, D: serde::Deserializer<'de>>(
 
 pub(super) fn request_update(
     body: &[u8],
-    queue: impl FnOnce(Option<String>) -> std::result::Result<(), self_update::QueueError>,
+    queue: impl FnOnce(Option<String>) -> std::result::Result<String, self_update::QueueError>,
 ) -> ApiResult<(u16, Value)> {
     let request = if body.is_empty() {
         UpdateRequest::default()
@@ -320,7 +320,7 @@ pub(super) fn request_update(
     {
         return Err((400, "Invalid agent release version".into()));
     }
-    queue(request.version).map_err(|error| match error {
+    let attempt_id = queue(request.version).map_err(|error| match error {
         self_update::QueueError::Busy => {
             (409, "An agent update is already staged or running".into())
         }
@@ -333,7 +333,7 @@ pub(super) fn request_update(
             "Agent updates are unavailable on this installation".into(),
         ),
     })?;
-    Ok((202, json!({"accepted":true})))
+    Ok((202, json!({"accepted":true,"attemptId":attempt_id})))
 }
 
 impl Host {

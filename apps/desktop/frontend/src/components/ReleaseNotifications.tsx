@@ -1,12 +1,21 @@
 import { ArrowUpRight, Info, ShieldAlert } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn, errorMessage } from "../lib/format";
 import { useAppState, useStore } from "../lib/store";
 import { toast } from "../lib/toast";
-import type { ReleaseNotice, UpdateProgress } from "../lib/types";
+import type { AgentUpdateProgress, ReleaseNotice, UpdateProgress } from "../lib/types";
 import { Button } from "./Button";
 
 const CHECK_INTERVAL = 4 * 60 * 60 * 1000;
+const MANUAL_AGENT_UPDATE = "Update the GameLink agent on your server with the setup guide or your package manager.";
+const AGENT_PROGRESS: Record<AgentUpdateProgress, string> = {
+  preparing: "Preparing the server update…",
+  installing: "Installing the server update…",
+  restarting: "Waiting for your server agent to restart…",
+  checkingHealth: "Checking server agent health…",
+};
+
+type Progress = UpdateProgress | { stage: "server"; phase: AgentUpdateProgress } | { stage: "restarting" };
 
 export function ReleaseNotifications() {
   const { settings } = useAppState();
@@ -14,44 +23,91 @@ export function ReleaseNotifications() {
 }
 
 function EnabledNotifications() {
-  const { backend } = useStore();
+  const store = useStore();
+  const { backend } = store;
+  const { hostConnection } = useAppState();
   const [notice, setNotice] = useState<ReleaseNotice | null>(null);
   const [retry, setRetry] = useState(0);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<UpdateProgress | { stage: "restarting" } | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<Progress | null>(null);
   const [installed, setInstalled] = useState(false);
+  const busy = useRef(false);
+  const refreshAfterUpdate = useRef(false);
+  const completedServerOffer = useRef<string | undefined>(undefined);
   const version = notice?.version;
+  const linkedAgent = notice?.canInstall && !installed ? notice.linkedAgent : null;
+  const updateAll = linkedAgent?.kind === "available";
 
   useEffect(() => {
     let active = true;
     async function refresh() {
+      if (busy.current) return;
       try {
         const result = await backend.checkRelease();
         if (!active) return;
+        completedServerOffer.current = undefined;
         setNotice(result);
         setCheckError(result?.installerError ?? null);
+        setServerError(null);
       } catch (error) {
         if (!active) return;
         setNotice((current) => current && { ...current, canInstall: false });
         setCheckError(errorMessage(error));
       }
     }
-    void refresh();
+    if (busy.current) {
+      refreshAfterUpdate.current = true;
+    } else {
+      void refresh();
+    }
     const timer = setInterval(() => void refresh(), CHECK_INTERVAL);
     return () => {
       active = false;
       clearInterval(timer);
     };
-  }, [backend, retry]);
+  }, [backend, hostConnection, retry]);
 
-  async function install() {
-    if (progress || (!version && !installed)) return;
+  async function install(offerId?: string) {
+    if (busy.current || progress || (!version && !installed)) return;
+    busy.current = true;
     setInstallError(null);
+    setServerError(null);
     try {
       if (!installed && version) {
+        const installOfferId = offerId ?? completedServerOffer.current;
+        if (offerId) {
+          let receivingServerProgress = true;
+          setProgress({ stage: "server", phase: "preparing" });
+          try {
+            await backend.updateLinkedAgent(version, offerId, (phase) => {
+              if (receivingServerProgress) setProgress({ stage: "server", phase });
+            });
+            completedServerOffer.current = offerId;
+            setNotice((current) => current?.linkedAgent?.kind === "available" && current.linkedAgent.offerId === offerId
+              ? { ...current, linkedAgent: null }
+              : current);
+          } catch (error) {
+            if (error && typeof error === "object" && "kind" in error && error.kind === "manual") {
+              setNotice((current) => current?.linkedAgent?.kind === "available" && current.linkedAgent.offerId === offerId
+                ? { ...current, linkedAgent: { kind: "manual" } }
+                : current);
+            } else {
+              setServerError(errorMessage(error));
+            }
+            setProgress(null);
+            return;
+          } finally {
+            receivingServerProgress = false;
+          }
+        }
+        if (installOfferId && store.getState().hostConnection !== hostConnection) {
+          setProgress(null);
+          return;
+        }
         setProgress({ stage: "downloading", downloaded: 0, total: null });
-        await backend.installUpdate(version, setProgress);
+        await backend.installUpdate(version, setProgress, installOfferId);
         setInstalled(true);
       }
       setProgress({ stage: "restarting" });
@@ -59,6 +115,13 @@ function EnabledNotifications() {
     } catch (error) {
       setProgress(null);
       setInstallError(errorMessage(error));
+    } finally {
+      busy.current = false;
+      if (refreshAfterUpdate.current) {
+        refreshAfterUpdate.current = false;
+        setNotice(null);
+        setRetry((count) => count + 1);
+      }
     }
   }
 
@@ -83,12 +146,21 @@ function EnabledNotifications() {
                 {security ? "Security update available" : "Update available"} · GameLink {notice.version}
               </p>
               {notice.summary && <p className="mt-1 break-words text-muted">{notice.summary}</p>}
+              {linkedAgent?.kind === "available" && <p className="mt-1 break-words text-muted">
+                Update this PC and your server {linkedAgent.nodeName}.
+              </p>}
+              {linkedAgent?.kind === "manual" && <p className="mt-1 text-muted">{MANUAL_AGENT_UPDATE}</p>}
+              {linkedAgent?.kind === "unreachable" && <p className="mt-1 text-muted">
+                Could not check the GameLink agent on your server.
+              </p>}
             </>
           )}
           {progress && <InstallProgress progress={progress} />}
-          {(installError || checkError) && <p role="alert" className="mt-1 text-warn">{installError || checkError}</p>}
+          {(serverError || installError || checkError) && <p role="alert" className="mt-1 break-words text-warn">
+            {serverError || installError || checkError}
+          </p>}
         </div>
-        <div className="ml-auto flex shrink-0 items-center gap-3">
+        <div className="ml-auto flex max-w-[60%] shrink-0 flex-wrap items-center justify-end gap-3">
           {notice && (
             <a
               href={notice.releaseNotesUrl}
@@ -103,9 +175,17 @@ function EnabledNotifications() {
               Release notes <ArrowUpRight aria-hidden className="size-3.5" />
             </a>
           )}
-          {notice?.canInstall || installed ? (
+          {updateAll ? (
+            <>
+              <Button disabled={!!progress} onClick={() => void install()}>Update this app only</Button>
+              <Button variant="primary" disabled={!!progress} onClick={() => void install(linkedAgent.offerId)}>
+                {progress?.stage === "server" ? "Updating server…" : serverError ? "Retry" : "Update all"}
+              </Button>
+            </>
+          ) : notice?.canInstall || installed ? (
             <Button variant="primary" disabled={!!progress} onClick={() => void install()}>
-              {progress ? "Updating…" : installed ? "Restart GameLink" : installError ? "Retry update" : "Update"}
+              {progress ? "Updating…" : installed ? "Restart GameLink" :
+                installError ? "Retry update" : linkedAgent ? "Update this app only" : "Update"}
             </Button>
           ) : checkError && !progress && (
             <Button onClick={() => {
@@ -121,7 +201,7 @@ function EnabledNotifications() {
   );
 }
 
-function InstallProgress({ progress }: { progress: UpdateProgress | { stage: "restarting" } }) {
+function InstallProgress({ progress }: { progress: Progress }) {
   if (progress.stage === "downloading") {
     const { downloaded, total } = progress;
     const percent = total ? Math.min(100, Math.floor(downloaded * 100 / total)) : undefined;
@@ -134,7 +214,8 @@ function InstallProgress({ progress }: { progress: UpdateProgress | { stage: "re
   }
   return (
     <p role="status" className="mt-1 text-muted">
-      {progress.stage === "verifying" ? "Verifying installer…" :
+      {progress.stage === "server" ? AGENT_PROGRESS[progress.phase] :
+        progress.stage === "verifying" ? "Verifying installer…" :
         progress.stage === "installing" ? "Installing update…" : "Restarting GameLink…"}
     </p>
   );

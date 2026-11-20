@@ -45,8 +45,8 @@ the `gamelink` account. So root can't tell an owner's request from a request
 file that account wrote directly. A compromised `gamelink` account can at most
 make root install a genuine signed release newer than the installed one; it
 gains no further privilege. The agent never stages an update on its own: there
-is no timer or background check, and updates happen only when someone runs the
-command or clicks Update.
+is no timer or background check for the agent, and it stages updates only when
+someone runs the command or clicks **Update all** in the desktop app.
 
 Desktop presence notifications are off by default. With the setting enabled,
 checks go through the same Tailcat probe as **Check** and reveal to the host's

@@ -497,6 +497,9 @@ export function createMockBackend(opts: MockOptions = {}): MockBackend {
     async checkRelease() {
       return null;
     },
+    async updateLinkedAgent() {
+      throw new Error("Agent updates are unavailable with the mock backend.");
+    },
     async installUpdate() {
       throw new Error("Updates are unavailable with the mock backend.");
     },

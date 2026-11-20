@@ -53,7 +53,7 @@ export function HostScreen() {
     setError("");
     setNotice("");
     try {
-      const c = await backend.configureHost(endpoint, token);
+      const c = await store.configureHost(endpoint, token);
       setConnection(c);
       setEndpoint(c.endpoint);
       setToken("");

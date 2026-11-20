@@ -1,5 +1,6 @@
 import type {
   ActivityEvent,
+  AgentUpdateProgress,
   CheckView,
   HostConnection,
   HostSnapshot,
@@ -35,7 +36,8 @@ export interface Backend {
   settings(): Promise<SettingsView>;
   gameIcons(): Promise<Record<string, string>>;
   checkRelease(): Promise<ReleaseNotice | null>;
-  installUpdate(version: string, onProgress: (progress: UpdateProgress) => void): Promise<void>;
+  updateLinkedAgent(version: string, offerId: string, onProgress: (progress: AgentUpdateProgress) => void): Promise<void>;
+  installUpdate(version: string, onProgress: (progress: UpdateProgress) => void, offerId?: string): Promise<void>;
   relaunch(): Promise<void>;
   openReleaseNotes(): Promise<void>;
   activity(limit: number): Promise<ActivityEvent[]>;
@@ -129,6 +131,7 @@ export const backend: Backend = {
   settings: lazy((b) => b.settings.bind(b)),
   gameIcons: lazy((b) => b.gameIcons.bind(b)),
   checkRelease: lazy((b) => b.checkRelease.bind(b)),
+  updateLinkedAgent: lazy((b) => b.updateLinkedAgent.bind(b)),
   installUpdate: lazy((b) => b.installUpdate.bind(b)),
   relaunch: lazy((b) => b.relaunch.bind(b)),
   openReleaseNotes: lazy((b) => b.openReleaseNotes.bind(b)),

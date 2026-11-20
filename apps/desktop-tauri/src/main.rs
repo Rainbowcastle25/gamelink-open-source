@@ -238,6 +238,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             desktop,
             updater::check_release,
+            updater::update_linked_agent,
             updater::install_update,
             #[cfg(target_os = "linux")]
             restart::restart_game_link

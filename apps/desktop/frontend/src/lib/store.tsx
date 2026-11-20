@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, useSyncExternalStore, t
 import { backend as defaultBackend, type Backend } from "./backend";
 import { errorMessage } from "./format";
 import { toast } from "./toast";
-import type { ActivityEvent, IdentityView, Overview, Paths, ServerView, SettingsView, Version } from "./types";
+import type { ActivityEvent, HostConnection, IdentityView, Overview, Paths, ServerView, SettingsView, Version } from "./types";
 
 export type BusyKind = "joining" | "checking";
 
@@ -15,6 +15,7 @@ export interface AppState {
   identity: IdentityView | null;
   paths: Paths | null;
   settings: SettingsView | null;
+  hostConnection: HostConnection | null;
   gameIcons: Record<string, string>;
   version: Version | null;
   activity: ActivityEvent[];
@@ -30,6 +31,7 @@ const initial: AppState = {
   identity: null,
   paths: null,
   settings: null,
+  hostConnection: null,
   gameIcons: {},
   version: null,
   activity: [],
@@ -133,6 +135,12 @@ export class GameLinkStore {
   async retryLoad(): Promise<void> {
     this.set({ ready: false, loadError: null });
     await this.loadAll();
+  }
+
+  async configureHost(endpoint: string, token: string): Promise<HostConnection> {
+    const hostConnection = await this.backend.configureHost(endpoint, token);
+    this.set({ hostConnection });
+    return hostConnection;
   }
 
   async refreshServers(): Promise<void> {
