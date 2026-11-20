@@ -2,7 +2,10 @@
 //! one isolated apt source, then gives dpkg only the selected GameLink archive.
 use super::*;
 use sha2::{Digest, Sha256};
-use std::os::fd::AsRawFd;
+use std::{
+    io::{Seek, SeekFrom},
+    os::fd::AsRawFd,
+};
 
 pub(super) const BINARY: &str = "/usr/bin/gamelink-agent";
 const STATE: &str = "/var/lib/gamelink-agent-apt-update";
@@ -13,6 +16,10 @@ const KEYRING: &str = "/usr/share/keyrings/gamelink.gpg";
 const PACKAGE: &str = "gamelink-agent";
 const WORK: &str = "apt-work";
 const REQUEST_LIMIT: usize = 256;
+const INDEX_LIMIT: u64 = 1024 * 1024;
+const DPKG_LOG: &str = "/var/log/dpkg.log";
+const OPERATION_LOG: &str = "dpkg-operation.log";
+const REFRESH_ERROR: &str = "installer-refresh-error";
 const PACKAGE_LIMIT: u64 = 128 * 1024 * 1024;
 
 pub(super) fn installed() -> bool {
@@ -90,8 +97,120 @@ fn release_version(version: &str) -> Result<String> {
 #[derive(Deserialize, Serialize)]
 struct Previous {
     package: String,
+    #[serde(default)]
+    target: String,
+    #[serde(default)]
+    owner_log: Option<LogCursor>,
+    #[serde(default)]
+    target_generation: Option<FileGeneration>,
     binary: String,
     enabled: String,
+}
+
+impl Previous {
+    fn save(&self, work: &Path) -> Result<()> {
+        let data = serde_json::to_vec(self).map_err(|err| err.to_string())?;
+        write_temp(work, &data, 0o600)
+            .and_then(|file| {
+                file.persist(work.join("previous.json"))
+                    .map_err(|err| err.error)
+            })
+            .and_then(|_| sync_dir(work))
+            .map_err(|err| err.to_string())
+    }
+
+    fn owns_configured_target(&self, path: &Path) -> bool {
+        self.target_generation.as_ref().is_some_and(|expected| {
+            FileGeneration::read(path).is_ok_and(|current| current == *expected)
+        })
+    }
+}
+
+#[derive(Deserialize, PartialEq, Serialize)]
+struct FileGeneration {
+    dev: u64,
+    ino: u64,
+    ctime: i64,
+    ctime_nsec: i64,
+}
+
+impl FileGeneration {
+    fn read(path: &Path) -> io::Result<Self> {
+        let meta = open_read(path)?.metadata()?;
+        Ok(Self {
+            dev: meta.dev(),
+            ino: meta.ino(),
+            ctime: meta.ctime(),
+            ctime_nsec: meta.ctime_nsec(),
+        })
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+struct LogCursor {
+    dev: u64,
+    ino: u64,
+    len: u64,
+}
+
+impl LogCursor {
+    fn read(path: &Path) -> io::Result<Option<Self>> {
+        Ok(match open_read(path) {
+            Ok(file) => {
+                let meta = file.metadata()?;
+                Some(Self {
+                    dev: meta.dev(),
+                    ino: meta.ino(),
+                    len: meta.len(),
+                })
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        })
+    }
+}
+
+fn dpkg_events(log: &str) -> impl Iterator<Item = Vec<&str>> {
+    log.lines().filter_map(|line| {
+        let fields: Vec<_> = line.split_whitespace().skip(2).collect();
+        let package = if fields.first() == Some(&"status") {
+            2
+        } else {
+            1
+        };
+        fields
+            .get(package)
+            .is_some_and(|name| name.split(':').next() == Some(PACKAGE))
+            .then_some(fields)
+    })
+}
+
+fn owner_changed_package(path: &Path, cursor: Option<&LogCursor>) -> io::Result<bool> {
+    let mut file = match open_read(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(cursor.is_some()),
+        Err(error) => return Err(error),
+    };
+    let meta = file.metadata()?;
+    if let Some(cursor) = cursor {
+        // Without the original log tail, package ownership is uncertain.
+        if (meta.dev(), meta.ino()) != (cursor.dev, cursor.ino) || meta.len() < cursor.len {
+            return Ok(true);
+        }
+        file.seek(SeekFrom::Start(cursor.len))?;
+    }
+    let log = limited_text(file, INDEX_LIMIT)?;
+    let changed = dpkg_events(&log).next().is_some();
+    Ok(changed)
+}
+
+fn limited_text(file: File, limit: u64) -> io::Result<String> {
+    let mut text = String::new();
+    file.take(limit + 1).read_to_string(&mut text)?;
+    if text.len() as u64 > limit {
+        return Err(io::Error::other("oversized apt update file"));
+    }
+    Ok(text)
 }
 
 struct PackageStatus {
@@ -120,8 +239,68 @@ impl PackageStatus {
     }
 }
 
+pub(super) fn add_refresh_status(paths: &Paths, status: &mut Status) {
+    if let Some(warning) = read_file(&paths.update.join(REFRESH_ERROR), 4096, paths.installer_uid)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+    {
+        status.reason = Some(match status.reason.take() {
+            Some(reason) => format!("{reason}; {warning}"),
+            None => warning,
+        });
+    }
+}
+
+fn sandbox_account() -> Result<(u32, u32)> {
+    if cfg!(test) {
+        return Ok((effective_uid(), unsafe { libc::getegid() }));
+    }
+    // SAFETY: the argument is NUL-terminated and the entry is read immediately.
+    let account = unsafe { libc::getpwnam(c"_apt".as_ptr()).as_ref() }
+        .filter(|account| account.pw_uid != 0 && account.pw_gid != 0)
+        .ok_or("the _apt sandbox account is required")?;
+    Ok((account.pw_uid, account.pw_gid))
+}
+
+fn prepare_download_dirs(dir: &Path) -> Result<()> {
+    let (uid, gid) = sandbox_account()?;
+    (|| -> io::Result<()> {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o755))?;
+        // The full apt command runs as _apt. It may manage the cache
+        // and its partial directories without access to helper state.
+        for name in ["lists", "archives"] {
+            let path = dir.join(name);
+            fs::DirBuilder::new().mode(0o700).create(&path)?;
+            std::os::unix::fs::chown(&path, Some(uid), Some(gid))?;
+        }
+        let config = dir.join("apt.conf");
+        fs::write(&config, "Dir::Etc::Parts \"-\";\nDir::Etc::Main \"-\";\n")?;
+        fs::set_permissions(config, fs::Permissions::from_mode(0o644))
+    })()
+    .map_err(|err| err.to_string())
+}
+
+fn package_hash<'a>(packages: &'a str, version: &str, arch: &str) -> Result<&'a str> {
+    let mut digests = packages.split("\n\n").filter_map(|record| {
+        let field = |prefix| record.lines().find_map(|line| line.strip_prefix(prefix));
+        if field("Package: ") == Some(PACKAGE)
+            && field("Version: ") == Some(version)
+            && field("Architecture: ") == Some(arch)
+        {
+            return field("SHA256: ");
+        }
+        None
+    });
+    digests
+        .next()
+        .filter(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .filter(|_| digests.next().is_none())
+        .ok_or_else(|| format!("missing or ambiguous GameLink apt digest for {version} on {arch}"))
+}
+
 struct Apt<'a, C> {
     work: &'a Path,
+    owner_log: &'a Path,
     command: C,
 }
 
@@ -134,11 +313,14 @@ where
             .map_err(|error| format!("{program} failed: {error}"))
     }
 
-    fn apt(&self, program: &str, args: &[&str]) -> Result<String> {
-        let lists = format!("Dir::State::lists={}/lists", self.work.display());
+    fn apt(&self, download: &Path, program: &str, args: &[&str]) -> Result<String> {
+        let lists = format!("Dir::State::lists={}/lists", download.display());
+        let archives = format!("Dir::Cache::archives={}/archives", download.display());
         let mut scoped = vec![
             "-o",
             &lists,
+            "-o",
+            &archives,
             "-o",
             "Dir::Etc::sourcelist=/etc/apt/sources.list.d/gamelink.list",
             "-o",
@@ -156,6 +338,8 @@ where
             "-o",
             "APT::Update::Error-Mode=any",
             "-o",
+            "Acquire::GzipIndexes=false",
+            "-o",
             "Acquire::AllowInsecureRepositories=false",
             "-o",
             "Acquire::AllowDowngradeToInsecureRepositories=false",
@@ -167,51 +351,145 @@ where
             "Acquire::https::Timeout=20",
         ];
         scoped.extend_from_slice(args);
-        self.command(program, &scoped)
+        (self.command)(program, &scoped, &download.join("archives"))
+            .map_err(|error| format!("{program} failed: {error}"))
     }
 
     fn fetch(&self, target: &str, previous: &str, sha256: &str) -> Result<()> {
-        self.apt("apt-get", &["update"])?;
-        let policy = self.apt("apt-cache", &["policy", PACKAGE])?;
+        let arch = self.command("dpkg", &["--print-architecture"])?;
+        let arch = arch.trim();
+        if !matches!(arch, "amd64" | "arm64") {
+            return Err("unsupported GameLink Debian architecture".into());
+        }
+        let parent = self
+            .work
+            .parent()
+            .and_then(Path::parent)
+            .expect("apt work has a home");
+        let download = tempfile::Builder::new()
+            .prefix(".gamelink-apt-download-")
+            .tempdir_in(parent)
+            .map_err(|err| err.to_string())?;
+        let download_dir = download.path();
+        prepare_download_dirs(download_dir)?;
+
+        self.apt(download_dir, "apt-get", &["update"])?;
+        let packages = self.signed_index(&download_dir.join("lists"), arch)?;
+        let package = format!("{PACKAGE}:{arch}");
+        let policy = self.apt(download_dir, "apt-cache", &["policy", &package])?;
         let candidate = policy
             .lines()
             .find_map(|line| line.trim().strip_prefix("Candidate: "));
         if candidate != Some(target) {
             return Err("requested version is not the latest GameLink apt package".into());
         }
-        self.download(target, "target.deb")?;
-        let archive = File::open(self.work.join("target.deb")).map_err(|err| err.to_string())?;
-        let mut digest = Sha256::new();
-        let size = io::copy(&mut archive.take(PACKAGE_LIMIT + 1), &mut digest)
-            .map_err(|err| err.to_string())?;
-        if size > PACKAGE_LIMIT || !format!("{:x}", digest.finalize()).eq_ignore_ascii_case(sha256)
-        {
+        let target_hash = package_hash(&packages, target, arch)?;
+        if !target_hash.eq_ignore_ascii_case(sha256) {
             return Err("GameLink apt package does not match the signed release digest".into());
         }
-        // Cache the signed previous package before changing anything. Recovery
-        // remains possible if apt is down or has already rotated the archive.
-        self.download(previous, "previous.deb")
+        self.download(download_dir, arch, target, "target.deb", target_hash)?;
+        // Cache the authenticated previous package before invoking dpkg.
+        let previous_hash = package_hash(&packages, previous, arch)?;
+        self.download(download_dir, arch, previous, "previous.deb", previous_hash)
     }
 
-    fn download(&self, version: &str, archive: &str) -> Result<()> {
-        self.apt("apt-get", &["download", &format!("{PACKAGE}={version}")])?;
-        let incoming = fs::read_dir(self.work)
+    fn signed_index(&self, lists: &Path, arch: &str) -> Result<String> {
+        let mut releases = fs::read_dir(lists)
             .map_err(|err| err.to_string())?
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.file_name().into_string())
-            .find_map(|name| {
-                name.ok()
-                    .filter(|name| name.starts_with("gamelink-agent_") && name.ends_with(".deb"))
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .filter(|name| name.ends_with("_InRelease"));
+        let release = releases
+            .next()
+            .filter(|_| releases.next().is_none())
+            .ok_or("apt did not download one GameLink InRelease file")?;
+        let prefix = release.trim_end_matches("_InRelease");
+        let data = open_read(&lists.join(&release))
+            .and_then(|file| limited_text(file, INDEX_LIMIT))
+            .map_err(|err| err.to_string())?;
+        // Verify a private copy before trusting hash fields from apt's download area.
+        let signed =
+            write_temp(self.work, data.as_bytes(), 0o600).map_err(|err| err.to_string())?;
+        let signed = signed.path().to_str().ok_or("invalid apt work path")?;
+        self.command(
+            "gpgv",
+            &["--keyring", KEYRING, "--output", "Release", signed],
+        )?;
+        let verified =
+            fs::read_to_string(self.work.join("Release")).map_err(|err| err.to_string())?;
+        let index = format!("main/binary-{arch}/Packages");
+        let expected = verified
+            .split_once("\nSHA256:\n")
+            .and_then(|(_, hashes)| {
+                hashes
+                    .lines()
+                    .take_while(|line| line.starts_with(' '))
+                    .find_map(|line| {
+                        let mut fields = line.split_whitespace();
+                        let digest = fields.next()?;
+                        let _size = fields.next()?;
+                        (fields.next()? == index && fields.next().is_none()).then_some(digest)
+                    })
             })
-            .ok_or("apt did not download the GameLink package")?;
-        let fields = self.command("dpkg-deb", &["--field", &incoming, "Package", "Version"])?;
-        if fields != format!("Package: {PACKAGE}\nVersion: {version}\n") {
-            return Err("unexpected GameLink Debian package name or version".into());
+            .ok_or("missing GameLink Packages SHA256 in the signed apt index")?;
+        let packages = open_read(&lists.join(format!("{prefix}_main_binary-{arch}_Packages")))
+            .and_then(|file| limited_text(file, INDEX_LIMIT))
+            .map_err(|err| err.to_string())?;
+        if !format!("{:x}", Sha256::digest(packages.as_bytes())).eq_ignore_ascii_case(expected) {
+            return Err("GameLink Packages file does not match the signed apt index".into());
         }
-        File::open(self.work.join(&incoming))
-            .and_then(|file| file.sync_all())
-            .and_then(|()| fs::rename(self.work.join(incoming), self.work.join(archive)))
-            .and_then(|()| sync_dir(self.work))
+        Ok(packages)
+    }
+
+    fn download(
+        &self,
+        dir: &Path,
+        arch: &str,
+        version: &str,
+        archive: &str,
+        hash: &str,
+    ) -> Result<()> {
+        self.apt(
+            dir,
+            "apt-get",
+            &["download", &format!("{PACKAGE}:{arch}={version}")],
+        )?;
+        let name = format!("{PACKAGE}_{version}_{arch}.deb");
+        let incoming =
+            open_read(&dir.join("archives").join(name)).map_err(|err| err.to_string())?;
+        if !incoming
+            .metadata()
+            .map_err(|err| err.to_string())?
+            .is_file()
+        {
+            return Err("apt did not download a regular GameLink archive".into());
+        }
+        let mut private =
+            tempfile::NamedTempFile::new_in(self.work).map_err(|err| err.to_string())?;
+        let size = io::copy(&mut incoming.take(PACKAGE_LIMIT + 1), &mut private)
+            .map_err(|err| err.to_string())?;
+        let mut digest = Sha256::new();
+        let file = File::open(private.path()).map_err(|err| err.to_string())?;
+        io::copy(&mut file.take(PACKAGE_LIMIT + 1), &mut digest).map_err(|err| err.to_string())?;
+        if size > PACKAGE_LIMIT || !format!("{:x}", digest.finalize()).eq_ignore_ascii_case(hash) {
+            return Err("GameLink apt archive does not match the signed apt index digest".into());
+        }
+        let path = private.path().to_str().ok_or("invalid apt archive path")?;
+        let fields = self.command(
+            "dpkg-deb",
+            &["--field", path, "Package", "Version", "Architecture"],
+        )?;
+        if fields != format!("Package: {PACKAGE}\nVersion: {version}\nArchitecture: {arch}\n") {
+            return Err("unexpected GameLink Debian package name, version or architecture".into());
+        }
+        private
+            .as_file()
+            .sync_all()
+            .and_then(|()| {
+                private
+                    .persist(self.work.join(archive))
+                    .map_err(|err| err.error)
+            })
+            .and_then(|_| sync_dir(self.work))
             .map_err(|err| err.to_string())
     }
 
@@ -248,10 +526,37 @@ where
             .ok_or_else(|| "GameLink apt package is not configured".into())
     }
 
+    fn owns_operation(&self, previous: &Previous, target: &str) -> bool {
+        if previous.target != target
+            || !owner_changed_package(self.owner_log, previous.owner_log.as_ref())
+                .is_ok_and(|changed| !changed)
+        {
+            return false;
+        }
+        // dpkg logs the transition before calling the package's maintainer
+        // scripts. The private log proves that this invocation reached unpack.
+        open_read(&self.work.join(OPERATION_LOG))
+            .and_then(|file| limited_text(file, INDEX_LIMIT))
+            .is_ok_and(|log| {
+                dpkg_events(&log).any(|event| {
+                    matches!(
+                        event.as_slice(),
+                        ["upgrade", _, from, to] if *from == previous.package && *to == target
+                    )
+                })
+            })
+    }
+
     fn install(&self, archive: &str) -> Result<()> {
         self.command(
             "dpkg",
-            &["--force-confold", "--no-triggers", "--install", archive],
+            &[
+                "--force-confold",
+                "--no-triggers",
+                "--log=dpkg-operation.log",
+                "--install",
+                archive,
+            ],
         )?;
         Ok(())
     }
@@ -277,19 +582,57 @@ fn finish<C>(paths: &Paths, owner: u32, apt: &Apt<'_, C>) -> Result<()>
 where
     C: Fn(&str, &[&str], &Path) -> Result<String>,
 {
-    // postinst leaves the recovery copy in place while pending.json exists.
-    // Only replace it after reaching a terminal phase, with a configured package.
-    if apt.package()?.is_some_and(|package| package.configured()) {
-        let next = paths.update.join("installer.next");
-        remove_if_present(&next)
-            .and_then(|()| fs::copy(&paths.installed, &next))
-            .and_then(|_| File::open(&next)?.sync_all())
-            .and_then(|()| fs::rename(&next, paths.update.join("installer")))
-            .and_then(|()| sync_dir(&paths.update))
-            .map_err(|err| format!("could not refresh apt installer: {err}"))?;
-    }
+    // Retire the request and release its durable CLI gate before refreshing
+    // the recovery executable. The copy can fail independently of dpkg.
     complete_transaction(paths, owner, |path, uid| read_request(path, uid).is_ok())
-        .map_err(|error| format!("could not finalize apt update: {error}"))
+        .map_err(|error| format!("could not finalize apt update: {error}"))?;
+    if let Err(reason) = refresh_installer(paths, apt) {
+        crate::log(&reason);
+    }
+    Ok(())
+}
+
+fn refresh_installer<C>(paths: &Paths, apt: &Apt<'_, C>) -> Result<()>
+where
+    C: Fn(&str, &[&str], &Path) -> Result<String>,
+{
+    let error_path = paths.update.join(REFRESH_ERROR);
+    let result = (|| -> Result<()> {
+        if apt.package()?.is_some_and(|package| package.configured()) {
+            let mut next =
+                tempfile::NamedTempFile::new_in(&paths.update).map_err(|err| err.to_string())?;
+            let mut installed = open_read(&paths.installed).map_err(|err| err.to_string())?;
+            check_metadata(&installed, paths.installer_uid, 0o755)
+                .map_err(|err| err.to_string())?;
+            io::copy(&mut installed, &mut next)
+                .and_then(|_| {
+                    next.as_file()
+                        .set_permissions(fs::Permissions::from_mode(0o755))
+                })
+                .and_then(|()| next.as_file().sync_all())
+                .and_then(|()| {
+                    next.persist(paths.update.join("installer"))
+                        .map_err(|err| err.error)
+                })
+                .and_then(|_| remove_if_present(&error_path))
+                .and_then(|()| sync_dir(&paths.update))
+                .map_err(|err| err.to_string())?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let reason = format!("could not refresh apt installer: {error}");
+        if let Err(error) = write_temp(&paths.update, reason.as_bytes(), 0o644)
+            .and_then(|file| file.persist(error_path).map_err(|err| err.error))
+            .and_then(|_| sync_dir(&paths.update))
+        {
+            crate::log(&format!(
+                "could not record apt installer refresh failure: {error}"
+            ));
+        }
+        return Err(reason);
+    }
+    Ok(())
 }
 
 fn rollback<C, S, V>(
@@ -315,8 +658,17 @@ where
     let target = deb_version(version);
     let current = apt.package()?;
     let (phase, reason) = match current {
-        Some(package) if package.version == target && package.can_restore() => {
-            if package.configured() && service.health(&paths.installed, version).is_ok() {
+        Some(package)
+            if package.can_restore()
+                && (package.version == target
+                    || (package.version == previous.package && !package.configured()))
+                && (!package.configured() || previous.owns_configured_target(&paths.installed))
+                && apt.owns_operation(&previous, &target) =>
+        {
+            if package.version == target
+                && package.configured()
+                && service.health(&paths.installed, version).is_ok()
+            {
                 return terminal(paths, owner, apt, tx, InstallPhase::Committed, None);
             }
             let result = apt
@@ -406,12 +758,12 @@ where
     let staging_lock = paths.update_dir()?;
     let _run = installer_lock(paths)?;
     let pending = paths.transaction(PENDING)?;
-    if pending.is_none() {
+    let request = if pending.is_none() {
         paths.staging_dir(owner)?;
-        if !present(&paths.marker())? {
-            return Err("no staged apt update request".into());
-        }
-    }
+        present(&paths.marker())?
+    } else {
+        false
+    };
     // Keep postinst's check for pending.json serialized with both the first
     // transaction write and finalization, as well as all package operations.
     let _package_lock = package_lock()?;
@@ -444,6 +796,16 @@ where
                 )
             }
         };
+    }
+
+    if !request || present(&paths.update.join(REFRESH_ERROR))? {
+        let refresh = refresh_installer(paths, apt);
+        if !request {
+            return refresh;
+        }
+        if let Err(reason) = refresh {
+            crate::log(&reason);
+        }
     }
 
     let staged = paths.staging_status(owner).unwrap_or_default();
@@ -495,12 +857,6 @@ where
             .mode(0o700)
             .create(apt.work)
             .map_err(|err| err.to_string())?;
-        // Disable system-wide apt config fragments and hooks for these reads.
-        fs::write(
-            apt.work.join("apt.conf"),
-            "Dir::Etc::Parts \"-\";\nDir::Etc::Main \"-\";\n",
-        )
-        .map_err(|err| err.to_string())?;
         let digest = verify_release(&installed, &request.version)?;
         let target = deb_version(&request.version);
         apt.fetch(&target, &previous_package, &digest)?;
@@ -515,21 +871,17 @@ where
             .to_owned();
         let previous = Previous {
             package: previous_package,
+            target: target.clone(),
+            owner_log: LogCursor::read(apt.owner_log).map_err(|err| err.to_string())?,
+            target_generation: None,
             binary,
             enabled: enabled(service)?,
         };
-        let data = serde_json::to_vec(&previous).map_err(|err| err.to_string())?;
-        write_temp(apt.work, &data, 0o600)
-            .and_then(|file| {
-                file.persist(apt.work.join("previous.json"))
-                    .map_err(|error| error.error)
-            })
-            .and_then(|_| sync_dir(apt.work))
-            .and_then(|()| sync_dir(&paths.update))
-            .map_err(|err| err.to_string())?;
-        Ok((request, target, swap_lock))
+        previous.save(apt.work)?;
+        sync_dir(&paths.update).map_err(|err| err.to_string())?;
+        Ok((request, previous, swap_lock))
     })();
-    let (request, target, _swap_lock) = match prepare {
+    let (request, mut previous, _swap_lock) = match prepare {
         Ok(prepared) => prepared,
         Err(reason) => {
             terminal(
@@ -545,8 +897,19 @@ where
     };
     tx.save(paths, InstallPhase::Stopping, &|_| {})?;
     let result = (|| {
-        apt.install("target.deb")?;
-        if apt.installed()?.version != target {
+        let install = apt.install("target.deb");
+        if apt
+            .package()?
+            .is_some_and(|package| package.configured() && package.version == previous.target)
+        {
+            // Reinstalling the same bytes changes the package binary's
+            // generation, even when the owner directs dpkg to a different log.
+            previous.target_generation =
+                Some(FileGeneration::read(&paths.installed).map_err(|err| err.to_string())?);
+            previous.save(apt.work)?;
+        }
+        install?;
+        if previous.target_generation.is_none() {
             return Err("requested GameLink apt version was not installed".into());
         }
         tx.save(paths, InstallPhase::HealthChecking, &|_| {})?;
@@ -561,12 +924,20 @@ where
 fn dpkg_lock() -> Result<File> {
     // apt/dpkg use POSIX record locks, not flock. Hold the frontend lock
     // across installation, health checks and any downgrade.
+    let frontend = take_dpkg_lock("/var/lib/dpkg/lock-frontend")?;
+    // An interrupted helper can leave its dpkg child running after the
+    // frontend lock is released. Wait for the child before reading state.
+    drop(take_dpkg_lock("/var/lib/dpkg/lock")?);
+    Ok(frontend)
+}
+
+fn take_dpkg_lock(path: &str) -> Result<File> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .custom_flags(libc::O_NOFOLLOW)
-        .open("/var/lib/dpkg/lock-frontend")
-        .map_err(|err| format!("could not open the apt frontend lock: {err}"))?;
+        .open(path)
+        .map_err(|err| format!("could not open apt lock {path}: {err}"))?;
     let start = Instant::now();
     while start.elapsed() < LOCK_WAIT {
         // SAFETY: zero initialization selects the whole file, and fcntl
@@ -618,6 +989,7 @@ pub fn install_apt() -> Result<()> {
     let work = paths.update.join(WORK);
     let apt = Apt {
         work: &work,
+        owner_log: Path::new(DPKG_LOG),
         command: |program: &str, args: &[&str], dir: &Path| {
             if program == "policy-rc.d" {
                 let policy = Path::new("/usr/sbin/policy-rc.d");
@@ -641,13 +1013,41 @@ pub fn install_apt() -> Result<()> {
             if program != "dpkg-query" {
                 command.current_dir(dir);
             }
-            if matches!(program, "apt-get" | "dpkg" | "deb-systemd-invoke") {
+            if matches!(program, "apt-get" | "apt-cache") {
+                let (uid, gid) = sandbox_account()?;
+                let config = dir
+                    .parent()
+                    .expect("apt archives have a parent")
+                    .join("apt.conf");
+                command
+                    .uid(uid)
+                    .gid(gid)
+                    .env_clear()
+                    .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+                    .env("APT_CONFIG", config)
+                    .stdin(Stdio::null());
+                if program == "apt-cache" {
+                    let output = command.output().map_err(|err| err.to_string())?;
+                    if !output.status.success() {
+                        return Err(output.status.to_string());
+                    }
+                    return String::from_utf8(output.stdout).map_err(|err| err.to_string());
+                }
+                let status = command.status().map_err(|err| err.to_string())?;
+                return if status.success() {
+                    Ok(String::new())
+                } else {
+                    Err(status.to_string())
+                };
+            }
+            if program == "deb-systemd-invoke"
+                || (program == "dpkg" && args != ["--print-architecture"])
+            {
                 // These commands may emit substantial progress output.
                 let status = command
                     .env_clear()
                     .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
                     .env("DEBIAN_FRONTEND", "noninteractive")
-                    .env("APT_CONFIG", dir.join("apt.conf"))
                     .env("DPKG_FRONTEND_LOCKED", "true")
                     .stdin(Stdio::null())
                     .status()
@@ -657,11 +1057,8 @@ pub fn install_apt() -> Result<()> {
                 }
                 return Ok(String::new());
             }
-            if matches!(program, "apt-cache" | "dpkg-query") {
+            if program == "dpkg-query" {
                 command.env_clear().stdin(Stdio::null());
-                if program == "apt-cache" {
-                    command.env("APT_CONFIG", dir.join("apt.conf"));
-                }
                 let output = command.output().map_err(|err| err.to_string())?;
                 // Exit 1 with no match means the requested package is absent.
                 // dpkg-query reports fatal database errors with exit 2.

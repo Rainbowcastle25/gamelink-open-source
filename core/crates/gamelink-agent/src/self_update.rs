@@ -255,7 +255,11 @@ pub fn status() -> serde_json::Value {
     let paths = Paths::system();
     let owner = effective_uid();
     let supported = can_stage(owner, &paths) && paths.staging_lock(owner).is_ok();
-    paths.status(owner).host_view(supported)
+    let mut status = paths.status(owner);
+    if paths.installed == Path::new(apt::BINARY) {
+        apt::add_refresh_status(&paths, &mut status);
+    }
+    status.host_view(supported)
 }
 
 impl Status {

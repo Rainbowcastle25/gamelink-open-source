@@ -94,6 +94,9 @@ if [ ! -L "$apt_state" ] && [ -d "$apt_state" ] &&
     install -m 0755 /usr/bin/gamelink-agent "$next"
     sync "$next"
     mv -fT "$next" "$installer"
+    if [ -f "$apt_state/installer-refresh-error" ]; then
+        unlink "$apt_state/installer-refresh-error"
+    fi
     sync "$apt_state"
     trap - EXIT
 fi

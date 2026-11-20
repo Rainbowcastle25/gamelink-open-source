@@ -74,6 +74,7 @@ fn rejects_invalid_and_mismatched_requests_before_running_apt() {
         request(&paths, version, id, status_id);
         let apt = Apt {
             work: &work,
+            owner_log: &work.join("owner.log"),
             command: |program: &str, _: &[&str], _: &Path| {
                 assert_eq!(program, "dpkg-query");
                 Ok(String::new())
@@ -114,8 +115,14 @@ fn apt_scopes_downloads_and_installs_only_gamelink_then_rolls_back_on_failed_hea
         let installed = Cell::new(OLD);
         let running = Cell::new(Some(OLD));
         let calls = RefCell::new(Vec::new());
+        let downloaded = Cell::new(OLD);
+        let digest = format!("{:x}", Sha256::digest(PAYLOAD));
+        let packages = [OLD, NEW]
+            .map(|version| format!("Package: {PACKAGE}\nVersion: {version}\nArchitecture: amd64\nSHA256: {digest}\n"))
+            .join("\n");
         let apt = Apt {
             work: &work,
+            owner_log: &work.join("owner.log"),
             command: |program: &str, args: &[&str], dir: &Path| match program {
                 "apt-get" | "apt-cache" => {
                     assert!(args.windows(2).any(|pair| pair
@@ -130,15 +137,26 @@ fn apt_scopes_downloads_and_installs_only_gamelink_then_rolls_back_on_failed_hea
                         .windows(2)
                         .any(|pair| pair == ["-o", "APT::Get::List-Cleanup=0"]));
                     assert!(args.windows(2).any(|pair| pair[0] == "-o"
-                        && pair[1] == format!("Dir::State::lists={}/lists", dir.display())));
+                        && pair[1]
+                            == format!(
+                                "Dir::State::lists={}/lists",
+                                dir.parent().unwrap().display()
+                            )));
                     let action = args.split_last().unwrap().0;
                     calls.borrow_mut().push((*action).to_owned());
                     match *action {
-                        "update" => Ok(String::new()),
-                        PACKAGE => Ok(format!("  Candidate: {NEW}\n")),
-                        "gamelink-agent=1.0.0" | "gamelink-agent=2.0.0" => {
+                        "update" => {
+                            let lists = dir.parent().unwrap().join("lists");
+                            fs::write(lists.join("repo_InRelease"), "signed data").unwrap();
+                            fs::write(lists.join("repo_main_binary-amd64_Packages"), &packages)
+                                .unwrap();
+                            Ok(String::new())
+                        }
+                        "gamelink-agent:amd64" => Ok(format!("  Candidate: {NEW}\n")),
+                        "gamelink-agent:amd64=1.0.0" | "gamelink-agent:amd64=2.0.0" => {
                             assert_eq!(args[args.len() - 2], "download");
-                            let version = action.split_once('=').unwrap().1;
+                            let version = if action.ends_with(NEW) { NEW } else { OLD };
+                            downloaded.set(version);
                             fs::write(
                                 dir.join(format!("gamelink-agent_{version}_amd64.deb")),
                                 PAYLOAD,
@@ -149,20 +167,51 @@ fn apt_scopes_downloads_and_installs_only_gamelink_then_rolls_back_on_failed_hea
                         _ => panic!("unexpected apt action {action}"),
                     }
                 }
+                "gpgv" => {
+                    let digest = Sha256::digest(packages.as_bytes());
+                    fs::write(
+                        dir.join("Release"),
+                        format!(
+                            "Suite: stable\nSHA256:\n {digest:x} {} main/binary-amd64/Packages\n",
+                            packages.len()
+                        ),
+                    )
+                    .unwrap();
+                    Ok(String::new())
+                }
                 "dpkg-deb" => {
                     assert_eq!(args[0], "--field");
-                    let version = args[1].split('_').nth(1).unwrap();
-                    Ok(format!("Package: {PACKAGE}\nVersion: {version}\n"))
+                    let version = downloaded.get();
+                    assert_eq!(Path::new(args[1]).parent(), Some(dir));
+                    Ok(format!(
+                        "Package: {PACKAGE}\nVersion: {version}\nArchitecture: amd64\n"
+                    ))
                 }
                 "dpkg-query" => Ok(format!(
                     "{PACKAGE} install ok installed {}",
                     installed.get()
                 )),
+                "dpkg" if args == ["--print-architecture"] => Ok("amd64\n".into()),
                 "dpkg" => {
-                    assert_eq!(args[..3], ["--force-confold", "--no-triggers", "--install"]);
-                    calls.borrow_mut().push(args[3].into());
-                    match args[3] {
+                    assert_eq!(
+                        args[..4],
+                        [
+                            "--force-confold",
+                            "--no-triggers",
+                            "--log=dpkg-operation.log",
+                            "--install"
+                        ]
+                    );
+                    calls.borrow_mut().push(args[4].into());
+                    match args[4] {
                         "target.deb" => {
+                            fs::write(
+                                dir.join(OPERATION_LOG),
+                                format!(
+                                    "2026-11-19 00:00:00 upgrade {PACKAGE}:amd64 {OLD} {NEW}\n"
+                                ),
+                            )
+                            .unwrap();
                             installed.set(NEW);
                             running.set((!health_fails).then_some(NEW));
                         }
@@ -197,9 +246,9 @@ fn apt_scopes_downloads_and_installs_only_gamelink_then_rolls_back_on_failed_hea
         );
         let expected = [
             "update",
-            PACKAGE,
-            "gamelink-agent=2.0.0",
-            "gamelink-agent=1.0.0",
+            "gamelink-agent:amd64",
+            "gamelink-agent:amd64=2.0.0",
+            "gamelink-agent:amd64=1.0.0",
             "target.deb",
         ];
         let status = paths.status(effective_uid());
@@ -251,6 +300,7 @@ fn held_package_is_declined_before_fetch_or_install() {
     let locked = Cell::new(false);
     let apt = Apt {
         work: &work,
+        owner_log: &work.join("owner.log"),
         command: |program: &str, args: &[&str], _: &Path| {
             assert!(locked.get());
             assert_eq!(program, "dpkg-query");
@@ -324,12 +374,20 @@ fn interrupted_update_leaves_an_owner_installed_package_alone() {
         fs::create_dir(&work).unwrap();
         let previous = Previous {
             package: OLD.into(),
+            target: NEW.into(),
+            owner_log: None,
+            target_generation: Some(FileGeneration::read(&paths.installed).unwrap()),
             binary: OLD.into(),
             enabled: "enabled".into(),
         };
         fs::write(
             work.join("previous.json"),
             serde_json::to_vec(&previous).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            work.join(OPERATION_LOG),
+            format!("2026-11-19 00:00:00 upgrade {PACKAGE}:amd64 {OLD} {NEW}\n"),
         )
         .unwrap();
         Transaction {
@@ -346,6 +404,7 @@ fn interrupted_update_leaves_an_owner_installed_package_alone() {
         let locked = Cell::new(false);
         let apt = Apt {
             work: &work,
+            owner_log: &work.join("owner.log"),
             command: |program: &str, _: &[&str], _: &Path| {
                 assert!(locked.get());
                 assert_eq!(program, "dpkg-query", "recovery must leave dpkg alone");
