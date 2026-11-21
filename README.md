@@ -112,8 +112,8 @@ for feed and signing details.
 
 ## Quick start
 
-On your Windows PC, open a Minecraft Java world to LAN and choose **Host** →
-**Share world** in GameLink, or enter the local port under **Host a server on
+On your Windows PC, open a Minecraft Java world to LAN and choose **Share world** when
+GameLink detects it on **Dashboard**, or enter the local port under **Host a server on
 this PC**. In **Dashboard** or **Servers**, choose **Copy invitation** on
 the game's card and send it privately. Your friend imports it in **Servers**
 and clicks **Join**. In **People**, review the join request, verify the public

@@ -7,7 +7,7 @@ import { DiagnosticsModal } from "../components/DiagnosticsModal";
 import { EditServerModal } from "../components/EditServerModal";
 import { Header } from "../components/Header";
 import { ImportInviteModal } from "../components/ImportInviteModal";
-import { ServerList } from "../components/ServerList";
+import { ServerList, useServerList } from "../components/ServerList";
 import { useNav } from "../lib/nav";
 import { useAppState, useStore } from "../lib/store";
 
@@ -75,6 +75,7 @@ function AddMenu({ onImport, onAdd }: { onImport: () => void; onAdd: () => void 
 export function ServersScreen() {
   const { servers } = useAppState();
   const store = useStore();
+  const list = useServerList();
   const { intent, consumeIntent } = useNav();
   const [modal, setModal] = useState<ModalState>(null);
 
@@ -95,6 +96,7 @@ export function ServersScreen() {
       </Header>
 
       <ServerList
+        list={list}
         manage={{
           onEdit: (s) => setModal({ kind: "edit", id: s.id }),
           onRemove: (s) => setModal({ kind: "remove", id: s.id }),

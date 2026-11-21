@@ -568,7 +568,9 @@ impl Hosting {
                     .as_bool()
                     .ok_or("missing hosting state")?;
                 if is_lan(game) && enabled {
-                    return Err("Share this LAN world again after detecting it in Host".into());
+                    return Err(
+                        "Share this LAN world again after detecting it on Dashboard or Host".into(),
+                    );
                 }
                 self.lan_ports.remove(id);
                 self.mutate(

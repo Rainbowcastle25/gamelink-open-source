@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 const call = <T>(method: string, args: Record<string, unknown> = {}): Promise<T> =>
   invoke<T>("desktop", { request: { ...args, method } });
 
-// Preserve scan/close ordering when the Host view unmounts or remounts.
+// Preserve scan/close ordering when navigating between discovery views.
 let discovery: Promise<unknown> = Promise.resolve();
 function lanCall<T>(method: string): Promise<T> {
   const next = discovery.then(() => call<T>(method));

@@ -127,9 +127,9 @@ Invitation holder (not approved) ──X─►   (handshake gets no reply)
   Linux agent. Windows protects the hosted private key and pre-shared key with
   DPAPI. The desktop writes invitation text directly to the native clipboard.
 - Minecraft Java discovery joins IPv4 multicast `224.0.2.60:4445` on local
-  interfaces only while **Host** is open or a LAN world is shared (including
-  while that share is paused, below). It stops when Host is closed and no LAN
-  world is shared. The socket is receive-only. Windows binds the wildcard
+  interfaces only while **Dashboard** or **Host** is open or a LAN world is
+  shared (including while that share is paused, below). It stops on other
+  screens when no LAN world is shared. The socket is receive-only. Windows binds the wildcard
   address, because Winsock delivers multicast only to wildcard or
   receiving-interface binds, and accepts only datagrams whose destination is
   the group. Linux binds the group address. GameLink sends no discovery

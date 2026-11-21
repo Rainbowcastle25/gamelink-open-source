@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "../components/Button";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Field, inputCls } from "../components/Field";
 import { Header } from "../components/Header";
+import { LanWorlds } from "../components/LanWorlds";
 import { GAME_OPTIONS } from "../lib/games";
 import { useNav } from "../lib/nav";
 import { useStore } from "../lib/store";
@@ -15,8 +16,6 @@ export function LocalHostScreen() {
   const { backend } = useStore();
   const { go } = useNav();
   const hosted = useHostedGames(backend);
-  const [worlds, setWorlds] = useState<LanWorld[]>();
-  const [scanError, setScanError] = useState("");
   const [game, setGame] = useState<DesktopGameType>("minecraft-java");
   const [port, setPort] = useState("25565");
   const [name, setName] = useState("");
@@ -25,33 +24,6 @@ export function LocalHostScreen() {
   const [notice, setNotice] = useState("");
   const [createdId, setCreatedId] = useState("");
   const [removing, setRemoving] = useState<HostedGame>();
-
-  useEffect(() => {
-    let active = true;
-    let timer: number;
-    async function scan() {
-      try {
-        const found = await backend.scanLanWorlds();
-        if (active) {
-          setWorlds(found);
-          setScanError("");
-        }
-      } catch (e) {
-        if (active) {
-          setWorlds(undefined);
-          setScanError(hostingError(e));
-        }
-      } finally {
-        if (active) timer = window.setTimeout(() => void scan(), 1000);
-      }
-    }
-    void scan();
-    return () => {
-      active = false;
-      window.clearTimeout(timer);
-      void backend.stopLanScan().catch(() => {});
-    };
-  }, [backend]);
 
   async function act(action: () => Promise<void>) {
     setBusy(true);
@@ -89,30 +61,7 @@ export function LocalHostScreen() {
     <>
       <Header title="Host" subtitle="Share a game running on this PC with approved devices." />
       <div className="space-y-5">
-        <section className="rounded-xl border border-line bg-surface p-5" aria-labelledby="lan-worlds">
-          <h2 id="lan-worlds" className="font-semibold">Minecraft Java LAN worlds</h2>
-          <p className="mt-1 text-sm text-muted">Open a world to LAN in Minecraft. GameLink looks for worlds announced by this PC while this tab is open or a LAN world is shared. Sharing pauses when a shared world closes.</p>
-          {scanError ? <p role="alert" className="mt-3 text-sm text-danger">{scanError} You can enter the port below.</p> :
-            worlds?.length ? (
-              <ul className="mt-4 divide-y divide-line">
-                {worlds.map((world) => {
-                  const previous = hosted.games?.find((entry) => entry.lan && entry.name === world.name);
-                  const sharing = previous?.enabled && previous.port === world.port;
-                  return (
-                    <li key={JSON.stringify(world)} className="flex flex-wrap items-center justify-between gap-3 py-3">
-                      <div>
-                        <p className="text-sm font-medium [overflow-wrap:anywhere]">{sharing ? world.name : `Share “${world.name}”?`}</p>
-                        <p className="text-xs text-muted">{sharing ? "Sharing configured" : previous ? "Keep the same invitation and approved devices" : "Detected on this PC"} · Port {world.port}</p>
-                      </div>
-                      {!sharing && <Button variant="primary" size="sm" disabled={busy} onClick={() => void create(world)}>
-                        {previous ? "Update LAN port" : "Share world"}
-                      </Button>}
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : <p className="mt-3 text-sm text-muted">{worlds ? "No LAN worlds detected yet." : "Starting LAN discovery…"}</p>}
-        </section>
+        <LanWorlds games={hosted.games} busy={busy} showScanStatus onShare={create} />
 
         <section className="rounded-xl border border-line bg-surface p-5" aria-labelledby="manual-host">
           <h2 id="manual-host" className="font-semibold">Host a server on this PC</h2>
