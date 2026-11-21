@@ -29,10 +29,12 @@ with the same `GAMELINK_HOME` while that folder still exists.
 1. Run GameLink on Windows 10 or 11 with the WebView2 runtime. Keep the
    desktop app open while friends are playing.
 2. For Minecraft Java, open your world, choose **Open to LAN**, and start the
-   LAN world. Go to **Host** in GameLink and select **Share world** beside
-   the announcement. If discovery is unavailable, use the port Minecraft
-   prints in chat. For a local Minecraft Java, Minecraft Bedrock or Factorio
-   server, start the server and choose **Host a server on this PC**. Choose
+   LAN world. GameLink shows a prompt on **Dashboard** when it detects the
+   world. Choose **Share world** to add it to **Your Servers** and **Servers**.
+   **Host** also shows detected worlds. If discovery is unavailable, use the
+   port Minecraft prints in chat to host it manually. For a local Minecraft Java,
+   Minecraft Bedrock or Factorio server, start the server and choose **Host a
+   server on this PC**. Choose
    the game and enter its port. The server must accept traffic on
    `127.0.0.1` on that PC. Desktop hosting uses the single-port forwarding
    path and does not enable the Android Console Bridge.
@@ -46,8 +48,8 @@ with the same `GAMELINK_HOME` while that folder still exists.
    approve a friend's public key directly before they try to join. Once
    approved, your friend can retry **Join** and use the loopback address shown
    by GameLink in their game.
-5. When a Minecraft LAN world reopens on a different port, return to **Host**
-   and choose **Update LAN port**. GameLink keeps the same game, approved
+5. When a Minecraft LAN world reopens on a different port, choose **Update LAN
+   port** on **Dashboard** or **Host**. GameLink keeps the same game, approved
    devices and invitation. After restarting GameLink, share the detected
    LAN world again before friends connect. If you close a shared LAN world,
    GameLink pauses sharing within about 10 seconds and resumes it only if the

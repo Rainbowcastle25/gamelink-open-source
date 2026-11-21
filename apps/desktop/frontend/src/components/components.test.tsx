@@ -5,7 +5,7 @@ import { type GameLinkStore, useStore } from "../lib/store";
 import { conn, renderApp, sv } from "../test/utils";
 import { ConnectionPanel } from "./ConnectionPanel";
 import { ServerCard } from "./ServerCard";
-import { ServerList } from "./ServerList";
+import { ServerList, useServerList } from "./ServerList";
 import { StatusIndicator } from "./StatusIndicator";
 
 const noop = () => {};
@@ -28,6 +28,10 @@ describe("StatusIndicator", () => {
   });
 });
 
+function TestServerList() {
+  return <ServerList list={useServerList()} />;
+}
+
 describe("ServerList", () => {
   it("shows the installed game icon and falls back if it cannot be displayed", async () => {
     const backend = createMockBackend({ delayMs: 0 });
@@ -35,7 +39,7 @@ describe("ServerList", () => {
     let finishIcons!: (icons: Record<string, string>) => void;
     vi.spyOn(backend, "gameIcons").mockReturnValue(new Promise((resolve) => { finishIcons = resolve; }));
     vi.spyOn(backend, "servers").mockResolvedValue([sv({ game: "factorio" })]);
-    renderApp(<ServerList />, { backend });
+    renderApp(<TestServerList />, { backend });
 
     const card = await screen.findByRole("article", { name: "Test Server" });
     const tile = within(card).getByRole("img", { name: "Factorio" });
@@ -57,7 +61,7 @@ describe("ServerList", () => {
       store = useStore();
       return null;
     }
-    renderApp(<><Grab /><ServerList /></>, { backend });
+    renderApp(<><Grab /><TestServerList /></>, { backend });
 
     const card = await screen.findByRole("article", { name: "Test Server" });
     const tile = within(card).getByRole("img", { name: "Factorio" });

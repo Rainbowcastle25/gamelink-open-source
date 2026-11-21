@@ -214,7 +214,8 @@ it("retries loading linked games when the host connection becomes available", as
 it("shows a LAN world on both screens after sharing and tracks pause, port changes and removal", async () => {
   const backend = createMockBackend({ delayMs: 0 });
   const copy = vi.spyOn(backend, "copyHostedInvitation");
-  const scan = vi.spyOn(backend, "scanLanWorlds");
+  const scan = vi.spyOn(backend, "scanLanWorlds").mockResolvedValue([]);
+  const share = vi.spyOn(backend, "shareLanWorld");
   const user = userEvent.setup();
   render(<App backend={backend} mock />);
   const nav = within(screen.getByRole("navigation", { name: "Main" }));
@@ -223,9 +224,14 @@ it("shows a LAN world on both screens after sharing and tracks pause, port chang
 
   await screen.findByRole("article", { name: "Friends Survival" });
   expect(screen.queryByRole("article", { name: world })).not.toBeInTheDocument();
-  await user.click(nav.getByRole("button", { name: "Host" }));
-  await user.click(await screen.findByRole("button", { name: "Share world" }));
-  await screen.findByText(/Sharing configured for/);
+  expect(screen.queryByRole("button", { name: "Share world" })).not.toBeInTheDocument();
+  scan.mockResolvedValue([{ name: world, port: 51734 }]);
+  const shareButton = await screen.findByRole("button", { name: "Share world" }, { timeout: 2500 });
+  expect(share).not.toHaveBeenCalled();
+  await user.click(shareButton);
+  expect(await card()).toHaveTextContent("Hosted on this PC · Port 51734");
+  expect(within(screen.getByRole("region", { name: "Servers" })).getByText("6")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Share world" })).not.toBeInTheDocument();
 
   for (const page of ["Dashboard", "Servers"]) {
     await user.click(nav.getByRole("button", { name: page }));
@@ -244,17 +250,17 @@ it("shows a LAN world on both screens after sharing and tracks pause, port chang
   await user.click(nav.getByRole("button", { name: "Dashboard" }));
   const paused = await card();
   expect(paused).toHaveTextContent("Sharing paused");
-  expect(within(paused).queryByRole("button", { name: "Copy invitation" })).not.toBeInTheDocument();
+  await user.click(within(paused).getByRole("button", { name: "Copy invitation" }));
+  await waitFor(() => expect(copy).toHaveBeenCalledTimes(2));
 
   scan.mockResolvedValue([{ name: world, port: 51800 }]);
-  await user.click(nav.getByRole("button", { name: "Host" }));
-  await user.click(await screen.findByRole("button", { name: "Update LAN port" }));
-  await screen.findByText(/Sharing configured for/);
+  await user.click(await screen.findByRole("button", { name: "Update LAN port" }, { timeout: 2500 }));
+  await waitFor(async () => expect(await card()).toHaveTextContent("Port 51800"));
   await user.click(nav.getByRole("button", { name: "Servers" }));
   const updated = await card();
   expect(updated).toHaveTextContent("Port 51800");
   await user.click(within(updated).getByRole("button", { name: "Copy invitation" }));
-  expect(copy.mock.calls).toEqual([["demo-hosted-1"], ["demo-hosted-1"]]);
+  expect(copy.mock.calls).toEqual([["demo-hosted-1"], ["demo-hosted-1"], ["demo-hosted-1"]]);
 
   await user.click(nav.getByRole("button", { name: "Host" }));
   await user.click((await hostedWorld()).getByRole("button", { name: "Remove" }));

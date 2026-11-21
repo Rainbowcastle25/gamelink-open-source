@@ -17,11 +17,9 @@ export interface ManageHandlers {
   onDiagnostics: (s: ServerView) => void;
 }
 
-/** The vertical list of server cards, wired to the store. Also owns the loading / error / empty states. */
-export function ServerList({ manage }: { manage?: ManageHandlers }) {
-  const { ready, loadError, servers, busy, gameIcons } = useAppState();
+export function useServerList() {
+  const { servers } = useAppState();
   const store = useStore();
-  const { go } = useNav();
   const local = useHostedGames(store.backend);
   const linked = useLinkedGames(store.backend);
   const hosted = [
@@ -30,7 +28,7 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
       tunnel: undefined,
       legacyAgent: false,
       detail: `Hosted on this PC · Port ${game.port} · ${game.enabled ? game.state === "serving" ? "Tunnel active" : game.detail : "Sharing paused"}`,
-      copy: game.enabled ? () => store.backend.copyHostedInvitation(game.id) : undefined,
+      copy: game.enabled || game.lan ? () => store.backend.copyHostedInvitation(game.id) : undefined,
     })),
     ...(linked.games ?? []).flatMap((game) => {
       const { serverFingerprint } = game;
@@ -55,6 +53,20 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
   }));
   const hostedOnly = hosted.filter((game) => !savedCards.get(game.key));
 
+  const count = servers.filter((server) => !server.demo).length + hostedOnly.length;
+  return { local, linked, hosted, hostedOnly, savedCards, matches, hasCurrentSettings, count };
+}
+
+/** The vertical list of server cards, wired to the store. Also owns the loading / error / empty states. */
+export function ServerList({ list, manage }: {
+  list: ReturnType<typeof useServerList>;
+  manage?: ManageHandlers;
+}) {
+  const { ready, loadError, servers, busy, gameIcons } = useAppState();
+  const store = useStore();
+  const { go } = useNav();
+  const { local, linked, hosted, hostedOnly, savedCards, matches, hasCurrentSettings } = list;
+
   if (!ready) return <ServerListSkeleton />;
 
   const savedError = loadError && servers.length === 0 && (
@@ -63,6 +75,16 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
       title="Could not load your servers"
       message={`${loadError} If this keeps happening, restart GameLink.`}
       onRetry={() => void store.retryLoad()}
+    />
+  );
+
+  const localError = local.error && (
+    <ErrorState
+      variant={servers.length || hostedOnly.length ? "inline" : "block"}
+      title="Could not load games hosted on this PC"
+      message={local.error}
+      onRetry={() => void local.refresh()}
+      retryLabel="Retry hosted games"
     />
   );
 
@@ -81,7 +103,7 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
   );
 
   if (servers.length === 0 && hostedOnly.length === 0) {
-    if (savedError || linkedError || linkedRefreshing) return <div className="space-y-3">{savedError}{linkedError}{linkedRefreshing}</div>;
+    if (savedError || localError || linkedError || linkedRefreshing) return <div className="space-y-3">{savedError}{localError}{linkedError}{linkedRefreshing}</div>;
     if ((!local.games && !local.error) || (!linked.games && !linked.error)) return <ServerListSkeleton />;
     return (
       <EmptyState
@@ -102,6 +124,7 @@ export function ServerList({ manage }: { manage?: ManageHandlers }) {
   return (
     <ul className="flex flex-col gap-3">
       {savedError && <li>{savedError}</li>}
+      {localError && <li>{localError}</li>}
       {linkedError && <li>{linkedError}</li>}
       {linkedRefreshing && <li>{linkedRefreshing}</li>}
       {hostedOnly.map((game) => (

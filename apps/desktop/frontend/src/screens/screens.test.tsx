@@ -267,20 +267,22 @@ describe("Dashboard and demo servers", () => {
 
   it("shows a retryable error when the backend cannot list servers", async () => {
     const backend = createMockBackend({ delayMs: 0, joinMs: 0 });
+    vi.spyOn(backend, "hostedGames").mockResolvedValue([]);
     const servers = vi.spyOn(backend, "servers").mockRejectedValueOnce(new Error("backend unavailable"));
     const { user } = renderApp(<DashboardScreen />, { backend });
     expect(await screen.findByText("Could not load your servers")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Servers" })).getByText("-")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("Friends Survival")).toBeInTheDocument();
     expect(servers).toHaveBeenCalledTimes(2);
   });
 
-  it("dashboard has no friends panel and summarises the overview", async () => {
+  it("dashboard counts saved and hosted servers", async () => {
     renderApp(<DashboardScreen />);
     await screen.findByText("Friends Survival");
     expect(screen.queryByText(/friends/i, { selector: "h2" })).not.toBeInTheDocument();
     const servers = screen.getByRole("region", { name: "Servers" });
-    expect(servers).toHaveTextContent("4");
+    expect(await within(servers).findByText("5")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Security" })).toHaveTextContent("Private");
   });
 });

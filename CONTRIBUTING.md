@@ -8,10 +8,10 @@ Thanks for helping. GameLink is small on purpose; please keep it that way.
   the explicit Bedrock Console Bridge LAN discovery/media path, which must
   remain pinned to the selected interface/subnet and configured BDS endpoint,
   and the receive-only Minecraft Java LAN discovery socket on multicast
-  `224.0.2.60:4445`, which may only run while GameLink's **Host** view is open
-  or a Minecraft Java LAN world is shared. Discovery stays open while a share
-  is paused, until **Stop sharing** or app exit. An open **Host** view can
-  keep discovery running after **Stop sharing**. Never open router ports, run
+  `224.0.2.60:4445`, which may only run while GameLink's **Dashboard** or
+  **Host** view is open or a Minecraft Java LAN world is shared. Discovery stays
+  open while a share is paused, until **Stop sharing** or app exit. **Dashboard**
+  and **Host** can keep discovery running after **Stop sharing**. Never open router ports, run
   remote commands, transfer files, add an admin API or telemetry, or set Tailcat
   forwarding hooks.
 - **Signed agent update exception.** The desktop may ask the agent to install

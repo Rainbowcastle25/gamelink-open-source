@@ -1,17 +1,37 @@
 import { RefreshCw, Server, ShieldCheck } from "lucide-react";
+import { useState } from "react";
 import { Button } from "../components/Button";
 import { ActivityPanel } from "../components/ActivityPanel";
 import { Header } from "../components/Header";
-import { ServerList } from "../components/ServerList";
+import { LanWorlds } from "../components/LanWorlds";
+import { ServerList, useServerList } from "../components/ServerList";
 import { SummarySkeleton } from "../components/Skeleton";
 import { StatusIndicator } from "../components/StatusIndicator";
 import { SummaryCard } from "../components/SummaryCard";
 import { useAppState, useStore } from "../lib/store";
+import { toast } from "../lib/toast";
+import type { LanWorld } from "../lib/types";
+import { hostingError } from "../lib/useHostedGames";
 
 export function DashboardScreen() {
   const { ready, overview, servers } = useAppState();
   const store = useStore();
+  const list = useServerList();
+  const [sharing, setSharing] = useState(false);
   const realServers = servers.filter((s) => !s.demo).length;
+
+  async function share(world: LanWorld) {
+    setSharing(true);
+    try {
+      await store.backend.shareLanWorld(world);
+      await list.local.refresh();
+      toast.success(`Sharing configured for ${world.name}. Approve devices in People.`);
+    } catch (error) {
+      toast.error(hostingError(error));
+    } finally {
+      setSharing(false);
+    }
+  }
 
   return (
     <>
@@ -23,7 +43,7 @@ export function DashboardScreen() {
         <SummarySkeleton />
       ) : (
         <div className="grid grid-cols-2 gap-4">
-          <SummaryCard icon={<Server className="size-4" aria-hidden />} label="Servers" value={overview ? overview.servers : "-"} note={`${overview?.connected ?? 0} connected`} />
+          <SummaryCard icon={<Server className="size-4" aria-hidden />} label="Servers" value={overview || list.count > 0 ? list.count : "-"} note={`${overview?.connected ?? 0} connected`} />
           <SummaryCard icon={<ShieldCheck className="size-4" aria-hidden />} label="Security" value="Private" note="Only approved devices can connect." />
         </div>
       )}
@@ -40,7 +60,10 @@ export function DashboardScreen() {
               </Button>
             )}
           </div>
-          <ServerList />
+          <div className="space-y-3">
+            <LanWorlds games={list.local.games} busy={sharing} onShare={share} />
+            <ServerList list={list} />
+          </div>
         </section>
         <ActivityPanel />
       </div>
